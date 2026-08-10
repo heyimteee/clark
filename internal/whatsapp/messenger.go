@@ -20,6 +20,14 @@ type Messenger interface {
 	IsSelfChat(chat types.JID) bool
 }
 
+// messagePrefix brands every outbound message from clark.
+const messagePrefix = "🤵[CLARK]\n"
+
+// prefixMessage prepends clark's branding to an outbound message.
+func prefixMessage(text string) string {
+	return messagePrefix + text
+}
+
 // WAMessenger sends and resolves messages through whatsmeow.
 type WAMessenger struct {
 	client *whatsmeow.Client
@@ -41,6 +49,7 @@ func (m *WAMessenger) Self() types.JID {
 
 // Send delivers a message and tracks its ID as an echo.
 func (m *WAMessenger) Send(ctx context.Context, to types.JID, text string) error {
+	text = prefixMessage(text)
 	resp, err := m.client.SendMessage(ctx, to, &waE2E.Message{
 		Conversation: proto.String(text),
 	})
@@ -55,6 +64,7 @@ func (m *WAMessenger) Send(ctx context.Context, to types.JID, text string) error
 
 // SendSelf delivers a message to clark's own chat.
 func (m *WAMessenger) SendSelf(ctx context.Context, text string) error {
+	text = prefixMessage(text)
 	resp, err := m.client.SendMessage(ctx, m.Self(), &waE2E.Message{
 		Conversation: proto.String(text),
 	})
