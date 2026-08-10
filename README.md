@@ -2,21 +2,21 @@
 
 A personal AI butler for your WhatsApp.
 
-Clark is a command-line application that runs a sophisticated AI-powered butler for your WhatsApp account. It uses OpenRouter to generate intelligent, context-aware responses, acting as a gatekeeper for your messages while you're away. Clark only interacts with a pre-approved list of "VIP" contacts, ensuring your privacy and focus.
+Clark is a command-line application that runs a sophisticated AI-powered butler for your WhatsApp account. It uses a local Ollama model to generate intelligent, context-aware responses, acting as a gatekeeper for your messages while you're away. Clark only interacts with a pre-approved list of "VIP" contacts, ensuring your privacy and focus.
 
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Go Version](https://img.shields.io/badge/Go-1.21+-brightgreen.svg)
 
 ## How It Works
 
-Clark connects to your WhatsApp account as a client and listens for incoming messages. When a message is received from a recognized VIP, it forwards the conversation to a powerful AI model via OpenRouter. The AI, acting as a professional butler, formulates a response based on your current status and a predefined persona.
+Clark connects to your WhatsApp account as a client and listens for incoming messages. When a message is received from a recognized VIP, it forwards the conversation to a local AI model hosted on your own Ollama server. The AI, acting as a professional butler, formulates a response based on your current status and a predefined persona.
 
 **Flow:**
-`WhatsApp Message (from VIP) -> Clark (CLI) -> OpenRouter (AI) -> Clark (CLI) -> WhatsApp Reply`
+`WhatsApp Message (from VIP) -> Clark (CLI) -> Ollama (AI) -> Clark (CLI) -> WhatsApp Reply`
 
 ## Features
 
-- **AI-Powered Responses:** Leverages large language models via OpenRouter for natural and intelligent conversations.
+- **AI-Powered Responses:** Leverages local language models via your own Ollama server for natural and intelligent conversations.
 - **WhatsApp Integration:** Seamlessly connects to your WhatsApp account using the `whatsmeow` library.
 - **Configurable Persona:** The AI operates based on a "Butler Protocol," ensuring all responses are professional and in character.
 - **VIP Management:** You control which contacts the bot interacts with through a simple command.
@@ -31,7 +31,7 @@ Follow these steps to get your personal butler up and running.
 ### Prerequisites
 
 - **Go (Version 1.21+):** [Installation Guide](https://go.dev/doc/install)
-- **OpenRouter API Key:** Get one from the [OpenRouter website](https://openrouter.ai/).
+- **Ollama Server:** A running Ollama instance with a model pulled (e.g. `ollama pull llama3.2`).
 - **WhatsApp Account:** The account you wish to run the butler on.
 
 ### Installation & Configuration
@@ -53,10 +53,13 @@ Follow these steps to get your personal butler up and running.
     ```
 
 4.  **Set Up Environment:**
-    Create a `.env` file in the project root and add your OpenRouter API key:
+    Create a `.env` file in the project root pointing to your Ollama server and model:
     ```
-    OPENROUTER_API="your_openrouter_api_key"
+    OLLAMA_URL=http://<ollama-host>:11434
+    OLLAMA_MODEL=<model-tag>
     ```
+    Use the model tag shown by `ollama list` on the server (e.g. `llama3.2:latest`).
+    Clark calls Ollama's native `/api/chat` endpoint with thinking disabled, so reasoning is off even for thinking-capable models.
 
 5.  **Initialize the Assistant:**
     This creates the necessary database and default settings.

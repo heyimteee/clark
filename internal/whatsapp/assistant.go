@@ -1,17 +1,26 @@
 package whatsapp
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/eduardolat/openroutergo"
 	"github.com/gen2brain/beeep"
 	"github.com/joho/godotenv"
 )
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
 
 type Assistant struct {
 	Name          string
@@ -19,7 +28,7 @@ type Assistant struct {
 	MasterContext string
 	VIP           *VIP
 	DB            *Database
-	ORClient      *openroutergo.Client
+	OllamaURL     string
 	Model         string
 }
 
@@ -33,12 +42,18 @@ func AssistantInit() (*Assistant, error) {
 		return nil, fmt.Errorf("fail to load .env: %v", err)
 	}
 
-	apiKey := os.Getenv("OPENROUTER_API")
-	client, err := openroutergo.NewClient().WithAPIKey(apiKey).Create()
+	ollamaURL := os.Getenv("OLLAMA_URL")
+
+	if ollamaURL == "" {
+		ollamaURL = "http://localhost:11434"
+	}
+
 	beeep.AppName = "Clark"
 
-	if err != nil {
-		return nil, fmt.Errorf("fail to initiate AI client: %w", err)
+	model := os.Getenv("OLLAMA_MODEL")
+
+	if model == "" {
+		return nil, fmt.Errorf("no OLLAMA_MODEL set. Add OLLAMA_MODEL to your .env, e.g. OLLAMA_MODEL=llama3.2:latest")
 	}
 
 	db, err := InitDB()
@@ -55,8 +70,8 @@ func AssistantInit() (*Assistant, error) {
 		MasterContext: "",
 		VIP:           vip,
 		DB:            db,
-		ORClient:      client,
-		Model:         "stepfun/step-3.5-flash:free",
+		OllamaURL:     ollamaURL,
+		Model:         model,
 	}
 
 	err = ast.VIP.LoadVIP()
@@ -94,8 +109,7 @@ func (ast *Assistant) ToggleStatus() error {
 
 	ast.Status = !statusBool
 
-	fmt.Println("Current Status:")
-	fmt.Println(ast.Status)
+	Log("CLARK", SevInfo, "STATUS", "Assistant status changed", "enabled", ast.Status)
 
 	return nil
 }
@@ -113,8 +127,7 @@ func (ast *Assistant) SetMasterContext(contextInput string) error {
 
 	ast.MasterContext = contextInput
 
-	fmt.Println("Current Master Context:")
-	fmt.Println(ast.MasterContext)
+	Log("CLARK", SevInfo, "CONTEXT", "Master context loaded", "context", ast.MasterContext)
 
 	return nil
 }
@@ -189,7 +202,7 @@ func (ast *Assistant) loadAssistant() error {
 	return nil
 }
 
-func (ast *Assistant) GetHistory(jid string) ([]openroutergo.ChatCompletionMessage, error) {
+func (ast *Assistant) GetHistory(jid string) ([]chatMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -202,22 +215,20 @@ func (ast *Assistant) GetHistory(jid string) ([]openroutergo.ChatCompletionMessa
 
 	defer rows.Close()
 
-	var history []openroutergo.ChatCompletionMessage
+	var history []chatMessage
 	for rows.Next() {
 		var dbRole, content string
 		rows.Scan(&dbRole, &content)
 
 		switch dbRole {
 		case "user":
-			role := openroutergo.RoleUser
-			history = append(history, openroutergo.ChatCompletionMessage{
-				Role:    role,
+			history = append(history, chatMessage{
+				Role:    "user",
 				Content: content,
 			})
 		case "assistant":
-			role := openroutergo.RoleAssistant
-			history = append(history, openroutergo.ChatCompletionMessage{
-				Role:    role,
+			history = append(history, chatMessage{
+				Role:    "assistant",
 				Content: content,
 			})
 		}
@@ -258,30 +269,21 @@ func (ast *Assistant) GetAIResponse(senderJid, userMsg string) (string, error) {
 
 	systemPrompt := fmt.Sprintf(promptTemplate, ast.Name, ast.MasterContext, ast.VIP, relation)
 
-	query := ast.ORClient.NewChatCompletion().
-		WithModel(ast.Model).
-		WithSystemMessage(systemPrompt)
+	messages := make([]chatMessage, 0, len(history)+1)
+	messages = append(messages, chatMessage{Role: "system", Content: systemPrompt})
+	messages = append(messages, history...)
 
-	for _, msg := range history {
-		content := string(msg.Content)
-		switch msg.Role.Value {
-		case "user":
-			query.WithUserMessage(content)
-		case "assistant":
-			query.WithAssistantMessage(content)
-		}
-	}
+	Log("OLLAMA", SevInfo, "REQUEST", "Generating response", "model", ast.Model)
+	start := time.Now()
 
-	_, resp, err := query.Execute()
+	aiReply, err := ollamaChat(ast.OllamaURL, ast.Model, messages)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute model: %w", err)
 	}
 
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("no response from model")
-	}
-
-	aiReply := resp.Choices[0].Message.Content
+	Log("OLLAMA", SevInfo, "RESPONSE", "Generation completed",
+		"model", ast.Model,
+		"duration", time.Since(start).Round(time.Millisecond))
 
 	err = ast.DB.SaveMessage(senderJid, "assistant", aiReply)
 
@@ -290,4 +292,69 @@ func (ast *Assistant) GetAIResponse(senderJid, userMsg string) (string, error) {
 	}
 
 	return aiReply, nil
+}
+
+type ollamaChatRequest struct {
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
+	Think    bool          `json:"think"`
+}
+
+type ollamaChatResponse struct {
+	Message struct {
+		Content string `json:"content"`
+	} `json:"message"`
+}
+
+func ollamaChat(baseURL, model string, messages []chatMessage) (string, error) {
+	reqBody, err := json.Marshal(ollamaChatRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   false,
+		Think:    false,
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("failed to encode request: %w", err)
+	}
+
+	url := strings.TrimRight(baseURL, "/") + "/api/chat"
+	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBody))
+
+	if err != nil {
+		return "", fmt.Errorf("failed to build request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(httpReq)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to reach Ollama at %s: %w", url, err)
+	}
+
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("ollama returned %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+
+	var chatResp ollamaChatResponse
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if chatResp.Message.Content == "" {
+		return "", fmt.Errorf("empty response from model")
+	}
+
+	return chatResp.Message.Content, nil
 }

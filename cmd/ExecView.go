@@ -17,14 +17,14 @@ func ExecView(ast *whatsapp.Assistant) error {
 		return fmt.Errorf("No assistant is initiated Sir. Do 'clark init' first.")
 	}
 
-	fmt.Println("Here is your settings, Sir:")
-	fmt.Println("Assistant Name:", ast.Name)
-	fmt.Println("Assistant Model:", ast.Model)
-	fmt.Println("Active Status:", ast.Status)
-	fmt.Println("Master Context:", ast.MasterContext)
-	fmt.Println("\nHere is your VIP list:")
+	whatsapp.Log("CLARK", whatsapp.SevInfo, "VIEW", "Settings",
+		"name", ast.Name,
+		"model", ast.Model,
+		"status", ast.Status,
+		"context", ast.MasterContext)
+	whatsapp.Log("MEMORY", whatsapp.SevInfo, "VIPLIST", "Current VIP list")
 	for jid, name := range ast.VIP.VIP {
-		fmt.Printf("%v | %v\n", jid, name)
+		whatsapp.Log("MEMORY", whatsapp.SevInfo, "VIPLIST", "VIP entry", "jid", jid, "relation", name)
 	}
 
 	return nil

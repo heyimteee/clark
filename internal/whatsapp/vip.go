@@ -47,7 +47,7 @@ func (vip *VIP) LoadVIP() error {
 	}
 
 	if len(vip.VIP) < 1 {
-		fmt.Println("The VIP slot is ready but is empty. You can add with 'clark add' Sir.")
+		Log("MEMORY", SevNotice, "VIPLOAD", "VIP list is empty")
 	}
 
 	return nil

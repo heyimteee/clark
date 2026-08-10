@@ -43,7 +43,7 @@ func ExecVIP(args []string, ast *whatsapp.Assistant) error {
 			return fmt.Errorf("adding new VIP: %w", err)
 		}
 
-		fmt.Printf("\nAdded %v to our VIP list sir.\n", addTarget)
+		whatsapp.Log("MEMORY", whatsapp.SevInfo, "VIPADD", "Added to VIP list", "contact", addTarget)
 	}
 
 	if delTarget != "" {
@@ -53,12 +53,12 @@ func ExecVIP(args []string, ast *whatsapp.Assistant) error {
 			return fmt.Errorf("adding new VIP: %w", err)
 		}
 
-		fmt.Printf("\nDeleted %v from our VIP list sir.\n", delTarget)
+		whatsapp.Log("MEMORY", whatsapp.SevInfo, "VIPDEL", "Deleted from VIP list", "contact", delTarget)
 	}
 
-	fmt.Println("\nNew VIP List:")
+	whatsapp.Log("MEMORY", whatsapp.SevInfo, "VIPLIST", "Current VIP list")
 	for index, person := range ast.VIP.VIP {
-		fmt.Printf("%v | %v\n", index, person)
+		whatsapp.Log("MEMORY", whatsapp.SevInfo, "VIPLIST", "VIP entry", "jid", index, "relation", person)
 	}
 
 	return nil

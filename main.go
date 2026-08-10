@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"log"
 	"os"
 
 	"github.com/tristnaja/clark/cmd"
@@ -10,8 +9,6 @@ import (
 )
 
 func main() {
-	log.SetPrefix("clark: ")
-	log.SetFlags(0)
 	var err error
 	commands := map[string]struct{}{
 		"init":   {},
@@ -23,25 +20,25 @@ func main() {
 	}
 
 	if len(os.Args) < 2 {
-		log.Fatal("usage: clark [cmd]")
+		whatsapp.Fatalf("USAGE", "usage: clark [cmd]")
 	}
 
 	if _, exist := commands[os.Args[1]]; !exist {
-		log.Fatalf("unknown command '%v'", os.Args[1])
+		whatsapp.Fatalf("USAGE", "unknown command '%v'", os.Args[1])
 	}
 
 	if len(os.Args) > 2 && os.Args[1] == "run" {
-		log.Fatal("unnecessary argument(s), usage: clark run")
+		whatsapp.Fatalf("USAGE", "unnecessary argument(s), usage: clark run")
 	}
 
-	if len(os.Args) < 3 && (os.Args[1] == "add" || os.Args[1] == "ctx") {
-		log.Fatalf("usage: clark %v [args]", os.Args[1])
+	if len(os.Args) < 3 && (os.Args[1] == "vip" || os.Args[1] == "ctx") {
+		whatsapp.Fatalf("USAGE", "usage: clark %v [args]", os.Args[1])
 	}
 
 	ast, err := whatsapp.AssistantInit()
 
 	if err != nil {
-		log.Fatalf("fail to create assistant: %v", err)
+		whatsapp.Fatalf("ASSIST", "fail to create assistant: %v", err)
 	}
 
 	switch os.Args[1] {
@@ -62,7 +59,7 @@ func main() {
 	}
 
 	if err != nil {
-		log.Fatal(err)
+		whatsapp.Fatalf("CMD", "%v", err)
 	}
 
 	ast.DB.DB.Close()
