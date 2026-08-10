@@ -1,4 +1,4 @@
-module github.com/tristnaja/clark
+module github.com/heyimteee/clark
 
 go 1.25.5
 

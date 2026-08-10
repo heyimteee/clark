@@ -5,7 +5,7 @@ A personal AI butler for your WhatsApp.
 Clark is a command-line application that runs a sophisticated AI-powered butler for your WhatsApp account. It uses a local Ollama model to generate intelligent, context-aware responses, acting as a gatekeeper for your messages while you're away. Clark only interacts with a pre-approved list of "VIP" contacts, ensuring your privacy and focus.
 
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
-![Go Version](https://img.shields.io/badge/Go-1.21+-brightgreen.svg)
+![Go Version](https://img.shields.io/badge/Go-1.25+-brightgreen.svg)
 
 ## How It Works
 
@@ -38,7 +38,7 @@ Follow these steps to get your personal butler up and running.
 
 1.  **Clone the Repository:**
     ```sh
-    git clone https://github.com/tristnaja/clark.git
+    git clone https://github.com/heyimteee/clark.git
     cd clark
     ```
 
@@ -61,6 +61,13 @@ Follow these steps to get your personal butler up and running.
     Use the model tag shown by `ollama list` on the server (e.g. `llama3.2:latest`).
     Clark calls Ollama's native `/api/chat` endpoint with thinking disabled, so reasoning is off even for thinking-capable models.
 
+    Optional variables:
+    ```
+    CLARK_DB=mystore.db          # SQLite path (default mystore.db)
+    CLARK_LOG_FORMAT=json        # switch logs from colored to JSON
+    NO_COLOR=1                   # disable ANSI colors
+    ```
+
 5.  **Initialize the Assistant:**
     This creates the necessary database and default settings.
     ```sh
@@ -76,14 +83,16 @@ Clark is managed via a set of simple commands.
     ./clark run
     ```
 
--   **`add`**: Adds a contact to the VIP list. The bot will only respond to contacts on this list.
-    -   **Format:** `"[number],[name],[relation]"`
-    -   `number`: The contact's phone number with country code (e.g., `11234567890`).
-    -   `name`: The contact's name.
-    -   `relation`: Your relationship to them (e.g., "colleague," "family").
-    ```sh
-    ./clark add -v "11234567890,John Doe,Colleague"
-    ```
+-   **`vip`**: Manages the VIP list. The bot will only respond to contacts on this list.
+    -   **Add — Format:** `"[number],[name],[relation]"`
+        -   `number`: The contact's phone number with country code (e.g., `11234567890`).
+        -   `name`: The contact's name.
+        -   `relation`: Your relationship to them (e.g., "colleague," "family").
+        ```sh
+        ./clark vip -a "11234567890,John Doe,Colleague"
+        ```
+    -   **Delete:** `./clark vip -d 11234567890`
+    -   **List:** `./clark vip`
 
 -   **`ctx`**: Sets the master context for the AI. This tells the butler your current status.
     ```sh
@@ -99,6 +108,27 @@ Clark is managed via a set of simple commands.
     ```sh
     ./clark view
     ```
+
+## Project Layout
+
+Clark is split into small, interface-driven packages so each concern scales and tests independently:
+
+```
+main.go                       thin entry point: validates args, dispatches
+internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/view)
+internal/config               single .env load + validation
+internal/logging              structured colored log emitter + whatsmeow adapter
+internal/store                persistence interfaces + SQLite implementation
+internal/ollama               Ollama /api/chat client
+internal/assistant            butler service: settings, VIP rules, prompt, replies
+internal/whatsapp             WhatsApp transport: messenger, handler pipeline, echo tracker
+internal/notify               desktop notifications
+```
+
+Dependencies flow downward (`app -> whatsapp, assistant, store, ollama, notify`); the
+message handler depends on small interfaces (`Messenger`, `Butler`, `Notifier`) rather
+than concrete types, so adding a transport, command, or AI backend means adding an
+implementation, not editing the pipeline.
 
 ## License
 

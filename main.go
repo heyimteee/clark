@@ -1,15 +1,13 @@
 package main
 
 import (
-	"errors"
 	"os"
 
-	"github.com/tristnaja/clark/cmd"
-	"github.com/tristnaja/clark/internal/whatsapp"
+	"github.com/heyimteee/clark/internal/app"
+	"github.com/heyimteee/clark/internal/logging"
 )
 
 func main() {
-	var err error
 	commands := map[string]struct{}{
 		"init":   {},
 		"run":    {},
@@ -20,47 +18,43 @@ func main() {
 	}
 
 	if len(os.Args) < 2 {
-		whatsapp.Fatalf("USAGE", "usage: clark [cmd]")
+		logging.Fatalf("USAGE", "usage: clark [cmd]")
 	}
 
 	if _, exist := commands[os.Args[1]]; !exist {
-		whatsapp.Fatalf("USAGE", "unknown command '%v'", os.Args[1])
+		logging.Fatalf("USAGE", "unknown command '%v'", os.Args[1])
 	}
 
 	if len(os.Args) > 2 && os.Args[1] == "run" {
-		whatsapp.Fatalf("USAGE", "unnecessary argument(s), usage: clark run")
+		logging.Fatalf("USAGE", "unnecessary argument(s), usage: clark run")
 	}
 
 	if len(os.Args) < 3 && (os.Args[1] == "vip" || os.Args[1] == "ctx") {
-		whatsapp.Fatalf("USAGE", "usage: clark %v [args]", os.Args[1])
+		logging.Fatalf("USAGE", "usage: clark %v [args]", os.Args[1])
 	}
 
-	ast, err := whatsapp.AssistantInit()
-
+	a, err := app.New()
 	if err != nil {
-		whatsapp.Fatalf("ASSIST", "fail to create assistant: %v", err)
+		logging.Fatalf("ASSIST", "fail to create assistant: %v", err)
 	}
+	defer a.Close()
 
 	switch os.Args[1] {
 	case "init":
-		err = cmd.ExecInit(ast)
+		err = a.Init()
 	case "run":
-		err = cmd.ExecRun(ast)
+		err = a.Run()
 	case "vip":
-		err = cmd.ExecVIP(os.Args[2:], ast)
+		err = a.VIP(os.Args[2:])
 	case "ctx":
-		err = cmd.ExecContext(os.Args[2:], ast)
+		err = a.Context(os.Args[2:])
 	case "toggle":
-		err = cmd.ExecToggle(ast)
+		err = a.Toggle()
 	case "view":
-		cmd.ExecView(ast)
-	default:
-		err = errors.New("unknown command sir, here are the commands: init, run, add, ctx, toggle")
+		err = a.View()
 	}
 
 	if err != nil {
-		whatsapp.Fatalf("CMD", "%v", err)
+		logging.Fatalf("CMD", "%v", err)
 	}
-
-	ast.DB.DB.Close()
 }

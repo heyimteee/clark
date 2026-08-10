@@ -1,4 +1,7 @@
-package whatsapp
+// Package logging provides clark's structured, colored log emitter.
+//
+// Line format: TIMESTAMP LEVEL COMPONENT EVENT: message (key=value ...)
+package logging
 
 import (
 	"context"
@@ -10,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -256,44 +257,4 @@ func (l *waLogger) Warnf(format string, args ...any)  { l.emit(SevWarn, format, 
 func (l *waLogger) Errorf(format string, args ...any) { l.emit(SevErr, format, args...) }
 func (l *waLogger) Sub(module string) waLog.Logger {
 	return &waLogger{module: sanitizeMnemonic(module), min: l.min}
-}
-
-func logIncoming(v *events.Message, sender types.JID, who string, isVIP bool, content string) {
-	number := sender.User
-	if number == "" {
-		number = sender.String()
-	}
-
-	direction := "incoming"
-	if v.Info.IsFromMe {
-		direction = "self-text"
-	}
-
-	chatType := "private"
-	if v.Info.IsGroup {
-		chatType = "group"
-	}
-
-	vip := "no"
-	if isVIP {
-		vip = "yes"
-	}
-
-	if content == "" {
-		content = "<non-text>"
-	}
-
-	Log("WHATSAPP", SevInfo, "MESSAGE", "Message received",
-		"from", who,
-		"number", number,
-		"chat", chatType,
-		"vip", vip,
-		"direction", direction,
-		"msg", content)
-}
-
-func logReply(toNumber, content string) {
-	Log("WHATSAPP", SevInfo, "SEND", "Message sent",
-		"to", toNumber,
-		"msg", content)
 }
