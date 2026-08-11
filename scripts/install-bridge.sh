@@ -2,8 +2,12 @@
 # Installs the clark iMessage bridge on macOS as a launchd agent.
 #
 # Prerequisites (one-time, user):
-#   * The terminal running this script must have Full Disk Access so the bridge
-#     can read ~/Library/Messages/chat.db.
+#   * Grant Full Disk Access to /usr/local/bin/imessage-bridge (not just the
+#     terminal) so it can read ~/Library/Messages/chat.db.
+#   * IMPORTANT: rebuilding the binary invalidates the TCC grant. After every
+#     reinstall, remove and re-add the binary in
+#     System Settings > Privacy & Security > Full Disk Access, then:
+#     launchctl kickstart -k gui/$(id -u)/com.clark.imessage-bridge
 #   * The first outbound send will prompt for Automation permission for Messages.
 #
 # Usage:

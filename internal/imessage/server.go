@@ -12,16 +12,19 @@ import (
 // Server exposes the bridge-facing HTTP API: it accepts inbound messages,
 // serves outbound ones for the bridge to deliver, and receives delivery acks.
 type Server struct {
-	token string
-	out   OutboundStore
-	gw    *gateway.Handler
+	token      string
+	selfHandle string
+	out        OutboundStore
+	gw         *gateway.Handler
 }
 
 // NewServer wires the API around its dependencies. token is the bridge's
 // shared secret sent in X-Clark-Bridge-Token; empty disables auth (never use in
-// production).
-func NewServer(token string, out OutboundStore, gw *gateway.Handler) *Server {
-	return &Server{token: token, out: out, gw: gw}
+// production). selfHandle is the Master's own iMessage handle ("+6281111111111");
+// messages from it are the Master's self-chat and are dropped (management is
+// WhatsApp-only).
+func NewServer(token, selfHandle string, out OutboundStore, gw *gateway.Handler) *Server {
+	return &Server{token: token, selfHandle: selfHandle, out: out, gw: gw}
 }
 
 // Routes returns the HTTP handler with auth enforced.
@@ -59,8 +62,27 @@ func (s *Server) handleInbound(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "handle and text are required", http.StatusBadRequest)
 		return
 	}
+	// The Master's own iMessage self-chat is not a control surface: management
+	// happens on WhatsApp only. Dropping it here (acknowledged so the bridge
+	// advances its watermark) also kills the echo loop caused by chat.db
+	// storing a mirrored is_from_me=0 copy of every outbound self message.
+	if s.isSelf(in) {
+		logging.Log("IMESSAGE", logging.SevInfo, "INBOUND", "Dropped master self-chat message; management is WhatsApp-only", "handle", in.Handle)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	s.gw.Handle(toGateway(in))
 	w.WriteHeader(http.StatusOK)
+}
+
+// isSelf reports whether in came from the Master's own chat, either because the
+// bridge marked it (IsSelf) or because the handle resolves to the configured
+// self handle (defense in depth against a misbehaving bridge).
+func (s *Server) isSelf(in InboundMessage) bool {
+	if in.IsSelf {
+		return true
+	}
+	return s.selfHandle != "" && canonicalSender(in.Handle) == canonicalSender(s.selfHandle)
 }
 
 // handleOutbound claims the oldest pending outbound message for the bridge to

@@ -62,7 +62,7 @@ func newTestServer(t *testing.T, token string, out OutboundStore) (*Server, *rec
 	t.Helper()
 	msgr := &recMessenger{}
 	h := gateway.NewHandler("IMESSAGE", msgr, &recButler{}, nil, "get him to me")
-	return NewServer(token, out, h), msgr
+	return NewServer(token, "+6281111111111", out, h), msgr
 }
 
 func doRequest(ts *Server, method, path, token, body string) *httptest.ResponseRecorder {
@@ -106,6 +106,27 @@ func TestServerInboundFeedsGateway(t *testing.T) {
 	defer msgr.mu.Unlock()
 	if !strings.Contains(msgr.text, "Indubitably.") {
 		t.Errorf("reply = %q, want the butler's reply", msgr.text)
+	}
+}
+
+func TestServerInboundDropsSelf(t *testing.T) {
+	ts, msgr := newTestServer(t, "", &fakeOutbound{})
+
+	// Bridge-marked self message (the echo-loop source).
+	if rec := doRequest(ts, "POST", "/inbound", "", `{"id":"1","handle":"+628117705636","text":"*Status Updated* Clark is now On","is_self":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("marked self inbound = %d, want 200", rec.Code)
+	}
+	// Own handle with is_self unset: still the Master's self-chat (defense in depth).
+	if rec := doRequest(ts, "POST", "/inbound", "", `{"id":"2","handle":"+6281111111111","text":"status off","is_self":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("own-handle inbound = %d, want 200", rec.Code)
+	}
+
+	// Give any (buggy) gateway invocation time to surface, then assert none ran.
+	time.Sleep(150 * time.Millisecond)
+	msgr.mu.Lock()
+	defer msgr.mu.Unlock()
+	if msgr.handled {
+		t.Fatalf("gateway pipeline invoked for self messages; want it skipped")
 	}
 }
 

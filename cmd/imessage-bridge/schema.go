@@ -16,9 +16,9 @@ import (
 // whose handle row is missing or whose sender is clark's own device.
 const newMessagesQuery = `
 SELECT message.ROWID, message.guid, message.text, message.is_from_me,
-       handle.remote_id, message.date, message.service
+       handle.id, message.date, message.service
 FROM message
-LEFT JOIN handle ON handle.id = message.handle_id
+LEFT JOIN handle ON handle.ROWID = message.handle_id
 WHERE message.ROWID > ?
   AND message.is_from_me = 0
   AND message.text IS NOT NULL AND message.text != ''
@@ -38,9 +38,9 @@ const maxRowIDQuery = `SELECT COALESCE(MAX(ROWID), 0) FROM message`
 // ownHandleQuery finds the most recent outbound message's recipient handle, a
 // good guess for the Master's own iMessage address.
 const ownHandleQuery = `
-SELECT handle.remote_id
+SELECT handle.id
 FROM message
-JOIN handle ON handle.id = message.handle_id
+JOIN handle ON handle.ROWID = message.handle_id
 WHERE message.is_from_me = 1 AND message.text IS NOT NULL
 ORDER BY message.ROWID DESC LIMIT 1`
 

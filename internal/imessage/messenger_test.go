@@ -103,15 +103,15 @@ func TestMessengerSendEmptyRecipient(t *testing.T) {
 	}
 }
 
-func TestMessengerSendSelf(t *testing.T) {
+func TestMessengerSendSelfSuppressed(t *testing.T) {
 	out := &fakeOutbound{}
 	m := NewMessenger(out, "+6281111111111")
 
 	if err := m.SendSelf(context.Background(), "hello self"); err != nil {
 		t.Fatalf("SendSelf: %v", err)
 	}
-	if len(out.enqueued) != 1 || out.enqueued[0].Recipient != "+6281111111111" {
-		t.Fatalf("enqueued = %+v, want self-handle delivery", out.enqueued)
+	if len(out.enqueued) != 0 {
+		t.Fatalf("enqueued %+v, want none (self alerts are WhatsApp-only)", out.enqueued)
 	}
 }
 

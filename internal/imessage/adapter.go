@@ -46,7 +46,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	httpServer := &http.Server{
 		Addr:              opts.ListenAddr,
-		Handler:           NewServer(opts.Token, opts.Out, handler).Routes(),
+		Handler:           NewServer(opts.Token, opts.SelfHandle, opts.Out, handler).Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

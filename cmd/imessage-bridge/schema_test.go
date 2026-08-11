@@ -29,12 +29,13 @@ CREATE TABLE message (
 	cache_roomnames TEXT
 );
 CREATE TABLE handle (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	remote_id TEXT UNIQUE NOT NULL,
+	ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
+	id TEXT NOT NULL,
 	service TEXT NOT NULL,
-	uncanonicalized_id TEXT,
 	country TEXT,
-	UNIQUE (service, remote_id)
+	uncanonicalized_id TEXT,
+	person_centric_id TEXT,
+	UNIQUE (id, service)
 );
 CREATE TABLE chat (
 	ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,9 +68,9 @@ func addMessage(t *testing.T, db *sql.DB, remoteID, text string, isFromMe bool, 
 	t.Helper()
 	var handleID int64
 	if remoteID != "" {
-		err := db.QueryRow(`SELECT id FROM handle WHERE remote_id = ?`, remoteID).Scan(&handleID)
+		err := db.QueryRow(`SELECT ROWID FROM handle WHERE id = ?`, remoteID).Scan(&handleID)
 		if err == sql.ErrNoRows {
-			res, err := db.Exec(`INSERT INTO handle (remote_id, service) VALUES (?, 'iMessage')`, remoteID)
+			res, err := db.Exec(`INSERT INTO handle (id, service) VALUES (?, 'iMessage')`, remoteID)
 			if err != nil {
 				t.Fatalf("insert handle: %v", err)
 			}
