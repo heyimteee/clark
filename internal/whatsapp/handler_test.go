@@ -137,6 +137,14 @@ func (b *fakeButler) Reply(_ context.Context, _, text string, _ bool) (string, e
 func (b *fakeButler) Relation(_ string) (string, bool) { return "Test (Friend)", true }
 func (b *fakeButler) Enabled() bool                    { return b.enabled }
 
+// nonVIPButler mimics a fresh database where no one — not even the Master — is
+// registered in the inner circle yet.
+type nonVIPButler struct {
+	fakeButler
+}
+
+func (b *nonVIPButler) Relation(_ string) (string, bool) { return "", false }
+
 func hmsg(chat, sender types.JID, fromMe bool, text string) *events.Message {
 	return &events.Message{
 		Info: types.MessageInfo{
@@ -147,7 +155,7 @@ func hmsg(chat, sender types.JID, fromMe bool, text string) *events.Message {
 	}
 }
 
-func newTestHandler(msgr *fakeMessenger, butler *fakeButler) *Handler {
+func newTestHandler(msgr *fakeMessenger, butler Butler) *Handler {
 	return NewHandler(msgr, butler, nil, NewEchoTracker(), time.Now().Add(-time.Hour), "get him to me")
 }
 
@@ -217,6 +225,36 @@ func TestHandlerDisabledSelfChatStillEngages(t *testing.T) {
 	}
 	if len(msgr.sentTo) != 2 {
 		t.Fatalf("sent %d messages, want ack + reply = 2", len(msgr.sentTo))
+	}
+}
+
+func TestHandlerFreshBootMasterSelfChatBypassesVIPGate(t *testing.T) {
+	self := types.JID{User: "6281111111111", Server: "s.whatsapp.net"}
+	msgr := &fakeMessenger{self: self}
+	butler := &nonVIPButler{fakeButler: fakeButler{enabled: false}}
+	h := newTestHandler(msgr, butler)
+
+	h.OnEvent(hmsg(self, self, true, "wake up buddy"))
+	h.Close()
+
+	if len(butler.replied) != 1 {
+		t.Fatalf("fresh-boot self-chat engaged %d model replies, want 1", len(butler.replied))
+	}
+}
+
+func TestHandlerFreshBootNonVIPNonSelfIgnored(t *testing.T) {
+	msgr := &fakeMessenger{}
+	butler := &nonVIPButler{fakeButler: fakeButler{enabled: true}}
+	h := newTestHandler(msgr, butler)
+
+	stranger := types.JID{User: "6289999999999", Server: "s.whatsapp.net"}
+	h.OnEvent(hmsg(stranger, stranger, false, "hello"))
+
+	if len(butler.replied) != 0 {
+		t.Fatalf("non-VIP stranger replied %d times, want 0", len(butler.replied))
+	}
+	if len(msgr.sentTo) != 0 {
+		t.Fatalf("sent %d messages, want 0", len(msgr.sentTo))
 	}
 }
 

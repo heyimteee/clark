@@ -166,7 +166,14 @@ Notes:
 - Desktop notifications are off inside the container (`CLARK_NO_NOTIFY=1`);
   urgent alerts still reach you as a WhatsApp message to your own chat.
 - On a fresh database Clark starts *silent*: VIP messages are ignored until you
-  text `wake` from your own chat (or run `docker compose exec clark clark toggle`).
+  text `wake up buddy` from your own chat (or run
+  `docker compose exec clark clark toggle`).
+- **First boot:** because a fresh database has no VIPs yet, you bootstrap from
+  your own chat (your own messages are always trusted). Text `wake up buddy`,
+  then register yourself and your people:
+  `add vip <number>, <name>, <relation>` (for example
+  `add vip 6281234567890, Tiara, Girlfriend`). Existing users who copied their
+  `mystore.db` into `data/clark.db` before first run skip this entirely.
 
 ## Tools
 

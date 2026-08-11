@@ -112,9 +112,17 @@ func (h *Handler) OnEvent(evt any) {
 	if isVIP {
 		who = relation
 	}
-	logIncoming(v, sender, who, isVIP, userMsg)
+	// Log only private messages; group chatter is filtered out so the logs
+	// show just the people Clark actually talks to.
+	if !v.Info.IsGroup {
+		logIncoming(v, sender, who, isVIP, userMsg)
+	}
 
-	if (!h.butler.Enabled() && !isSelf) || !isVIP || v.Info.IsGroup {
+	// The Master's own chat is always trusted (whether clark is enabled or the
+	// Master is registered as a VIP), so a fresh install can be bootstrapped
+	// with wake/context/VIP commands. Everyone else must be an enabled VIP in a
+	// private chat.
+	if !isSelf && (!h.butler.Enabled() || !isVIP || v.Info.IsGroup) {
 		return
 	}
 

@@ -184,7 +184,7 @@ func isStatusCommand(userMsg string) bool {
 	if hasAny(m, "toggle") {
 		return hasAny(m, "status", "clark", "turn", "toggle", "on", "off")
 	}
-	if hasAny(m, "silence clark", "silent clark", "sleep clark", "shut clark", "power clark off", "wake clark") {
+	if hasAny(m, "silence clark", "silent clark", "sleep clark", "shut clark", "power clark off", "wake clark", "wake up buddy") {
 		return true
 	}
 	if hasAny(m, "status") || hasAny(m, "operational status") ||
@@ -202,7 +202,7 @@ func parseStatusCommand(userMsg string) (on bool, ok bool) {
 	switch {
 	case hasAny(m, "silence clark", "silent clark", "sleep clark", "power clark off", "shut clark", "offline", "go off"):
 		return false, true
-	case hasAny(m, "wake clark", "awake", "online", "go on"):
+	case hasAny(m, "wake clark", "awake", "online", "go on", "wake up buddy"):
 		return true, true
 	}
 	match := statusCmdRe.FindStringSubmatch(m)

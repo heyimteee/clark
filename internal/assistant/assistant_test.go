@@ -820,6 +820,23 @@ func TestServiceContinueWithoutPending(t *testing.T) {
 	}
 }
 
+func TestServiceFastPathWakeUpBuddy(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "628111@s.whatsapp.net"
+
+	for _, phrase := range []string{"wake up buddy", "wake clark"} {
+		if _, err := s.Reply(context.Background(), jid, phrase, true); err != nil {
+			t.Fatalf("Reply %q: %v", phrase, err)
+		}
+		if !s.Enabled() {
+			t.Fatalf("status still off after %q", phrase)
+		}
+	}
+	if len(fake.got) != 0 {
+		t.Fatal("LLM was called for a fast-path mutation")
+	}
+}
+
 func TestServiceFastPathStatusOff(t *testing.T) {
 	s, _, fake := newService(t)
 	jid := "628111@s.whatsapp.net"
