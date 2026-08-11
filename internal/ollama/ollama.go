@@ -14,8 +14,40 @@ import (
 
 // Message is a single chat turn.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
+// ToolCall is a request to invoke a tool, as emitted by the model.
+type ToolCall struct {
+	ID       string       `json:"id,omitempty"`
+	Function ToolCallFunc `json:"function"`
+}
+
+// ToolCallFunc names the tool and its JSON arguments.
+type ToolCallFunc struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
+// Tool is the wire schema that advertises a tool to the model.
+type Tool struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction describes a tool's name, purpose, and JSON-Schema parameters.
+type ToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+// ChatResult is a model reply: content and any tool calls to run.
+type ChatResult struct {
+	Content   string
+	ToolCalls []ToolCall
 }
 
 // Client talks to one Ollama endpoint with a fixed model.
@@ -37,58 +69,64 @@ func New(baseURL, model string) *Client {
 type chatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
+	Tools    []Tool    `json:"tools,omitempty"`
 	Stream   bool      `json:"stream"`
 	Think    bool      `json:"think"`
 }
 
 type chatResponse struct {
 	Message struct {
-		Content string `json:"content"`
+		Content   string     `json:"content"`
+		ToolCalls []ToolCall `json:"tool_calls"`
 	} `json:"message"`
 }
 
-// Chat sends the messages and returns the model's reply.
-func (c *Client) Chat(ctx context.Context, messages []Message) (string, error) {
+// Chat sends the messages and returns the model's reply, including any tool calls.
+func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (*ChatResult, error) {
 	reqBody, err := json.Marshal(chatRequest{
 		Model:    c.model,
 		Messages: messages,
+		Tools:    tools,
 		Stream:   false,
 		Think:    false,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to encode request: %w", err)
+		return nil, fmt.Errorf("failed to encode request: %w", err)
 	}
 
 	url := c.baseURL + "/api/chat"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
-		return "", fmt.Errorf("failed to build request: %w", err)
+		return nil, fmt.Errorf("failed to build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("failed to reach Ollama at %s: %w", url, err)
+		return nil, fmt.Errorf("failed to reach Ollama at %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ollama returned %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		return nil, fmt.Errorf("ollama returned %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 
 	var chatResp chatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if chatResp.Message.Content == "" {
-		return "", fmt.Errorf("empty response from model")
+	if chatResp.Message.Content == "" && len(chatResp.Message.ToolCalls) == 0 {
+		return nil, fmt.Errorf("empty response from model")
 	}
 
-	return chatResp.Message.Content, nil
+	return &ChatResult{
+		Content:   chatResp.Message.Content,
+		ToolCalls: chatResp.Message.ToolCalls,
+	}, nil
 }

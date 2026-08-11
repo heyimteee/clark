@@ -38,6 +38,13 @@ type VIPStore interface {
 	Delete(jid string) error
 }
 
+// AccessStore persists each VIP's granted tool set.
+type AccessStore interface {
+	GetTools(jid string) (tools []string, ok bool, err error)
+	SetTools(jid string, tools []string) error
+	DeleteAccess(jid string) error
+}
+
 // HistoryStore persists per-contact chat history.
 type HistoryStore interface {
 	SaveMessage(jid, role, content string) error
@@ -86,6 +93,10 @@ func (s *Store) migrate() error {
 			jid TEXT PRIMARY KEY,
 			name TEXT,
 			relation TEXT
+		);`},
+		{"vip_access", `CREATE TABLE IF NOT EXISTS vip_access (
+			jid TEXT PRIMARY KEY,
+			tools TEXT NOT NULL
 		);`},
 		{"assistant_setting", `CREATE TABLE IF NOT EXISTS assistant_setting (
 			key TEXT PRIMARY KEY,

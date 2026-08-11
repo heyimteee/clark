@@ -41,13 +41,16 @@ func (s *Store) Add(entry VIPEntry) error {
 	return nil
 }
 
-// Delete removes the VIP entry with the given jid.
+// Delete removes the VIP entry and its access grants for the given jid.
 func (s *Store) Delete(jid string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM vip WHERE jid = ?`, jid); err != nil {
 		return fmt.Errorf("fail to delete vip: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM vip_access WHERE jid = ?`, jid); err != nil {
+		return fmt.Errorf("fail to delete access: %w", err)
 	}
 	return nil
 }

@@ -5,33 +5,116 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
+	"text/template"
 	"time"
 
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/ollama"
 	"github.com/heyimteee/clark/internal/store"
+	"github.com/heyimteee/clark/internal/tools"
 )
 
 //go:embed prompt.md
 var promptTemplate string
 
-// LLM generates replies from a chat history.
+// promptTmpl is the parsed prompt template. Personal details (the Master's
+// name, the protocol name, exception visitors, ...) are injected per turn so
+// the prompt itself carries no personal data.
+var promptTmpl = template.Must(template.New("prompt").Parse(promptTemplate))
+
+// maxToolRounds bounds how many model round-trips a single iteration may take.
+const maxToolRounds = 8
+
+// maxNudges bounds how many times the loop may push a narrating model to act.
+const maxNudges = 2
+
+// maxTurnDuration caps the wall-clock time of a single iteration so a stalled
+// or looping model can never block the WhatsApp pipeline indefinitely.
+const maxTurnDuration = 2 * time.Minute
+
+// iterationLimitMessage is returned when a genuine tool chain exhausts its
+// iteration budget while tools were still running.
+const iterationLimitMessage = "I have reached the limit of tool calls for this iteration, Master. Say _continue_ and I shall resume at once."
+
+// couldNotActMessage is returned when the model repeatedly refuses to perform a
+// demanded action; the request must be repeated rather than resumed.
+const couldNotActMessage = "I beg your pardon, Master, but I could not perform that action just now. Kindly _repeat your request_ and I shall try again at once."
+
+// tooSlowMessage is returned when a turn exceeds maxTurnDuration.
+func (s *Service) tooSlowMessage() string {
+	return fmt.Sprintf("My apologies, Sir, but the %s lines are running slow tonight. Kindly _repeat your request_ and I shall try again with haste.", s.palaceName)
+}
+
+// nudgeMessage is the generic reminder for a narrating model that words alone
+// do not perform actions.
+const nudgeMessage = "You have not actually performed the requested action. Words alone do nothing: you MUST invoke the matching tool. Respond with ONLY a tool call now."
+
+// Current-task directives selected per turn so the model greets only on a
+// genuine first message and never recites status mid-conversation.
+const (
+	masterFirstTurnTask = "The Master has arrived. Greet him warmly and await his command. Answer him directly — never announce your own status or availability to the Master himself."
+	followUpTask        = "Continue the ongoing conversation naturally. Answer exactly what the person just said, relevantly and conversationally — never recite greetings, status, or protocol boilerplate when a direct answer is due."
+)
+
+// visitorFirstTurnTask names the palace via the persona config.
+func (s *Service) visitorFirstTurnTask() string {
+	return fmt.Sprintf("The Visitor has just arrived. Greet them briefly, acknowledge the Master's availability, and host them with the grace befitting the %s (Whatsapp).", s.palaceName)
+}
+
+// nudgeFor tailors the corrective message to the tool the model must invoke.
+func nudgeFor(hint string) string {
+	switch hint {
+	case "send_message":
+		return "You have not actually performed the requested action. Words alone do nothing: you MUST invoke the send_message tool now, with the recipient and the exact message text. Respond with ONLY the tool call."
+	case "web_search":
+		return "You have not actually answered the question. Words alone do nothing: you MUST invoke the web_search tool now, with a precise, specific query. Respond with ONLY the tool call."
+	case "set_status", "set_context", "set_access", "get_state":
+		return "You have not actually performed the requested action. Words alone do nothing: you MUST invoke the " + hint + " tool now, with the correct arguments. Respond with ONLY the tool call."
+	case "add_vip or delete_vip":
+		return "You have not actually performed the requested action. Words alone do nothing: you MUST invoke the add_vip or delete_vip tool now, with the correct arguments. Respond with ONLY the tool call."
+	}
+	return nudgeMessage
+}
+
+// LLM generates replies from a chat history, optionally with tools.
 type LLM interface {
-	Chat(ctx context.Context, messages []ollama.Message) (string, error)
+	Chat(ctx context.Context, messages []ollama.Message, tools []ollama.Tool) (*ollama.ChatResult, error)
+}
+
+// pendingIter is a paused tool-calling iteration awaiting the sender's "continue".
+type pendingIter struct {
+	senderJID string
+	isSelf    bool
+	messages  []ollama.Message
 }
 
 // Service is the assistant's orchestration layer. It satisfies whatsapp.Butler.
 type Service struct {
 	settings store.Settings
 	history  store.HistoryStore
+	access   store.AccessStore
 	vip      *VIP
+	tools    *tools.Registry
 	llm      LLM
 	model    string
 	name     string
 	status   bool
 	context  string
+
+	// Persona, applied from config with butler-agnostic defaults.
+	masterName        string
+	protocolName      string
+	palaceName        string
+	bypassPhrase      string
+	exceptionVisitors string
+
+	pendingMu sync.Mutex
+	pending   map[string]*pendingIter
 }
 
 // New loads persisted state and returns a ready Service.
@@ -39,9 +122,18 @@ func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 	s := &Service{
 		settings: st,
 		history:  st,
+		access:   st,
 		vip:      NewVIP(st),
+		tools:    tools.NewRegistry(),
 		llm:      llm,
 		model:    cfg.OllamaModel,
+		pending:  make(map[string]*pendingIter),
+
+		masterName:        orDefault(cfg.MasterName, "the Master"),
+		protocolName:      orDefault(cfg.ProtocolName, "Butler"),
+		palaceName:        orDefault(cfg.PalaceName, "Palace"),
+		bypassPhrase:      orDefault(cfg.BypassPhrase, "get him to me"),
+		exceptionVisitors: formatExceptionVisitors(cfg.InnerCircle),
 	}
 
 	if err := s.vip.Load(); err != nil {
@@ -50,6 +142,7 @@ func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 	if err := s.load(); err != nil {
 		return nil, err
 	}
+	s.registerManagementTools()
 	return s, nil
 }
 
@@ -58,25 +151,22 @@ func (s *Service) load() error {
 	if err != nil {
 		return err
 	}
-	if name == "" {
-		return fmt.Errorf("Name is empty. Error occured Sir.")
-	}
 
 	ctxValue, err := s.settings.Get("context")
 	if err != nil {
 		return err
-	}
-	if ctxValue == "" {
-		return fmt.Errorf("Master Context is empty. Error occured Sir.")
 	}
 
 	statusStr, err := s.settings.Get("status")
 	if err != nil {
 		return err
 	}
-	status, err := strconv.ParseBool(statusStr)
-	if err != nil {
-		return fmt.Errorf("Invalid status value Sir. Error: %w", err)
+	status := false
+	if statusStr != "" {
+		status, err = strconv.ParseBool(statusStr)
+		if err != nil {
+			return fmt.Errorf("Invalid status value Sir. Error: %w", err)
+		}
 	}
 
 	s.name = name
@@ -97,9 +187,17 @@ func (s *Service) Context() string { return s.context }
 // Enabled reports whether the assistant accepts and answers messages.
 func (s *Service) Enabled() bool { return s.status }
 
+// Tools returns the shared tool registry so transports can register capabilities.
+func (s *Service) Tools() *tools.Registry { return s.tools }
+
 // Relation resolves a jid to its "Name (Relation)" label.
 func (s *Service) Relation(jid string) (string, bool) {
 	return s.vip.Check(jid)
+}
+
+// LookupJID resolves a name or number to a VIP jid for outbound messaging.
+func (s *Service) LookupJID(input string) (string, bool) {
+	return s.vip.Lookup(input)
 }
 
 // AddVIP parses and persists a "[number], [name], [relation]" entry.
@@ -115,6 +213,33 @@ func (s *Service) DeleteVIP(input string) error {
 // VIPList returns the current inner circle keyed by jid.
 func (s *Service) VIPList() map[string]string {
 	return s.vip.List()
+}
+
+// AccessFor returns a VIP's granted tools. A missing row defaults to web_search.
+func (s *Service) AccessFor(jid string) ([]string, bool, error) {
+	grants, ok, err := s.access.GetTools(jid)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return []string{"web_search"}, false, nil
+	}
+	return grants, true, nil
+}
+
+// AccessMap returns every VIP's granted tools keyed by jid.
+func (s *Service) AccessMap() map[string][]string {
+	out := make(map[string][]string, len(s.vip.List()))
+	for jid := range s.vip.List() {
+		grants, _, _ := s.AccessFor(jid)
+		out[jid] = grants
+	}
+	return out
+}
+
+// SetAccess persists a VIP's granted tools.
+func (s *Service) SetAccess(jid string, grants []string) error {
+	return s.access.SetTools(jid, grants)
 }
 
 // Init seeds the default settings.
@@ -139,12 +264,16 @@ func (s *Service) Toggle() error {
 		return err
 	}
 
-	newStatus := fmt.Sprintf("%v", !statusBool)
-	if err := s.settings.Set("status", newStatus); err != nil {
+	return s.SetStatus(!statusBool)
+}
+
+// SetStatus enables or disables the assistant and persists the choice.
+func (s *Service) SetStatus(on bool) error {
+	if err := s.settings.Set("status", fmt.Sprintf("%v", on)); err != nil {
 		return err
 	}
 
-	s.status = !statusBool
+	s.status = on
 	logging.Log("CLARK", logging.SevInfo, "STATUS", "Assistant status changed", "enabled", s.status)
 	return nil
 }
@@ -160,13 +289,15 @@ func (s *Service) SetContext(contextInput string) error {
 	return nil
 }
 
-// Reply produces an answer for a VIP's message, persisting the exchange.
-func (s *Service) Reply(ctx context.Context, senderJID, userMsg string) (string, error) {
+// Reply produces an answer for a VIP's message, running any tool calls the
+// model requests. isSelf marks the Master chatting in his own chat.
+func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, error) {
 	if senderJID == "" {
 		return "", fmt.Errorf("empty sender JID")
 	}
 
-	if _, isVIP := s.vip.Check(senderJID); !isVIP {
+	_, isVIP := s.vip.Check(senderJID)
+	if !isSelf && !isVIP {
 		return "", fmt.Errorf("sender not in VIP list")
 	}
 
@@ -187,8 +318,50 @@ func (s *Service) Reply(ctx context.Context, senderJID, userMsg string) (string,
 		return "", fmt.Errorf("no chat history available")
 	}
 
+	// Resume a paused iteration when the sender says "continue".
+	if it := s.pendingIteration(senderJID); it != nil {
+		if isContinueMsg(userMsg) {
+			s.clearPending(senderJID)
+			it.messages = append(it.messages, ollama.Message{Role: "user", Content: userMsg})
+			reply, pending, err := s.runToolLoop(ctx, it.messages, userMsg, s.toolsForSender(senderJID, it.isSelf), it.isSelf)
+			if err != nil {
+				return "", err
+			}
+			if pending != nil {
+				s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: it.isSelf, messages: pending})
+				reply = iterationLimitMessage
+			}
+			return s.saveReply(senderJID, reply)
+		}
+		s.clearPending(senderJID)
+	}
+
+	// Fast path: deterministic commands (views, and Master-only mutations of
+	// status, context, the inner circle, and tool access) are answered with
+	// hardcoded messages instead of a model round-trip.
+	if reply, handled, err := s.fastPath(senderJID, userMsg, isSelf); err != nil {
+		return "", err
+	} else if handled {
+		return s.saveReply(senderJID, reply)
+	}
+
+	available := s.toolsForSender(senderJID, isSelf)
 	relation, _ := s.vip.Check(senderJID)
-	systemPrompt := fmt.Sprintf(promptTemplate, s.name, s.context, s.vip.list(), relation)
+
+	// Greet only on a genuine first message; a follow-up must stay on-topic.
+	task := followUpTask
+	if len(history) == 1 {
+		if isSelf {
+			task = masterFirstTurnTask
+		} else {
+			task = s.visitorFirstTurnTask()
+		}
+	}
+
+	systemPrompt, err := s.renderPrompt(s.name, s.context, relation, describeTools(available), task)
+	if err != nil {
+		return "", err
+	}
 
 	messages := make([]ollama.Message, 0, len(history)+1)
 	messages = append(messages, ollama.Message{Role: "system", Content: systemPrompt})
@@ -199,7 +372,7 @@ func (s *Service) Reply(ctx context.Context, senderJID, userMsg string) (string,
 	logging.Log("OLLAMA", logging.SevInfo, "REQUEST", "Generating response", "model", s.model)
 	start := time.Now()
 
-	aiReply, err := s.llm.Chat(ctx, messages)
+	reply, pending, err := s.runToolLoop(ctx, messages, userMsg, available, isSelf)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute model: %w", err)
 	}
@@ -208,9 +381,524 @@ func (s *Service) Reply(ctx context.Context, senderJID, userMsg string) (string,
 		"model", s.model,
 		"duration", time.Since(start).Round(time.Millisecond))
 
-	if err := s.history.SaveMessage(senderJID, "assistant", aiReply); err != nil {
-		return "", err
+	if pending != nil {
+		s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: isSelf, messages: pending})
+		reply = iterationLimitMessage
 	}
 
-	return aiReply, nil
+	return s.saveReply(senderJID, reply)
+}
+
+// saveReply persists an assistant reply and returns it.
+func (s *Service) saveReply(senderJID, reply string) (string, error) {
+	if err := s.history.SaveMessage(senderJID, "assistant", reply); err != nil {
+		return "", err
+	}
+	return reply, nil
+}
+
+// promptData is the per-turn payload injected into the prompt template.
+type promptData struct {
+	ButlerName        string
+	MasterName        string
+	MasterStatus      string
+	ButlerStatus      string
+	InnerCircle       string
+	Visitor           string
+	Tools             string
+	Task              string
+	ProtocolName      string
+	PalaceName        string
+	BypassPhrase      string
+	ExceptionVisitors string
+}
+
+// renderPrompt fills the prompt template with the current turn's context.
+func (s *Service) renderPrompt(name, masterStatus, visitor, toolsList, task string) (string, error) {
+	data := promptData{
+		ButlerName:        name,
+		MasterName:        s.masterName,
+		MasterStatus:      masterStatus,
+		ButlerStatus:      statusLabel(s.status),
+		InnerCircle:       s.vip.list(),
+		Visitor:           visitor,
+		Tools:             toolsList,
+		Task:              task,
+		ProtocolName:      s.protocolName,
+		PalaceName:        s.palaceName,
+		BypassPhrase:      s.bypassPhrase,
+		ExceptionVisitors: s.exceptionVisitors,
+	}
+	var buf strings.Builder
+	if err := promptTmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("render prompt: %w", err)
+	}
+	return buf.String(), nil
+}
+
+// orDefault returns def when v is empty.
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// formatExceptionVisitors renders the configured dearest persons as a comma
+// separated "Name (Relation)" list, or "" when none are configured.
+func formatExceptionVisitors(people []config.Person) string {
+	if len(people) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(people))
+	for _, p := range people {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			continue
+		}
+		if rel := strings.TrimSpace(p.Relation); rel != "" {
+			parts = append(parts, name+" ("+rel+")")
+		} else {
+			parts = append(parts, name)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// runToolLoop drives the model: ask, run tool calls, and repeat up to
+// maxToolRounds until a plain reply is produced. If the budget is exhausted
+// mid-task it returns the accumulated messages so the caller can offer the
+// sender a second iteration.
+func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, userMsg string, available []tools.Tool, isSelf bool) (string, []ollama.Message, error) {
+	if isSelf {
+		ctx = tools.WithMaster(ctx)
+	}
+
+	loopCtx, cancel := context.WithTimeout(ctx, maxTurnDuration)
+	defer cancel()
+
+	requestTools := toOllamaTools(available)
+	ranTools := make(map[string]bool)
+	nudges := 0
+	for round := 0; round < maxToolRounds; round++ {
+		result, err := s.llm.Chat(loopCtx, messages, requestTools)
+		if err != nil {
+			if loopCtx.Err() == context.DeadlineExceeded {
+				return s.tooSlowMessage(), nil, nil
+			}
+			if round == 0 {
+				return "", nil, err
+			}
+			return "I beg your pardon, Sir, but something interrupted my train of thought. Pray _continue_ and I shall resume my duties at once.", nil, nil
+		}
+
+		if len(result.ToolCalls) == 0 {
+			needed, hint := s.needsAction(userMsg, result.Content, available)
+			if !needed || hintSatisfied(hint, ranTools) {
+				return result.Content, nil, nil
+			}
+			if nudges >= maxNudges {
+				return couldNotActMessage, nil, nil
+			}
+			nudges++
+			messages = append(messages, ollama.Message{Role: "assistant", Content: result.Content})
+			messages = append(messages, ollama.Message{Role: "system", Content: nudgeFor(hint)})
+			continue
+		}
+
+		messages = append(messages, ollama.Message{Role: "assistant", Content: result.Content, ToolCalls: result.ToolCalls})
+		for _, tc := range result.ToolCalls {
+			out, err := s.tools.Execute(loopCtx, tc.Function.Name, tc.Function.Arguments)
+			if err != nil {
+				out = "Error: " + err.Error()
+			}
+			ranTools[tc.Function.Name] = true
+			messages = append(messages, ollama.Message{Role: "tool", Content: out})
+		}
+	}
+
+	return "", messages, nil
+}
+
+// needsAction reports whether the model must be pushed to invoke a tool for
+// this turn, and returns a hint naming the tool it should call. It fires when
+// (a) the reply merely claims a send/manage action that was not performed,
+// (b) the sender explicitly demands a send/manage action, or (c) a research
+// request was met with a refusal rather than an answer. Claims and demands are
+// only honored for tools the sender may actually invoke.
+func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bool, string) {
+	hasTool := func(names ...string) bool {
+		for _, t := range available {
+			for _, n := range names {
+				if t.Definition.Name == n {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// A reply that merely claims a message was sent or delivered.
+	if hasTool("send_message") && hasAny(reply,
+		"shall send", "will send", "am sending", "is sending", "sending the",
+		"sending it", "sending that", "has been sent", "have sent", "had sent",
+		"sent to", "sent it", "sent the", "sent via", "sent a message",
+		"sent him", "sent her", "sent your", "sent the message", "delivered",
+		"deliver the", "drafted", "crafted") {
+		return true, "send_message"
+	}
+
+	// A reply that merely claims a setting or ledger was changed.
+	if hasTool("set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state") && hasAny(reply,
+		"have set", "has been set", "have turned", "has been turned", "turned clark",
+		"have silenced", "has been silenced", "is now silenced", "now silenced",
+		"status to off", "status to on", "set clark's status", "operational status off",
+		"operational status on", "set the status", "have added", "have deleted",
+		"has been added", "has been removed", "has been deleted") {
+		return true, manageHint(userMsg)
+	}
+
+	// The sender explicitly demanded a message be sent.
+	if hasTool("send_message") {
+		if hasAny(userMsg,
+			"send it", "send now", "send via whatsapp", "send the message",
+			"send this message", "send that message", "send the", "forward this",
+			"send immediately", "send it now", "send it immediately") {
+			return true, "send_message"
+		}
+		if hasAny(userMsg, "send", "message", "tell ", "tell her", "tell him",
+			"introduce", "introduction", "whatsapp", "text ") &&
+			s.hasVIPTarget(userMsg) {
+			return true, "send_message"
+		}
+	}
+
+	// The sender explicitly demanded a management action.
+	if hasTool("set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state") &&
+		hasAny(userMsg,
+			"set my status", "set the status", "set status", "status off", "status on",
+			"turn me on", "turn me off", "turn on", "turn off", "turn clark",
+			"toggle", "update my context", "update context", "set context", "my context",
+			"add a vip", "add vip", "new vip", "delete vip", "remove vip", "remove a vip",
+			"delete the vip", "change my status", "change my context", "update my status",
+			"change my availability", "set my availability", "operational status",
+			"wake", "silence", "silence clark", "go offline", "go online") {
+		return true, manageHint(userMsg)
+	}
+
+	// Research is only pushed when the model refused to answer; a genuine
+	// content answer is always trusted over a forced web search.
+	if hasTool("web_search") &&
+		hasAny(userMsg,
+			"current", "latest", "today", "price", "rate", "news", "weather",
+			"forecast", "search", "how much", "how many", "exchange", "stock",
+			"the price of", "what is the current") &&
+		isRefusal(reply) {
+		return true, "web_search"
+	}
+
+	return false, ""
+}
+
+// manageHint guesses the management tool a demand refers to.
+func manageHint(userMsg string) string {
+	m := strings.ToLower(userMsg)
+	switch {
+	case hasAny(m, "status", "toggle", "turn", "wake", "silence", "switch", "power", "shut"):
+		return "set_status"
+	case hasAny(m, "context"):
+		return "set_context"
+	case hasAny(m, "vip", "inner circle", "add a", "remove", "delete"):
+		return "add_vip or delete_vip"
+	case hasAny(m, "access", "grant", "revoke"):
+		return "set_access"
+	}
+	return "the appropriate management tool"
+}
+
+// hintSatisfied reports whether the tool category a hint names already ran in
+// this iteration, in which case a follow-up summary should not be nudged.
+func hintSatisfied(hint string, ran map[string]bool) bool {
+	switch hint {
+	case "send_message":
+		return ran["send_message"]
+	case "web_search":
+		return ran["web_search"]
+	case "set_status":
+		return ran["set_status"]
+	case "set_context":
+		return ran["set_context"]
+	case "add_vip or delete_vip":
+		return ran["add_vip"] || ran["delete_vip"]
+	case "set_access":
+		return ran["set_access"]
+	case "get_state":
+		return ran["get_state"]
+	default:
+		for _, n := range []string{"set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state"} {
+			if ran[n] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isRefusal reports whether a reply declined to answer rather than answering.
+func isRefusal(s string) bool {
+	return hasAny(s,
+		"unable", "cannot", "can't", "can not", "not able", "no access",
+		"don't have", "do not have", "without context", "insufficient",
+		"unfortunately", "no information", "don't know", "do not know",
+		"not sure", "i am not able", "lack the")
+}
+
+func (s *Service) hasVIPTarget(userMsg string) bool {
+	msg := strings.ToLower(userMsg)
+	for name := range s.vip.byName {
+		if name != "" && strings.Contains(msg, name) {
+			return true
+		}
+	}
+	for _, w := range []string{"darling", "girlfriend", "best friend", "bestfriend",
+		"mother", "father", "mom", "dad", "him", "her"} {
+		if strings.Contains(msg, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAny(s string, subs ...string) bool {
+	l := strings.ToLower(s)
+	for _, sub := range subs {
+		if strings.Contains(l, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// statusLabel renders clark's operational state for the prompt.
+func statusLabel(on bool) string {
+	if on {
+		return "On"
+	}
+	return "Off"
+}
+
+type viewKind int
+
+const (
+	viewNone viewKind = iota
+	viewTools
+	viewVIPs
+	viewAll
+)
+
+// viewRequest detects requests for the hardcoded reports.
+func (s *Service) viewRequest(userMsg string) viewKind {
+	m := strings.ToLower(userMsg)
+	switch {
+	case hasAny(m, "show me everything", "all information", "all info", "full report",
+		"view all", "complete state", "full state", "full overview", "give me the overview",
+		"your state", "what is your state", "show your state", "report your state",
+		"everything about you", "view everything", "the whole picture",
+		"all the information", "show the full report", "complete overview"):
+		return viewAll
+	case hasAny(m, "list of tools", "list tools", "available tools", "your tools",
+		"what tools", "which tools", "tools you have", "tool list", "list of your tools",
+		"show me your tools", "show your tools", "what can you do", "your capabilities",
+		"capabilities", "list the tools", "what tools do you have", "what can you do for me"):
+		return viewTools
+	case hasAny(m, "list of vip", "list vip", "vip list", "list of your vip",
+		"inner circle", "who are the vip", "who is in the inner circle", "list the vip",
+		"show the vip", "show me the vip", "my vip list", "list my vip",
+		"who can contact me", "list of the inner circle", "show me the inner circle"):
+		return viewVIPs
+	}
+	return viewNone
+}
+
+// renderView builds a deterministic report for the given view kind.
+func (s *Service) renderView(kind viewKind, senderJID string, isSelf bool) (string, error) {
+	switch kind {
+	case viewAll:
+		if !isSelf {
+			return "That report is reserved for the *Master* alone, I am afraid.", nil
+		}
+		return s.viewAllText(), nil
+	case viewVIPs:
+		if !isSelf {
+			return "The inner circle is reserved for the *Master* alone, I am afraid.", nil
+		}
+		return s.viewVIPsText(), nil
+	case viewTools:
+		if isSelf {
+			return formatTools(s.tools.List()), nil
+		}
+		grants, _, err := s.AccessFor(senderJID)
+		if err != nil {
+			return "", err
+		}
+		granted := make(map[string]bool, len(grants))
+		for _, g := range grants {
+			granted[g] = true
+		}
+		var list []tools.Tool
+		for _, t := range s.tools.List() {
+			if granted[t.Definition.Name] {
+				list = append(list, t)
+			}
+		}
+		return formatTools(list), nil
+	}
+	return "", fmt.Errorf("unknown view %d", kind)
+}
+
+func formatTools(ts []tools.Tool) string {
+	if len(ts) == 0 {
+		return "*Tools available to you:* _None._"
+	}
+	lines := make([]string, 0, len(ts))
+	for _, t := range ts {
+		lines = append(lines, "- `"+t.Definition.Name+"`: "+t.Definition.Description)
+	}
+	return "*Tools available to you:*\n" + joinLines(lines)
+}
+
+func (s *Service) viewAllText() string {
+	var b strings.Builder
+	b.WriteString("*" + s.name + " — Full Report*\n\n")
+	if s.status {
+		b.WriteString("*Status:* On\n")
+	} else {
+		b.WriteString("*Status:* Off\n")
+	}
+	b.WriteString("*Context:* " + s.context + "\n\n")
+	b.WriteString(s.viewVIPsText())
+	b.WriteString("\n\n")
+	b.WriteString(formatTools(s.tools.List()))
+	return b.String()
+}
+
+func (s *Service) viewVIPsText() string {
+	vips := s.vip.List()
+	var b strings.Builder
+	b.WriteString("*Inner Circle*\n")
+	if len(vips) == 0 {
+		b.WriteString("- _None_")
+		return b.String()
+	}
+	jids := make([]string, 0, len(vips))
+	for jid := range vips {
+		jids = append(jids, jid)
+	}
+	sort.Strings(jids)
+	for _, jid := range jids {
+		grants, _, _ := s.AccessFor(jid)
+		toolsList := "—"
+		if len(grants) > 0 {
+			toolsList = strings.Join(grants, ", ")
+		}
+		b.WriteString("- " + vips[jid] + " (`" + jid + "`): `" + toolsList + "`\n")
+	}
+	return b.String()
+}
+
+// pendingIteration returns the paused iteration for a sender, if any.
+func (s *Service) pendingIteration(senderJID string) *pendingIter {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	return s.pending[senderJID]
+}
+
+// setPending stores a paused iteration for a sender.
+func (s *Service) setPending(senderJID string, it *pendingIter) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	s.pending[senderJID] = it
+}
+
+// clearPending discards any paused iteration for a sender.
+func (s *Service) clearPending(senderJID string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	delete(s.pending, senderJID)
+}
+
+// isContinueMsg reports whether a message asks to resume a paused iteration.
+func isContinueMsg(userMsg string) bool {
+	m := strings.ToLower(strings.TrimSpace(userMsg))
+	return strings.Contains(m, "continue") ||
+		strings.Contains(m, "keep going") ||
+		strings.Contains(m, "go on") ||
+		strings.Contains(m, "resume") ||
+		strings.Contains(m, "next iteration") ||
+		strings.Contains(m, "second iteration")
+}
+
+// toolsForSender returns the tools a sender may invoke. The Master gets
+// everything; VIPs only the tools their access grants allow.
+func (s *Service) toolsForSender(senderJID string, isSelf bool) []tools.Tool {
+	all := s.tools.List()
+	if isSelf {
+		return all
+	}
+
+	grants, ok, err := s.access.GetTools(senderJID)
+	if err != nil || !ok {
+		grants = []string{"web_search"}
+	}
+
+	granted := make(map[string]bool, len(grants))
+	for _, g := range grants {
+		granted[g] = true
+	}
+
+	out := make([]tools.Tool, 0, len(grants))
+	for _, t := range all {
+		if granted[t.Definition.Name] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// describeTools renders the available tools for the system prompt.
+func describeTools(available []tools.Tool) string {
+	if len(available) == 0 {
+		return "None."
+	}
+	lines := make([]string, 0, len(available))
+	for _, t := range available {
+		lines = append(lines, "- "+t.Definition.Name+": "+t.Definition.Description)
+	}
+	return "You may use:\n" + joinLines(lines)
+}
+
+func joinLines(lines []string) string {
+	out := ""
+	for i, l := range lines {
+		if i > 0 {
+			out += "\n"
+		}
+		out += l
+	}
+	return out
+}
+
+func toOllamaTools(ts []tools.Tool) []ollama.Tool {
+	out := make([]ollama.Tool, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, ollama.Tool{
+			Type: "function",
+			Function: ollama.ToolFunction{
+				Name:        t.Definition.Name,
+				Description: t.Definition.Description,
+				Parameters:  t.Definition.Parameters,
+			},
+		})
+	}
+	return out
 }

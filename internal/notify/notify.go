@@ -23,3 +23,10 @@ func New() *Beeep {
 func (Beeep) Notify(title, body string) error {
 	return beeep.Notify(title, body, icon)
 }
+
+// Silent is a no-op notifier for headless environments (containers, servers)
+// where desktop notifications are impossible.
+type Silent struct{}
+
+// Notify swallows the notification.
+func (Silent) Notify(string, string) error { return nil }

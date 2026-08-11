@@ -2,6 +2,7 @@ package ollama
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,12 +22,15 @@ func TestChat(t *testing.T) {
 	defer server.Close()
 
 	c := New(server.URL, "test-model")
-	reply, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}})
+	result, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
-	if reply != "hello back" {
-		t.Errorf("reply = %q, want hello back", reply)
+	if result.Content != "hello back" {
+		t.Errorf("content = %q, want hello back", result.Content)
+	}
+	if len(result.ToolCalls) != 0 {
+		t.Errorf("unexpected tool calls: %+v", result.ToolCalls)
 	}
 
 	if !strings.Contains(gotBody, `"model":"test-model"`) {
@@ -37,6 +41,58 @@ func TestChat(t *testing.T) {
 	}
 }
 
+func TestChatSendsTools(t *testing.T) {
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = readAll(t, r.Body)
+		w.Write([]byte(`{"message":{"content":"ok"}}`))
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "test-model")
+	tools := []Tool{{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "web_search",
+			Description: "search the web",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}}
+	if _, err := c.Chat(context.Background(), nil, tools); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if !strings.Contains(gotBody, `"tools"`) || !strings.Contains(gotBody, `"web_search"`) {
+		t.Errorf("request body missing tools: %s", gotBody)
+	}
+}
+
+func TestChatReturnsToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"message":{"content":"","tool_calls":[{"id":"call_1","function":{"name":"get_weather","arguments":{"city":"London"}}}]}}`))
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "test-model")
+	result, err := c.Chat(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(result.ToolCalls))
+	}
+	tc := result.ToolCalls[0]
+	if tc.ID != "call_1" || tc.Function.Name != "get_weather" {
+		t.Errorf("unexpected tool call: %+v", tc)
+	}
+	var args map[string]string
+	if err := json.Unmarshal(tc.Function.Arguments, &args); err != nil {
+		t.Fatalf("bad arguments json: %v", err)
+	}
+	if args["city"] != "London" {
+		t.Errorf("city = %q, want London", args["city"])
+	}
+}
+
 func TestChatHTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -44,7 +100,7 @@ func TestChatHTTPError(t *testing.T) {
 	defer server.Close()
 
 	c := New(server.URL, "test-model")
-	if _, err := c.Chat(context.Background(), nil); err == nil {
+	if _, err := c.Chat(context.Background(), nil, nil); err == nil {
 		t.Fatal("Chat succeeded on HTTP 500, want error")
 	}
 }
@@ -56,8 +112,8 @@ func TestChatEmptyReply(t *testing.T) {
 	defer server.Close()
 
 	c := New(server.URL, "test-model")
-	if _, err := c.Chat(context.Background(), nil); err == nil {
-		t.Fatal("Chat succeeded with empty content, want error")
+	if _, err := c.Chat(context.Background(), nil, nil); err == nil {
+		t.Fatal("Chat succeeded with empty content and no tool calls, want error")
 	}
 }
 

@@ -21,7 +21,7 @@ type Messenger interface {
 }
 
 // messagePrefix brands every outbound message from clark.
-const messagePrefix = "🤵[CLARK]\n"
+const messagePrefix = "`🤵🏻‍♂️[CLARK]`\n"
 
 // prefixMessage prepends clark's branding to an outbound message.
 func prefixMessage(text string) string {

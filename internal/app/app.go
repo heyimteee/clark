@@ -15,6 +15,8 @@ import (
 	"github.com/heyimteee/clark/internal/notify"
 	"github.com/heyimteee/clark/internal/ollama"
 	"github.com/heyimteee/clark/internal/store"
+	"github.com/heyimteee/clark/internal/tools"
+	"github.com/heyimteee/clark/internal/websearch"
 	"github.com/heyimteee/clark/internal/whatsapp"
 )
 
@@ -44,7 +46,47 @@ func New() (*App, error) {
 		return nil, err
 	}
 
+	if cfg.TavilyAPIKey != "" {
+		registerWebSearchTool(ast.Tools(), websearch.New(cfg.TavilyAPIKey))
+		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Web search enabled", "provider", "tavily")
+	} else {
+		logging.Log("CLARK", logging.SevWarn, "TOOLS", "Web search disabled", "reason", "no TAVILY_API_KEY in .env")
+	}
+
 	return &App{cfg: cfg, st: st, ast: ast}, nil
+}
+
+func registerWebSearchTool(reg *tools.Registry, client *websearch.Client) {
+	reg.RegisterFunc(
+		"web_search",
+		"Search the web for current information and return concise, sourced results. Use whenever the answer needs up-to-date facts.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":       map[string]any{"type": "string", "description": "The search query"},
+				"max_results": map[string]any{"type": "integer", "description": "How many results to fetch (default 5)"},
+			},
+			"required": []string{"query"},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			query := tools.StringArg(args, "query")
+			if query == "" {
+				return "", fmt.Errorf("query is required")
+			}
+			maxResults := tools.IntArg(args, "max_results", 5)
+			if maxResults < 1 || maxResults > 10 {
+				maxResults = 5
+			}
+			results, err := client.Search(ctx, query, maxResults)
+			if err != nil {
+				return "", err
+			}
+			if len(results) == 0 {
+				return "No results found.", nil
+			}
+			return websearch.Format(results), nil
+		},
+	)
 }
 
 // Close releases the underlying store.
@@ -69,21 +111,31 @@ func (a *App) Run() error {
 	if a.ast.Context() == "" {
 		return fmt.Errorf("No context yet Sir. Do 'clark ctx -c [context]' first.")
 	}
-	if !a.ast.Enabled() {
-		return fmt.Errorf("Clark is not active yet Sir. Do 'clark toggle' to toggle it on.")
-	}
 
 	logging.Log("CLARK", logging.SevInfo, "START", "Assistant started", "name", a.ast.Name())
 	logging.Log("CLARK", logging.SevInfo, "CONTEXT", "Master context loaded", "context", a.ast.Context())
+	logging.Log("CLARK", logging.SevInfo, "STATUS", "Assistant status", "enabled", a.ast.Enabled())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	return whatsapp.Run(ctx, whatsapp.Options{
-		DBPath:   a.cfg.DBPath,
-		Butler:   a.ast,
-		Notifier: notify.New(),
+		DBPath:       a.cfg.DBPath,
+		Butler:       a.ast,
+		Notifier:     a.notifier(),
+		Tools:        a.ast.Tools(),
+		BypassPhrase: a.cfg.BypassPhrase,
+		NameToJID:    a.ast.LookupJID,
 	})
+}
+
+// notifier picks the desktop notifier, or a silent no-op in headless
+// environments (CLARK_NO_NOTIFY=1).
+func (a *App) notifier() whatsapp.Notifier {
+	if a.cfg.NoNotify {
+		return notify.Silent{}
+	}
+	return notify.New()
 }
 
 // VIP manages the inner circle.
@@ -172,7 +224,7 @@ func (a *App) Toggle() error {
 	return a.ast.Toggle()
 }
 
-// View prints the current settings and VIP list.
+// View prints the current settings, VIP list, and per-VIP tool access.
 func (a *App) View() error {
 	available, err := a.ast.IsInitialized()
 	if err != nil {
@@ -189,8 +241,83 @@ func (a *App) View() error {
 		"context", a.ast.Context())
 	logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "Current VIP list")
 	for jid, name := range a.ast.VIPList() {
-		logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "VIP entry", "jid", jid, "relation", name)
+		grants, _, _ := a.ast.AccessFor(jid)
+		logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "VIP entry", "jid", jid, "relation", name, "tools", grants)
 	}
 
+	return nil
+}
+
+// Access manages a VIP's granted tools.
+func (a *App) Access(args []string) error {
+	available, err := a.ast.IsInitialized()
+	if err != nil {
+		return err
+	}
+	if !available {
+		return fmt.Errorf("No assistant is initiated Sir. Do 'clark init' first.")
+	}
+
+	fs := flag.NewFlagSet("access", flag.ContinueOnError)
+	var setAccess string
+	var tool string
+	var onOff string
+
+	fs.StringVar(&setAccess, "recipient", "", "VIP name or number")
+	fs.StringVar(&setAccess, "r", "", "VIP name or number (shorthand)")
+	fs.StringVar(&tool, "tool", "", "Tool to grant or revoke, e.g. web_search")
+	fs.StringVar(&onOff, "set", "", "on or off")
+
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parsing args: %w", err)
+	}
+
+	if setAccess == "" && tool == "" && onOff == "" {
+		fs.Usage()
+		return fmt.Errorf("empty input. Use: clark access -r <name|number> -tool <tool> -set on|off")
+	}
+
+	enabled := onOff == "on"
+	if onOff != "" && onOff != "on" && onOff != "off" {
+		return fmt.Errorf("invalid -set %q. Use 'on' or 'off'", onOff)
+	}
+
+	jid, ok := a.ast.LookupJID(setAccess)
+	if !ok {
+		return fmt.Errorf("no VIP found matching %q", setAccess)
+	}
+
+	grants, _, err := a.ast.AccessFor(jid)
+	if err != nil {
+		return err
+	}
+
+	if enabled {
+		found := false
+		for _, g := range grants {
+			if g == tool {
+				found = true
+				break
+			}
+		}
+		if !found {
+			grants = append(grants, tool)
+		}
+	} else {
+		next := grants[:0]
+		for _, g := range grants {
+			if g != tool {
+				next = append(next, g)
+			}
+		}
+		grants = next
+	}
+
+	if err := a.ast.SetAccess(jid, grants); err != nil {
+		return err
+	}
+
+	logging.Log("MEMORY", logging.SevInfo, "ACCESS", "Access updated",
+		"jid", jid, "tool", tool, "enabled", enabled, "grants", grants)
 	return nil
 }

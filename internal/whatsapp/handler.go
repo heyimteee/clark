@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/heyimteee/clark/internal/logging"
@@ -12,7 +13,10 @@ import (
 
 // Butler is the conversational brain the handler replies through.
 type Butler interface {
-	Reply(ctx context.Context, senderJID, text string) (string, error)
+	// Prehandle consumes fast deterministic commands (views, mutations) with a
+	// hardcoded reply. It returns a message and true when it handled the input.
+	Prehandle(senderJID, text string, isSelf bool) (string, bool, error)
+	Reply(ctx context.Context, senderJID, text string, isSelf bool) (string, error)
 	Relation(jid string) (string, bool)
 	Enabled() bool
 }
@@ -38,21 +42,33 @@ type Handler struct {
 	echo        *EchoTracker
 	connectedAt time.Time
 	commands    []command
+	disp        *dispatcher
 }
 
-// NewHandler wires the pipeline around its dependencies.
-func NewHandler(msgr Messenger, butler Butler, notifier Notifier, echo *EchoTracker, connectedAt time.Time) *Handler {
+// NewHandler wires the pipeline around its dependencies. bypassPhrase is the
+// command word that triggers an urgent alert; empty falls back to "get him to me".
+func NewHandler(msgr Messenger, butler Butler, notifier Notifier, echo *EchoTracker, connectedAt time.Time, bypassPhrase string) *Handler {
 	h := &Handler{
 		msgr:        msgr,
 		butler:      butler,
 		notifier:    notifier,
 		echo:        echo,
 		connectedAt: connectedAt,
+		disp:        newDispatcher(butler, msgr),
+	}
+	bypass := strings.TrimSpace(bypassPhrase)
+	if bypass == "" {
+		bypass = "get him to me"
 	}
 	h.commands = []command{
-		{phrase: "get him to me", run: h.alert},
+		{phrase: bypass, run: h.alert},
 	}
 	return h
+}
+
+// Close stops the background dispatcher and waits for in-flight replies.
+func (h *Handler) Close() {
+	h.disp.close()
 }
 
 // OnEvent is the whatsmeow event sink.
@@ -73,8 +89,12 @@ func (h *Handler) OnEvent(evt any) {
 		return
 	}
 
-	if v.Info.IsFromMe && !h.msgr.IsSelfChat(v.Info.Chat) {
-		return
+	isSelf := false
+	if v.Info.IsFromMe {
+		if !h.msgr.IsSelfChat(v.Info.Chat) {
+			return
+		}
+		isSelf = true
 	}
 
 	sender := h.msgr.ResolveSender(v)
@@ -94,7 +114,7 @@ func (h *Handler) OnEvent(evt any) {
 	}
 	logIncoming(v, sender, who, isVIP, userMsg)
 
-	if !h.butler.Enabled() || !isVIP || v.Info.IsGroup {
+	if (!h.butler.Enabled() && !isSelf) || !isVIP || v.Info.IsGroup {
 		return
 	}
 
@@ -112,13 +132,127 @@ func (h *Handler) OnEvent(evt any) {
 		}
 	}
 
-	aiResp, err := h.butler.Reply(ctx, senderStr, userMsg)
-	if err != nil {
-		logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "AI response error", "error", err)
-		h.msgr.Send(ctx, sender, "I apologize, but I'm experiencing technical difficulties. Please try again later.")
+	// Fast path: deterministic commands answered with hardcoded messages.
+	if reply, handled, err := h.butler.Prehandle(senderStr, userMsg, isSelf); err != nil {
+		logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "Prehandle error", "error", err)
+		h.msgr.Send(ctx, sender, apologyMessage)
+		return
+	} else if handled {
+		if err := h.msgr.Send(ctx, sender, reply); err != nil {
+			logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to send fast reply", "to", sender.User, "error", err)
+		}
 		return
 	}
-	h.msgr.Send(ctx, sender, aiResp)
+
+	// Slow path: acknowledge immediately, then reply in the background so the
+	// WhatsApp event loop is never blocked on a model generation. Only the
+	// Master gets the "one moment" ack; VIPs get nothing until the reply.
+	if isSelf {
+		if err := h.msgr.Send(ctx, sender, ackMaster); err != nil {
+			logging.Log("WHATSAPP", logging.SevWarn, "SEND", "Failed to send ack", "to", sender.User, "error", err)
+		}
+	}
+	h.disp.enqueue(inbound{
+		sender:    sender,
+		senderJID: senderStr,
+		userMsg:   userMsg,
+		isSelf:    isSelf,
+	})
+}
+
+// --- background dispatcher -------------------------------------------------
+
+const (
+	ackMaster      = "_One moment, Master..._"
+	apologyMessage = "_My apologies, but I am experiencing technical difficulties._ Please try again later."
+)
+
+// inbound is one message awaiting a slow, model-backed reply.
+type inbound struct {
+	sender    types.JID
+	senderJID string
+	userMsg   string
+	isSelf    bool
+}
+
+// dispatcher runs one serial worker goroutine per sender so replies arrive in
+// order, while never blocking the event loop on a slow model generation.
+type dispatcher struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	closed bool
+	queues map[string]chan inbound
+	wg     sync.WaitGroup
+	butler Butler
+	msgr   Messenger
+}
+
+func newDispatcher(butler Butler, msgr Messenger) *dispatcher {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &dispatcher{
+		ctx:    ctx,
+		cancel: cancel,
+		queues: make(map[string]chan inbound),
+		butler: butler,
+		msgr:   msgr,
+	}
+}
+
+// enqueue hands a message to its sender's worker, creating the worker on first
+// use. It blocks only while that sender's queue is full (bounded at 16).
+func (d *dispatcher) enqueue(in inbound) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return
+	}
+	ch, ok := d.queues[in.senderJID]
+	if !ok {
+		ch = make(chan inbound, 16)
+		d.queues[in.senderJID] = ch
+		d.wg.Add(1)
+		go d.worker(ch)
+	}
+
+	select {
+	case ch <- in:
+	case <-d.ctx.Done():
+	}
+}
+
+func (d *dispatcher) worker(ch <-chan inbound) {
+	defer d.wg.Done()
+	for in := range ch {
+		d.process(in)
+	}
+}
+
+func (d *dispatcher) process(in inbound) {
+	reply, err := d.butler.Reply(d.ctx, in.senderJID, in.userMsg, in.isSelf)
+	if err != nil {
+		logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "AI response error", "error", err)
+		if err := d.msgr.Send(d.ctx, in.sender, apologyMessage); err != nil {
+			logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to send apology", "to", in.sender.User, "error", err)
+		}
+		return
+	}
+	if err := d.msgr.Send(d.ctx, in.sender, reply); err != nil {
+		logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to deliver reply", "to", in.sender.User, "error", err)
+	}
+}
+
+// close stops accepting new work, closes every queue, and waits for queued and
+// in-flight replies to finish before cancelling the shared context.
+func (d *dispatcher) close() {
+	d.mu.Lock()
+	d.closed = true
+	for _, ch := range d.queues {
+		close(ch)
+	}
+	d.mu.Unlock()
+	d.wg.Wait()
+	d.cancel()
 }
 
 func (h *Handler) alert(ctx context.Context, sender types.JID, relation string) {
@@ -126,7 +260,7 @@ func (h *Handler) alert(ctx context.Context, sender types.JID, relation string) 
 		logging.Log("CLARK", logging.SevWarn, "NOTIFY", "Notification failed", "error", err)
 	}
 	h.msgr.SendSelf(ctx, "🚨 Attention Master!\n"+relation+" needs you!")
-	h.msgr.Send(ctx, sender, "I've alerted him. One Moment.")
+	h.msgr.Send(ctx, sender, "_One moment._ I've alerted the Master.")
 }
 
 // filterMessage reports whether a message must be dropped, and why.

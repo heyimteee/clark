@@ -15,6 +15,7 @@ func main() {
 		"ctx":    {},
 		"toggle": {},
 		"view":   {},
+		"access": {},
 	}
 
 	if len(os.Args) < 2 {
@@ -29,7 +30,7 @@ func main() {
 		logging.Fatalf("USAGE", "unnecessary argument(s), usage: clark run")
 	}
 
-	if len(os.Args) < 3 && (os.Args[1] == "vip" || os.Args[1] == "ctx") {
+	if len(os.Args) < 3 && (os.Args[1] == "vip" || os.Args[1] == "ctx" || os.Args[1] == "access") {
 		logging.Fatalf("USAGE", "usage: clark %v [args]", os.Args[1])
 	}
 
@@ -52,6 +53,8 @@ func main() {
 		err = a.Toggle()
 	case "view":
 		err = a.View()
+	case "access":
+		err = a.Access(os.Args[2:])
 	}
 
 	if err != nil {

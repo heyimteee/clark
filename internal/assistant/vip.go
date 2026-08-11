@@ -15,6 +15,7 @@ var vipInputRe = regexp.MustCompile(`^[0-9]{1,15}\s*,\s*[\p{L}\s]{1,50}\s*,\s*[\
 type VIP struct {
 	store   store.VIPStore
 	entries map[string]string
+	byName  map[string]string
 }
 
 // NewVIP returns an empty VIP backed by the given store.
@@ -22,10 +23,11 @@ func NewVIP(s store.VIPStore) *VIP {
 	return &VIP{
 		store:   s,
 		entries: make(map[string]string),
+		byName:  make(map[string]string),
 	}
 }
 
-// Load refreshes the in-memory lookup table from the store.
+// Load refreshes the in-memory lookup tables from the store.
 func (v *VIP) Load() error {
 	entries, err := v.store.All()
 	if err != nil {
@@ -33,14 +35,47 @@ func (v *VIP) Load() error {
 	}
 
 	v.entries = make(map[string]string, len(entries))
+	v.byName = make(map[string]string, len(entries))
 	for _, e := range entries {
-		v.entries[e.JID] = fmt.Sprintf("%v (%v)", e.Name, e.Relation)
+		label := fmt.Sprintf("%v (%v)", e.Name, e.Relation)
+		v.entries[e.JID] = label
+		v.byName[strings.ToLower(e.Name)] = e.JID
+		v.byName[strings.ToLower(label)] = e.JID
 	}
 
 	if len(v.entries) < 1 {
 		logging.Log("MEMORY", logging.SevNotice, "VIPLOAD", "VIP list is empty")
 	}
 	return nil
+}
+
+// Lookup resolves a name or phone number to a VIP jid.
+func (v *VIP) Lookup(input string) (string, bool) {
+	cleaned := strings.TrimPrefix(strings.TrimSpace(input), "+")
+	if jid, ok := v.byName[strings.ToLower(cleaned)]; ok {
+		return jid, true
+	}
+
+	id := strings.Split(cleaned, "@")[0]
+	if id != "" && isDigits(id) {
+		target := id + "@s.whatsapp.net"
+		if _, ok := v.entries[target]; ok {
+			return target, true
+		}
+	}
+	return "", false
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // Check resolves a jid to its "Name (Relation)" label.
