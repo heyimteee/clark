@@ -22,8 +22,12 @@ func TestSanitizeJID(t *testing.T) {
 		{"+6281234567890", "6281234567890@s.whatsapp.net", false},
 		{" 6281234567890 ", "6281234567890@s.whatsapp.net", false},
 		{"6281234567890@lid", "6281234567890@s.whatsapp.net", false},
+		{"+62 821-7450-0836", "6282174500836@s.whatsapp.net", false},
+		{"+62 (821) 7450-0836", "6282174500836@s.whatsapp.net", false},
+		{"0821-7450-0836", "082174500836@s.whatsapp.net", false},
 		{"abc", "", true},
 		{"", "", true},
+		{"-+()", "", true},
 	}
 	for _, tt := range tests {
 		got, err := sanitizeJID(tt.in)
@@ -112,6 +116,81 @@ func TestVIPDelete(t *testing.T) {
 	}
 	if _, ok := vip.Check("6281234567890@s.whatsapp.net"); ok {
 		t.Fatal("Check matched after delete")
+	}
+}
+
+func TestVIPAddAndLookupFormattedNumber(t *testing.T) {
+	vip := newVIP(t)
+
+	if err := vip.Add("+62 821-7450-0836, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	jid := "6282174500836@s.whatsapp.net"
+	relation, ok := vip.Check(jid)
+	if !ok {
+		t.Fatal("Check missed after adding a formatted number")
+	}
+	if relation != "Tiara (Girlfriend)" {
+		t.Errorf("relation = %q, want %q", relation, "Tiara (Girlfriend)")
+	}
+
+	for _, in := range []string{"+62 821-7450-0836", "+62 (821) 7450-0836", "tiara", "Tiara (Girlfriend)"} {
+		if got, ok := vip.Lookup(in); !ok || got != jid {
+			t.Errorf("Lookup(%q) = %q, %v; want %q, true", in, got, ok, jid)
+		}
+	}
+
+	if _, ok := vip.Lookup("6281-7450-9999"); ok {
+		t.Error("Lookup resolved a formatted number that is not a VIP")
+	}
+}
+
+func TestVIPAddBulk(t *testing.T) {
+	vip := newVIP(t)
+
+	input := "1. 6281267858909, Tiara, Girlfriend\n2. +62 821-7450-0836, Renni, Mother\n3. 6281-2001-0888, Aziz, Bestfriend"
+	if err := vip.Add(input); err != nil {
+		t.Fatalf("Add bulk: %v", err)
+	}
+
+	for _, jid := range []string{
+		"6281267858909@s.whatsapp.net",
+		"6282174500836@s.whatsapp.net",
+		"628120010888@s.whatsapp.net",
+	} {
+		if _, ok := vip.Check(jid); !ok {
+			t.Errorf("Check(%q) missed after bulk add", jid)
+		}
+	}
+	if len(vip.List()) != 3 {
+		t.Errorf("len(List) = %d, want 3", len(vip.List()))
+	}
+}
+
+func TestVIPAddBulkPartialFailureLeavesNoPartialState(t *testing.T) {
+	vip := newVIP(t)
+
+	input := "1. 6281267858909, Tiara, Girlfriend\n2. not a valid entry"
+	if err := vip.Add(input); err == nil {
+		t.Fatal("Add bulk with a bad line succeeded, want error")
+	}
+	if _, ok := vip.Check("6281267858909@s.whatsapp.net"); ok {
+		t.Fatal("a valid entry was persisted before the bulk list was fully validated")
+	}
+	if len(vip.List()) != 0 {
+		t.Errorf("len(List) = %d, want 0 (no partial state)", len(vip.List()))
+	}
+}
+
+func TestVIPAddSingleNumberedLine(t *testing.T) {
+	vip := newVIP(t)
+
+	if err := vip.Add("1. 6281234567890, Test, Friend"); err != nil {
+		t.Fatalf("Add single numbered line: %v", err)
+	}
+	if _, ok := vip.Check("6281234567890@s.whatsapp.net"); !ok {
+		t.Fatal("single numbered line was not added with the numbering prefix stripped")
 	}
 }
 
@@ -1336,6 +1415,52 @@ func TestServiceFastPathAddDeleteVIP(t *testing.T) {
 	}
 	if len(fake.got) != 0 {
 		t.Fatal("LLM was called for fast-path mutations")
+	}
+}
+
+func TestServiceFastPathAddBulkVIP(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "628111@s.whatsapp.net"
+
+	msg := "add vip:\n1. 6281267858909, Tiara, Girlfriend\n2. +62 821-7450-0836, Renni, Mother"
+	got, err := s.Reply(context.Background(), jid, msg, true)
+	if err != nil {
+		t.Fatalf("Reply bulk add: %v", err)
+	}
+	if _, ok := s.vip.Check("6281267858909@s.whatsapp.net"); !ok {
+		t.Error("Tiara not added by bulk fast path")
+	}
+	if _, ok := s.vip.Check("6282174500836@s.whatsapp.net"); !ok {
+		t.Error("Renni not added by bulk fast path")
+	}
+	if !strings.Contains(got, "_2_ members") {
+		t.Errorf("bulk Reply = %q, want count confirmation", got)
+	}
+	if len(fake.got) != 0 {
+		t.Fatal("LLM was called for a bulk fast-path mutation")
+	}
+}
+
+func TestServiceFastPathAddBulkVIPBareList(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "628111@s.whatsapp.net"
+
+	msg := "1. 6281267858909, Tiara, Girlfriend\n2. 628120010888, Aziz, Bestfriend"
+	got, err := s.Reply(context.Background(), jid, msg, true)
+	if err != nil {
+		t.Fatalf("Reply bare list: %v", err)
+	}
+	if _, ok := s.vip.Check("6281267858909@s.whatsapp.net"); !ok {
+		t.Error("Tiara not added from a bare numbered list")
+	}
+	if _, ok := s.vip.Check("628120010888@s.whatsapp.net"); !ok {
+		t.Error("Aziz not added from a bare numbered list")
+	}
+	if !strings.Contains(got, "_2_ members") {
+		t.Errorf("bare-list Reply = %q, want count confirmation", got)
+	}
+	if len(fake.got) != 0 {
+		t.Fatal("LLM was called for a bare-list fast-path mutation")
 	}
 }
 

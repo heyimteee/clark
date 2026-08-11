@@ -62,7 +62,7 @@ func New() (*App, error) {
 func registerWebSearchTool(reg *tools.Registry, client *websearch.Client) {
 	reg.RegisterFunc(
 		"web_search",
-		"Search the web for current information and return concise, sourced results. Use whenever the answer needs up-to-date facts.",
+		"Search the web for current information and return concise, sourced results. Use whenever the answer needs up-to-date facts — news, weather, prices, sports scores, or anything the Master asks to 'google', 'look up', 'find out', or 'check'.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -13,7 +13,7 @@ import (
 func (s *Service) registerManagementTools() {
 	s.tools.RegisterFunc(
 		"set_status",
-		"Turn clark on or off. With a recipient, only that VIP's personal status changes; without one, clark's status changes for everyone. Only the Master may use this.",
+		"Turn clark on or off. With a recipient, only that VIP's personal status changes; without one, clark's status changes for everyone. Triggered by phrasings like 'wake clark', 'silence clark', 'wake clark for <name>', 'go online/offline'. Only the Master may use this.",
 		toolParams(map[string]any{
 			"on":        map[string]any{"type": "boolean", "description": "true to wake clark, false to silence him"},
 			"recipient": map[string]any{"type": "string", "description": "Optional: a VIP's name or phone number. When set, only that VIP's status changes."},
@@ -45,7 +45,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"set_context",
-		"Update the master context that describes the Master's current status. Only the Master may use this.",
+		"Update the master context that describes the Master's current status. Triggered by phrasings like 'my context is ...', 'remember that ...', 'note that ...', 'set my context to ...'. Only the Master may use this.",
 		toolParams(map[string]any{
 			"text": map[string]any{"type": "string", "description": "The new context, e.g. 'Busy in a meeting until noon'"},
 		}, "text"),
@@ -66,9 +66,9 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"add_vip",
-		"Add a person to the inner circle. Only the Master may use this.",
+		"Add a person to the inner circle. Triggered by 'add vip <number>, <name>, <relation>', 'welcome <name> to the inner circle', or a numbered list of such entries. Phone numbers may be formatted ('+62 821-7450-0836'). Only the Master may use this.",
 		toolParams(map[string]any{
-			"number":   map[string]any{"type": "string", "description": "Phone number, digits only"},
+			"number":   map[string]any{"type": "string", "description": "Phone number; formatting like +, spaces, dashes, parentheses is fine"},
 			"name":     map[string]any{"type": "string", "description": "The person's name"},
 			"relation": map[string]any{"type": "string", "description": "Their relation to the Master, e.g. Friend"},
 		}, "number", "name", "relation"),
@@ -91,7 +91,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"delete_vip",
-		"Remove a person from the inner circle. Only the Master may use this.",
+		"Remove a person from the inner circle. Triggered by 'delete vip <name>' or 'remove <name> from the inner circle'. Only the Master may use this.",
 		toolParams(map[string]any{
 			"number": map[string]any{"type": "string", "description": "Phone number, digits only"},
 		}, "number"),
@@ -112,7 +112,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"set_access",
-		"Grant or revoke a tool for a VIP. VIPs may only ever hold web_search or view_history. Only the Master may use this.",
+		"Grant or revoke a tool for a VIP. VIPs may only ever hold web_search or view_history. Triggered by 'grant <name> access to <tool>', 'let <name> use <tool>', 'revoke <name> access to <tool>'. Only the Master may use this.",
 		toolParams(map[string]any{
 			"recipient": map[string]any{"type": "string", "description": "A VIP's name or phone number"},
 			"tool":      map[string]any{"type": "string", "description": "The tool name, e.g. web_search"},
@@ -142,7 +142,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"get_state",
-		"Report clark's current status, context, inner circle, each VIP's effective status and granted tools, and every available tool. Only the Master may use this.",
+		"Report clark's current status, context, inner circle, each VIP's effective status and granted tools, and every available tool. Triggered by questions like 'what is your status', 'who can reach me', 'show me everything'. Only the Master may use this.",
 		toolParams(nil),
 		func(ctx context.Context, args map[string]any) (string, error) {
 			if err := masterOnly(ctx); err != nil {
@@ -174,7 +174,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"view_history",
-		"Show the stored conversation history for a chat. Without a recipient, shows the current chat; a limit shows only the most recent messages. Review the injected recent history first and call this only when you need more of the conversation.",
+		"Show the stored conversation history for a chat. Without a recipient, shows the current chat; a limit shows only the most recent messages. Triggered by 'what did we talk about', 'show me our past messages', 'what did <name> say'. Review the injected recent history first and call this only when you need more of the conversation.",
 		toolParams(map[string]any{
 			"recipient": map[string]any{"type": "string", "description": "Optional: a VIP's name or phone number. Only the Master may view another chat."},
 			"limit":     map[string]any{"type": "integer", "description": "Optional: how many of the most recent messages to show. Omit for the full history."},
@@ -197,7 +197,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"view_all_history",
-		"Show messages from every conversation, newest last. Optionally limit to the most recent N messages across all chats. Only the Master may use this.",
+		"Show messages from every conversation, newest last. Optionally limit to the most recent N messages across all chats. Triggered by 'show me everything across all chats' or 'what has been said everywhere'. Only the Master may use this.",
 		toolParams(map[string]any{
 			"limit": map[string]any{"type": "integer", "description": "Optional: show only the most recent N messages across all chats. Omit for everything stored."},
 		}),
@@ -222,7 +222,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"set_history_limit",
-		"Change how many recent messages are injected into every turn. Larger gives clark more memory per reply, smaller makes replies leaner and cheaper. Only the Master may use this.",
+		"Change how many recent messages are injected into every turn. Larger gives clark more memory per reply, smaller makes replies leaner and cheaper. Triggered by 'set history limit to 10' or 'remember fewer/more messages'. Only the Master may use this.",
 		toolParams(map[string]any{
 			"limit": map[string]any{"type": "integer", "description": "Number of recent messages to keep in context, e.g. 10 or 5"},
 		}, "limit"),

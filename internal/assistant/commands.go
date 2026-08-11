@@ -220,15 +220,34 @@ func contextUpdatedReply(text string) string {
 }
 
 func vipAddedReply(payload string) string {
+	if entries, ok := parseBulkVIP(payload); ok && len(entries) > 1 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s\n\n_%d_ members have been welcomed into the inner circle, Master.", vipAddedHeader, len(entries))
+		for _, e := range entries {
+			name := e
+			if parts := strings.SplitN(e, ",", 3); len(parts) == 3 {
+				name = strings.TrimSpace(parts[1])
+			}
+			b.WriteString("\n- _")
+			b.WriteString(name)
+			b.WriteString("_")
+		}
+		return b.String()
+	}
+
 	parts := strings.SplitN(payload, ",", 3)
 	if len(parts) == 3 {
-		number := strings.TrimSpace(parts[0])
+		number := numberedPrefixRe.ReplaceAllString(strings.TrimSpace(parts[0]), "")
 		name := strings.TrimSpace(parts[1])
 		relation := strings.TrimSpace(parts[2])
 		return vipAddedHeader + "\n\n_" + name + "_ has been welcomed as *" + relation + "*.\n\nNumber: `" + number + "`"
 	}
 	return vipAddedHeader + "\n\nThe entry has been welcomed into the inner circle, Master."
 }
+
+// numberedPrefixRe strips a leading list marker ("1. ", "2) ") from a number
+// shown in a confirmation, for entries typed as single numbered lines.
+var numberedPrefixRe = regexp.MustCompile(`^\d+[.)]\s*`)
 
 func accessReply(recipient, tool string, enabled bool) string {
 	if enabled {
@@ -431,6 +450,8 @@ func parseClearContextCommand(userMsg string) (string, bool) {
 var addVIPRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:add|register)\s+(?:a|new|the)?\s*(?:vip|member)\s+(.+)$`),
 	regexp.MustCompile(`(?i)(?:add|register)\s+(.+?)\s+to\s+(?:the\s+)?(?:vip\s*list|inner\s+circle)`),
+	// Bulk lists: "add vip:\n1. ..., ...\n2. ..., ..." or "register these vips: ..."
+	regexp.MustCompile(`(?is)(?:add|register)\s+(?:these|the\s+following|the\s+below)?\s*(?:vips?|vip\s+members|members|people|numbers|contacts)?\s*[:.]\s*(.+)$`),
 }
 
 func isAddVIPCommand(userMsg string) bool {
@@ -439,6 +460,18 @@ func isAddVIPCommand(userMsg string) bool {
 }
 
 func parseAddVIPCommand(userMsg string) (string, bool) {
+	// A bare numbered list whose lines all look like VIP entries is itself an
+	// add command: "1. <number>, <name>, <relation>\n2. ..."
+	trimmed := strings.TrimSpace(userMsg)
+	if entries, ok := parseBulkVIP(trimmed); ok {
+		for _, e := range entries {
+			if !isVIPEntry(e) {
+				return "", false
+			}
+		}
+		return trimmed, true
+	}
+
 	for _, re := range addVIPRes {
 		if m := re.FindStringSubmatch(userMsg); m != nil && len(m) > 1 {
 			payload := strings.TrimSpace(m[1])
@@ -448,6 +481,12 @@ func parseAddVIPCommand(userMsg string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// isVIPEntry reports whether a payload looks like one "number, name, relation"
+// entry, mirroring the single-entry validation in VIP.addSingle.
+func isVIPEntry(s string) bool {
+	return vipInputRe.MatchString(strings.TrimPrefix(strings.TrimSpace(s), "+"))
 }
 
 var delVIPRes = []*regexp.Regexp{
@@ -527,7 +566,7 @@ func (s *Service) guidanceText() string {
 		"- `set history limit to 10` — how many past messages I review each turn\n" +
 		"- `set my context to ...` — update your context\n" +
 		"- `clear context` — empty your context\n" +
-		"- `add vip <number>, <name>, <relation>` — admit someone\n" +
+		"- `add vip <number>, <name>, <relation>` — admit someone (a numbered list adds several at once)\n" +
 		"- `delete vip <name>` — remove someone\n" +
 		"- `clear vips` — empty the inner circle\n" +
 		"- `grant <name> access to <tool>` — grant a tool\n" +

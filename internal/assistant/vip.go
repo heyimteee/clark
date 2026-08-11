@@ -9,7 +9,13 @@ import (
 	"github.com/heyimteee/clark/internal/store"
 )
 
-var vipInputRe = regexp.MustCompile(`^[0-9]{1,15}\s*,\s*[\p{L}\s]{1,50}\s*,\s*[\p{L}\s]{1,50}$`)
+// vipInputRe matches one "number, name, relation" entry. The number accepts the
+// natural formatting people type — a leading +, spaces, dashes, parentheses and
+// dots — while name and relation stay letters (and spaces) only.
+var vipInputRe = regexp.MustCompile(`^[0-9+][0-9+()\s.\-]{0,29}\s*,\s*[\p{L}\s]{1,50}\s*,\s*[\p{L}\s]{1,50}$`)
+
+// numberedEntryRe matches one line of a bulk VIP list: "N. <entry>" or "N) <entry>".
+var numberedEntryRe = regexp.MustCompile(`(?i)^\s*\d+[.)]\s*(.+)$`)
 
 // VIP manages the inner circle: validation, persistence, and in-memory lookups.
 type VIP struct {
@@ -60,16 +66,18 @@ func (v *VIP) Load() error {
 	return nil
 }
 
-// Lookup resolves a name or phone number to a VIP jid.
+// Lookup resolves a name or phone number to a VIP jid. Phone numbers may be
+// written naturally — "+62 821-7450-0836", "0821-7450-0836" — and are
+// normalized to digits before matching.
 func (v *VIP) Lookup(input string) (string, bool) {
-	cleaned := strings.TrimPrefix(strings.TrimSpace(input), "+")
+	cleaned := strings.TrimSpace(input)
 	if jid, ok := v.byName[strings.ToLower(cleaned)]; ok {
 		return jid, true
 	}
 
 	id := strings.Split(cleaned, "@")[0]
-	if id != "" && isDigits(id) {
-		target := id + "@s.whatsapp.net"
+	if digits := digitsOnly(id); digits != "" {
+		target := digits + "@s.whatsapp.net"
 		if _, ok := v.entries[target]; ok {
 			return target, true
 		}
@@ -77,16 +85,10 @@ func (v *VIP) Lookup(input string) (string, bool) {
 	return "", false
 }
 
-func isDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
+// digitsOnly keeps the digits of a phone-ish string, dropping +, spaces, and
+// punctuation, so "0821-7450-0836" and "+62 821-7450-0836" both yield digits.
+func digitsOnly(s string) string {
+	return regexp.MustCompile(`[^0-9]`).ReplaceAllString(s, "")
 }
 
 // Check resolves a jid to its "Name (Relation)" label.
@@ -157,9 +159,11 @@ func (v *VIP) ClearAllEnabled() error {
 	return nil
 }
 
-// Add parses and persists a "[number], [name], [relation]" entry, then reloads.
+// Add parses and persists a "[number], [name], [relation]" entry, or a numbered
+// list of several such entries, then reloads. Bulk lists are validated in full
+// before any entry is written, so a bad line never leaves a partial state.
 func (v *VIP) Add(input string) error {
-	if len(input) > 100 {
+	if len(input) > 500 {
 		return fmt.Errorf("my apologies, Sir, but that entry is far too long to process")
 	}
 
@@ -167,33 +171,99 @@ func (v *VIP) Add(input string) error {
 		return fmt.Errorf("Input is empty sir! Format: [number], [name], [relation]")
 	}
 
+	entries, ok := parseBulkVIP(input)
+	if !ok {
+		return v.addSingle(input)
+	}
+
+	type parsed struct {
+		jid, name, relation string
+	}
+	all := make([]parsed, 0, len(entries))
+	for _, e := range entries {
+		jid, name, relation, err := v.parseEntry(e)
+		if err != nil {
+			return fmt.Errorf("entry %q: %w", e, err)
+		}
+		all = append(all, parsed{jid: jid, name: name, relation: relation})
+	}
+	for _, p := range all {
+		if err := v.store.Add(store.VIPEntry{JID: p.jid, Name: p.name, Relation: p.relation}); err != nil {
+			return err
+		}
+	}
+	return v.Load()
+}
+
+// addSingle validates and persists one "[number], [name], [relation]" entry.
+func (v *VIP) addSingle(input string) error {
+	jid, name, relation, err := v.parseEntry(input)
+	if err != nil {
+		return err
+	}
+
+	if err := v.store.Add(store.VIPEntry{JID: jid, Name: name, Relation: relation}); err != nil {
+		return err
+	}
+	return v.Load()
+}
+
+// parseEntry validates a "[number], [name], [relation]" payload and returns its
+// normalized pieces. It never touches the store.
+func (v *VIP) parseEntry(input string) (jid, name, relation string, err error) {
+	if len(input) > 100 {
+		return "", "", "", fmt.Errorf("my apologies, Sir, but that entry is far too long to process")
+	}
+
+	if input == "" {
+		return "", "", "", fmt.Errorf("Input is empty sir! Format: [number], [name], [relation]")
+	}
+
 	cleaned := strings.TrimPrefix(strings.TrimSpace(input), "+")
 	if !vipInputRe.MatchString(cleaned) {
-		return fmt.Errorf("forgive me, Sir, the format is invalid. " +
+		return "", "", "", fmt.Errorf("forgive me, Sir, the format is invalid. " +
 			"Please use: [Number], [Relation]. The name should be letters only")
 	}
 
 	parts := strings.Split(input, ",")
 	if len(parts) != 3 {
-		return fmt.Errorf("my apologies Sir, I require exactly three details: Number, Name, Relation")
+		return "", "", "", fmt.Errorf("my apologies Sir, I require exactly three details: Number, Name, Relation")
 	}
 
 	number := strings.TrimSpace(parts[0])
-	name := strings.TrimSpace(parts[1])
-	rel := strings.TrimSpace(parts[2])
-	if number == "" || name == "" || rel == "" {
-		return fmt.Errorf("my apologies Sir. Number, name, and relation are required")
+	name = strings.TrimSpace(parts[1])
+	relation = strings.TrimSpace(parts[2])
+	if number == "" || name == "" || relation == "" {
+		return "", "", "", fmt.Errorf("my apologies Sir. Number, name, and relation are required")
 	}
 
-	jid, err := sanitizeJID(number)
+	jid, err = sanitizeJID(number)
 	if err != nil {
-		return err
+		return "", "", "", err
 	}
+	return jid, name, relation, nil
+}
 
-	if err := v.store.Add(store.VIPEntry{JID: jid, Name: name, Relation: rel}); err != nil {
-		return err
+// parseBulkVIP splits a numbered list like "1. X, Y, Z\n2. A, B, C" into its
+// per-entry payloads, stripping the numbering prefix. A single numbered line is
+// also accepted; ok is false when the input is not a numbered list at all.
+func parseBulkVIP(input string) ([]string, bool) {
+	var entries []string
+	for _, line := range strings.Split(input, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		m := numberedEntryRe.FindStringSubmatch(line)
+		if m == nil {
+			return nil, false
+		}
+		entries = append(entries, strings.TrimSpace(m[1]))
 	}
-	return v.Load()
+	if len(entries) == 0 {
+		return nil, false
+	}
+	return entries, true
 }
 
 // Delete removes a VIP by number and reloads.
@@ -228,7 +298,7 @@ func (v *VIP) Clear() error {
 
 func sanitizeJID(input string) (string, error) {
 	id := strings.Split(input, "@")[0]
-	id = regexp.MustCompile(`[^0-9]`).ReplaceAllString(id, "")
+	id = digitsOnly(id)
 
 	if id == "" {
 		return "", fmt.Errorf("JID is empty")

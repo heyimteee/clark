@@ -687,7 +687,8 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 		"sending it", "sending that", "has been sent", "have sent", "had sent",
 		"sent to", "sent it", "sent the", "sent via", "sent a message",
 		"sent him", "sent her", "sent your", "sent the message", "delivered",
-		"deliver the", "drafted", "crafted") {
+		"deliver the", "drafted", "crafted", "has been informed", "notified",
+		"pinged", "relayed", "forwarded") {
 		return true, "send_message"
 	}
 
@@ -697,7 +698,10 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 		"have silenced", "has been silenced", "is now silenced", "now silenced",
 		"status to off", "status to on", "set clark's status", "operational status off",
 		"operational status on", "set the status", "have added", "have deleted",
-		"has been added", "has been removed", "has been deleted") {
+		"has been added", "has been removed", "has been deleted", "have updated",
+		"updated your", "changed your", "have woken", "woken", "activated",
+		"deactivated", "have granted", "have revoked", "granted", "revoked",
+		"welcomed", "admitted") {
 		return true, manageHint(userMsg)
 	}
 
@@ -710,7 +714,8 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 			return true, "send_message"
 		}
 		if hasAny(userMsg, "send", "message", "tell ", "tell her", "tell him",
-			"introduce", "introduction", "whatsapp", "text ") &&
+			"introduce", "introduction", "whatsapp", "text ", "notify ", "ping",
+			"remind", "relay", "forward", "message ", "let him know", "let her know") &&
 			s.hasVIPTarget(userMsg) {
 			return true, "send_message"
 		}
@@ -725,7 +730,12 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 			"add a vip", "add vip", "new vip", "delete vip", "remove vip", "remove a vip",
 			"delete the vip", "change my status", "change my context", "update my status",
 			"change my availability", "set my availability", "operational status",
-			"wake", "silence", "silence clark", "go offline", "go online") {
+			"wake", "silence", "silence clark", "go offline", "go online",
+			"wake up clark", "wake him", "wake her", "silence him", "silence her",
+			"activate", "deactivate", "sleep mode", "inner circle", "add to the inner circle",
+			"remove from the inner circle", "grant", "revoke", "remember that",
+			"remember this", "note that", "note this", "add a member", "new member",
+			"remove a member") {
 		return true, manageHint(userMsg)
 	}
 
@@ -735,7 +745,8 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 		hasAny(userMsg,
 			"current", "latest", "today", "price", "rate", "news", "weather",
 			"forecast", "search", "how much", "how many", "exchange", "stock",
-			"the price of", "what is the current") &&
+			"the price of", "what is the current", "google", "look up", "find out",
+			"how is", "what's the", "who won", "score", "latest on", "current news") &&
 		isRefusal(reply) {
 		return true, "web_search"
 	}
@@ -747,13 +758,14 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 func manageHint(userMsg string) string {
 	m := strings.ToLower(userMsg)
 	switch {
-	case hasAny(m, "status", "toggle", "turn", "wake", "silence", "switch", "power", "shut"):
+	case hasAny(m, "status", "toggle", "turn", "wake", "silence", "switch", "power", "shut",
+		"activate", "deactivate", "sleep mode", "online", "offline"):
 		return "set_status"
-	case hasAny(m, "context"):
+	case hasAny(m, "context", "remember", "note that", "note this", "save this"):
 		return "set_context"
-	case hasAny(m, "vip", "inner circle", "add a", "remove", "delete"):
+	case hasAny(m, "vip", "inner circle", "add a", "remove", "delete", "welcome", "admit", "member"):
 		return "add_vip or delete_vip"
-	case hasAny(m, "access", "grant", "revoke"):
+	case hasAny(m, "access", "grant", "revoke", "allow", "block"):
 		return "set_access"
 	}
 	return "the appropriate management tool"
