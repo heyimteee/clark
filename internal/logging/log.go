@@ -222,8 +222,18 @@ func Log(component string, sev Severity, event, msg string, fields ...any) {
 
 // Fatalf logs a SYSTEM severity-3 error and terminates the process.
 func Fatalf(event, msg string, fields ...any) {
-	Log("SYSTEM", SevErr, event, msg, fields...)
+	Log("SYSTEM", SevErr, event, formatMessage(msg, fields))
 	os.Exit(1)
+}
+
+// formatMessage applies printf-style fields to a message, mirroring the
+// whatsmeow adapter's emit. Messages with no fields are returned unchanged so
+// a stray verb never leaks a %!(EXTRA...) artifact.
+func formatMessage(msg string, fields []any) string {
+	if len(fields) > 0 {
+		return fmt.Sprintf(msg, fields...)
+	}
+	return msg
 }
 
 // waLogger adapts clark's structured formatter to whatsmeow's Logger interface.
