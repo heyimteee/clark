@@ -22,3 +22,12 @@ func TestPrefixMessageMultiline(t *testing.T) {
 		t.Errorf("PrefixMessage(multiline) = %q, want prefix + text", got)
 	}
 }
+
+func TestPrefixIMessage(t *testing.T) {
+	if got := PrefixIMessage("hi"); got != IMessagePrefix+"hi" {
+		t.Errorf("PrefixIMessage(hi) = %q, want iMessage prefix + text", got)
+	}
+	if got := PrefixIMessage(""); got != IMessagePrefix {
+		t.Errorf("PrefixIMessage(empty) = %q, want prefix only", got)
+	}
+}

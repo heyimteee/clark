@@ -86,7 +86,7 @@ func TestMessengerSendPrefixesAndConverts(t *testing.T) {
 	if msg.Recipient != "+6281267858909" {
 		t.Errorf("recipient = %q, want +6281267858909", msg.Recipient)
 	}
-	if !strings.HasPrefix(msg.Text, gateway.MessagePrefix) || !strings.Contains(msg.Text, "greetings") {
+	if !strings.HasPrefix(msg.Text, gateway.IMessagePrefix) || !strings.Contains(msg.Text, "greetings") {
 		t.Errorf("text = %q, want branded message", msg.Text)
 	}
 }
@@ -106,7 +106,7 @@ func TestMessengerSendStripsMarkdown(t *testing.T) {
 	if strings.Contains(got, "*") || strings.Contains(got, "_") || strings.Contains(got, "`") {
 		t.Errorf("text = %q, want markdown stripped", got)
 	}
-	for _, want := range []string{"Status Updated", "One moment, Master...", gateway.MessagePrefix} {
+	for _, want := range []string{"Status Updated", "One moment, Master...", gateway.IMessagePrefix} {
 		if !strings.Contains(got, want) {
 			t.Errorf("text = %q, missing %q", got, want)
 		}

@@ -35,7 +35,7 @@ func (m *Messenger) Send(_ context.Context, chat, text string) error {
 	if handle == "" {
 		return errEmptyRecipient
 	}
-	text = gateway.PrefixMessage(text)
+	text = gateway.PrefixIMessage(text)
 	text = stripMarkdown(text)
 	if _, err := m.out.EnqueueIMessage(handle, text); err != nil {
 		logging.Log("IMESSAGE", logging.SevErr, "SEND", "Failed to queue iMessage", "to", handle, "error", err)
