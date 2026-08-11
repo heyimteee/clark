@@ -16,6 +16,13 @@ type Message struct {
 	Content string
 }
 
+// HistoryEntry is one stored message tagged with its conversation.
+type HistoryEntry struct {
+	JID     string
+	Role    string
+	Content string
+}
+
 // VIPEntry is a person admitted to the inner circle.
 type VIPEntry struct {
 	JID      string
@@ -50,6 +57,8 @@ type AccessStore interface {
 type HistoryStore interface {
 	SaveMessage(jid, role, content string) error
 	Messages(jid string) ([]Message, error)
+	RecentMessages(jid string, limit int) ([]Message, error)
+	AllRecentMessages(limit int) ([]HistoryEntry, error)
 }
 
 // Store is the SQLite-backed implementation of Settings, VIPStore and HistoryStore.

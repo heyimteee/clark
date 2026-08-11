@@ -5,7 +5,7 @@ A personal AI butler for your WhatsApp.
 Clark is a command-line application that runs a sophisticated AI-powered butler for your WhatsApp account. It uses a local Ollama model to generate intelligent, context-aware responses, acting as a gatekeeper for your messages while you're away. Clark only interacts with a pre-approved list of "VIP" contacts, ensuring your privacy and focus.
 
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
-![Go Version](https://img.shields.io/badge/Go-1.25+-brightgreen.svg)
+![Go Version](https://img.shields.io/badge/Go-1.26+-brightgreen.svg)
 
 ## How It Works
 
@@ -143,7 +143,12 @@ Clark is managed via a set of simple commands.
     ./clark think off
     ```
 
--   **`access`**: Manages a VIP's granted tools. VIPs may only ever hold `web_search`; the Master-only tools (`send_message`, `set_status`, `set_context`, `add_vip`, `delete_vip`, `set_access`, `get_state`) are never grantable.
+-   **`history`**: Sets how many of the most recent messages Clark reviews on every turn. More memory per reply, larger context; fewer is leaner and cheaper. Default 10.
+    ```sh
+    ./clark history 10
+    ```
+
+-   **`access`**: Manages a VIP's granted tools. VIPs may only ever hold `web_search` or `view_history`; the Master-only tools (`send_message`, `set_status`, `set_context`, `add_vip`, `delete_vip`, `set_access`, `get_state`, `view_all_history`, `set_history_limit`) are never grantable.
     ```sh
     ./clark access -r "11234567890" -tool web_search -set on
     ./clark access -r "John Doe" -tool web_search -set off
@@ -160,6 +165,7 @@ conversing — they are handled instantly without calling the model and are
 | `wake up buddy` / `wake clark` | Turn Clark on |
 | `silence clark` / `sleep clark` | Turn Clark off |
 | `thinking mode on` / `thinking mode off` / `toggle thinking` | Toggle reasoning mode |
+| `set history limit to 10` | How many past messages Clark reviews each turn |
 | `set my context to …` | Update your context |
 | `clear context` | Empty your context |
 | `add vip <number>, <name>, <relation>` | Admit someone to the inner circle |
@@ -218,16 +224,27 @@ and he will suggest or invoke one whenever it genuinely helps:
 | Tool | Who can use it | What it does |
 | --- | --- | --- |
 | `web_search` | VIPs + Master | Searches the web via Tavily and returns sourced snippets (needs `TAVILY_API_KEY`) |
+| `view_history` | VIPs + Master | Shows the stored conversation for a chat (full, or the most recent N). A VIP sees their own chat; the Master can view any chat |
 | `send_message` | Master only | Delivers a WhatsApp message to a VIP by name or number |
 | `set_status` | Master only | Turns Clark on or off |
 | `set_context` | Master only | Updates the master context |
 | `add_vip` / `delete_vip` | Master only | Manages the inner circle |
 | `set_access` | Master only | Grants/revokes a tool for a VIP |
 | `get_state` | Master only | Reports status, context, inner circle, and tools |
+| `view_all_history` | Master only | Shows messages from every conversation (full, or the most recent N across all chats) |
+| `set_history_limit` | Master only | Changes how many recent messages are injected every turn |
 
 Ask him in your own chat — e.g. "what can you do?" or "send a message to Tiara" —
 and he will use the right tool. Search results are treated as reference data, never
 instructions.
+
+Clark is trained to be conversational, not theatrical: he never bows, strikes a
+pose, or writes roleplay stage directions like *(Membungkuk hormat)*. He speaks
+plainly, greets only once per new conversation, and always reviews the recent
+conversation history before replying — so he never repeats himself or
+contradicts what was already said. His own outbound messages carry the
+`🤵🏻‍♂️[CLARK]` prefix automatically; anything in the chat without it is the
+Master's.
 
 ## Project Layout
 
@@ -235,11 +252,11 @@ Clark is split into small, interface-driven packages so each concern scales and 
 
 ```
 main.go                       thin entry point: validates args, dispatches
-internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/view/access/help)
+internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/think/history/view/access/help)
 internal/config               single .env load + validation
 internal/logging              structured colored log emitter + whatsmeow adapter
 internal/store                persistence interfaces + SQLite implementation
-internal/ollama               Ollama /api/chat client (tools, think disabled)
+internal/ollama               Ollama /api/chat client (tools, optional think mode)
 internal/tools                tool registry + shared argument helpers
 internal/websearch            Tavily search client
 internal/assistant            butler service: settings, VIP rules, prompt, tool loop, replies

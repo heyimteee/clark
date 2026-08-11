@@ -125,7 +125,10 @@ func IntArg(args map[string]any, name string, def int) int {
 
 type ctxKey int
 
-const masterKey ctxKey = iota
+const (
+	masterKey ctxKey = iota
+	senderKey
+)
 
 // WithMaster marks a context as belonging to the Master (full privileges).
 func WithMaster(ctx context.Context) context.Context {
@@ -135,5 +138,17 @@ func WithMaster(ctx context.Context) context.Context {
 // IsMaster reports whether the context belongs to the Master.
 func IsMaster(ctx context.Context) bool {
 	v, _ := ctx.Value(masterKey).(bool)
+	return v
+}
+
+// WithSender tags a context with the JID of the current conversation partner,
+// so tools can reason about the message that triggered them.
+func WithSender(ctx context.Context, jid string) context.Context {
+	return context.WithValue(ctx, senderKey, jid)
+}
+
+// Sender returns the current conversation's JID, or "" when unset.
+func Sender(ctx context.Context) string {
+	v, _ := ctx.Value(senderKey).(string)
 	return v
 }

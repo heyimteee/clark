@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -56,6 +57,13 @@ func (s *Service) fastPath(senderJID, userMsg string, isSelf bool) (string, bool
 			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
 		}
 		return thinkingReply(s.Thinking()), true, nil
+
+	case isHistoryLimitCommand(userMsg):
+		limit, _ := parseHistoryLimitCommand(userMsg)
+		if err := s.SetHistoryLimit(limit); err != nil {
+			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+		}
+		return historyLimitReply(limit), true, nil
 
 	case isStatusCommand(userMsg):
 		if err := s.applyStatusCommand(userMsg); err != nil {
@@ -207,6 +215,30 @@ func thinkingReply(on bool) string {
 		return "*Thinking Mode Updated*\n\nReasoning is now *On*, Master. I shall ponder before I speak."
 	}
 	return "*Thinking Mode Updated*\n\nReasoning is now *Off*, Master. I shall answer at once."
+}
+
+func historyLimitReply(limit int) string {
+	return fmt.Sprintf("*History Limit Updated*\n\nI now review the %d most recent messages on every turn, Master.", limit)
+}
+
+var historyLimitRes = regexp.MustCompile(`(?i)(?:set|change|update|make)\s+(?:my|clark(?:'s)?|the)?\s*history\s+limit\s+(?:to\s+)?(\d+)`)
+
+// isHistoryLimitCommand reports whether the Master is sizing the history window.
+func isHistoryLimitCommand(userMsg string) bool {
+	_, ok := parseHistoryLimitCommand(userMsg)
+	return ok
+}
+
+func parseHistoryLimitCommand(userMsg string) (int, bool) {
+	m := historyLimitRes.FindStringSubmatch(userMsg)
+	if m == nil {
+		return 0, false
+	}
+	limit, err := strconv.Atoi(m[1])
+	if err != nil || limit < 1 {
+		return 0, false
+	}
+	return limit, true
 }
 
 // isThinkingCommand reports whether the Master is commanding the reasoning mode.
@@ -413,6 +445,7 @@ func (s *Service) guidanceText() string {
 		"- `wake up buddy` / `wake clark` — turn me on\n" +
 		"- `silence clark` / `sleep clark` — turn me off\n" +
 		"- `thinking mode on` / `thinking mode off` — toggle reasoning\n" +
+		"- `set history limit to 10` — how many past messages I review each turn\n" +
 		"- `set my context to ...` — update your context\n" +
 		"- `clear context` — empty your context\n" +
 		"- `add vip <number>, <name>, <relation>` — admit someone\n" +

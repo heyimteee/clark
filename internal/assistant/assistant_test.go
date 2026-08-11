@@ -312,12 +312,12 @@ func TestServiceVIPToolGrant(t *testing.T) {
 		if tt.Function.Name == "secret_tool" {
 			t.Fatal("VIP saw master-only tool in the request")
 		}
-		if tt.Function.Name != "web_search" {
+		if tt.Function.Name != "web_search" && tt.Function.Name != "view_history" {
 			t.Errorf("unexpected tool advertised to VIP: %s", tt.Function.Name)
 		}
 	}
-	if len(fake.gotTools) != 1 {
-		t.Errorf("got %d tools for VIP, want 1", len(fake.gotTools))
+	if len(fake.gotTools) != len(defaultVIPGrants) {
+		t.Errorf("got %d tools for VIP, want %d (%v)", len(fake.gotTools), len(defaultVIPGrants), defaultVIPGrants)
 	}
 
 	// Master sees everything.
@@ -392,8 +392,20 @@ func TestServiceSetAccessRoundTrip(t *testing.T) {
 	if ok {
 		t.Fatal("no access row should exist by default")
 	}
-	if len(grants) != 1 || grants[0] != "web_search" {
-		t.Errorf("default grants = %v, want [web_search]", grants)
+	if len(grants) != len(defaultVIPGrants) {
+		t.Errorf("default grants = %v, want %v", grants, defaultVIPGrants)
+	}
+	for _, g := range defaultVIPGrants {
+		found := false
+		for _, got := range grants {
+			if got == g {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("default grants %v missing %q", grants, g)
+		}
 	}
 
 	if err := s.SetAccess(jid, []string{}); err != nil {
@@ -1015,6 +1027,215 @@ func TestServiceFastPathThinking(t *testing.T) {
 	}
 }
 
+func TestServiceSetHistoryLimit(t *testing.T) {
+	s, st, _ := newService(t)
+
+	if s.HistoryLimit() != defaultHistoryLimit {
+		t.Fatalf("HistoryLimit = %d, want default %d", s.HistoryLimit(), defaultHistoryLimit)
+	}
+	if err := s.SetHistoryLimit(5); err != nil {
+		t.Fatalf("SetHistoryLimit(5): %v", err)
+	}
+	if s.HistoryLimit() != 5 {
+		t.Fatalf("HistoryLimit = %d, want 5", s.HistoryLimit())
+	}
+	if err := s.SetHistoryLimit(0); err == nil {
+		t.Fatal("SetHistoryLimit(0) succeeded, want error")
+	}
+
+	persisted, err := st.Get("history_limit")
+	if err != nil {
+		t.Fatalf("Get(history_limit): %v", err)
+	}
+	if persisted != "5" {
+		t.Fatalf("persisted history_limit = %q, want 5", persisted)
+	}
+
+	reloaded, err := New(&config.Config{DBPath: ":memory:", OllamaModel: "test-model"}, st, &fakeLLM{})
+	if err != nil {
+		t.Fatalf("New reload: %v", err)
+	}
+	if reloaded.HistoryLimit() != 5 {
+		t.Errorf("reloaded HistoryLimit = %d, want 5", reloaded.HistoryLimit())
+	}
+}
+
+func TestServiceFastPathHistoryLimit(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "628111@s.whatsapp.net"
+
+	got, err := s.Reply(context.Background(), jid, "set history limit to 5", true)
+	if err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if s.HistoryLimit() != 5 {
+		t.Fatalf("HistoryLimit = %d, want 5", s.HistoryLimit())
+	}
+	if !strings.Contains(got, "*History Limit Updated*") {
+		t.Errorf("Reply = %q, want history limit confirmation", got)
+	}
+	if len(fake.got) != 0 {
+		t.Fatal("LLM was called for a fast-path mutation")
+	}
+}
+
+func TestServiceReplyInjectsLimitedHistory(t *testing.T) {
+	s, st, fake := newService(t)
+	jid := "6281234567890@s.whatsapp.net"
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	if err := s.SetHistoryLimit(2); err != nil {
+		t.Fatalf("SetHistoryLimit: %v", err)
+	}
+	for _, m := range []string{"m1", "m2", "m3"} {
+		if err := st.SaveMessage(jid, "user", m); err != nil {
+			t.Fatalf("SaveMessage: %v", err)
+		}
+	}
+	fake.always = &ollama.ChatResult{Content: "Noted."}
+	if _, err := s.Reply(context.Background(), jid, "hello", false); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+
+	userCount := 0
+	for _, m := range fake.got {
+		if m.Role == "user" {
+			userCount++
+		}
+	}
+	// Only the 2 most recent (m3 + the just-saved hello) should be injected.
+	if userCount != 2 {
+		t.Fatalf("user messages in context = %d, want 2 (m3 + hello)", userCount)
+	}
+	joined := ""
+	for _, m := range fake.got {
+		if m.Role == "user" {
+			joined += m.Content + "|"
+		}
+	}
+	if !strings.Contains(joined, "m3|hello|") || strings.Contains(joined, "m1|") || strings.Contains(joined, "m2|") {
+		t.Errorf("injected window = %q, want only m3 then hello", joined)
+	}
+}
+
+func TestServiceHistoryTools(t *testing.T) {
+	s, st, _ := newService(t)
+	jid := "6281234567890@s.whatsapp.net"
+	master := "628111@s.whatsapp.net"
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	for i, m := range []string{"one", "two", "three"} {
+		if err := st.SaveMessage(jid, "user", m); err != nil {
+			t.Fatalf("SaveMessage(%d): %v", i, err)
+		}
+	}
+	if err := st.SaveMessage(jid, "assistant", "Welcome."); err != nil {
+		t.Fatalf("SaveMessage assistant: %v", err)
+	}
+
+	// A VIP sees their own full history with speaker labels.
+	ctx := tools.WithSender(context.Background(), jid)
+	got, err := s.Tools().Execute(ctx, "view_history", nil)
+	if err != nil {
+		t.Fatalf("view_history: %v", err)
+	}
+	for _, want := range []string{
+		"Tiara (Girlfriend): one",
+		"Tiara (Girlfriend): three",
+		s.name + ": Welcome.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("view_history missing %q:\n%s", want, got)
+		}
+	}
+
+	// A limited window drops the oldest.
+	got, err = s.Tools().Execute(ctx, "view_history", []byte(`{"limit":2}`))
+	if err != nil {
+		t.Fatalf("view_history(limit=2): %v", err)
+	}
+	if strings.Contains(got, ": one") {
+		t.Errorf("limit=2 should drop the oldest message:\n%s", got)
+	}
+
+	// A VIP may not view another chat.
+	if _, err := s.Tools().Execute(ctx, "view_history", []byte(`{"recipient":"6281234567890"}`)); err == nil {
+		t.Fatal("VIP viewing another chat should fail")
+	}
+
+	// The Master may view any chat by name.
+	mctx := tools.WithMaster(tools.WithSender(context.Background(), master))
+	if _, err := s.Tools().Execute(mctx, "view_history", []byte(`{"recipient":"Tiara"}`)); err != nil {
+		t.Fatalf("master view_history(recipient): %v", err)
+	}
+
+	// view_all_history is Master-only.
+	if _, err := s.Tools().Execute(ctx, "view_all_history", nil); err == nil {
+		t.Fatal("VIP view_all_history should fail")
+	}
+	got, err = s.Tools().Execute(mctx, "view_all_history", nil)
+	if err != nil {
+		t.Fatalf("master view_all_history: %v", err)
+	}
+	if !strings.Contains(got, "three") {
+		t.Errorf("view_all_history missing stored message:\n%s", got)
+	}
+
+	// set_history_limit is Master-only and persists.
+	if _, err := s.Tools().Execute(ctx, "set_history_limit", []byte(`{"limit":3}`)); err == nil {
+		t.Fatal("VIP set_history_limit should fail")
+	}
+	got, err = s.Tools().Execute(mctx, "set_history_limit", []byte(`{"limit":3}`))
+	if err != nil {
+		t.Fatalf("set_history_limit: %v", err)
+	}
+	if !strings.Contains(got, "3 most recent") {
+		t.Errorf("set_history_limit reply = %q, want confirmation", got)
+	}
+	if s.HistoryLimit() != 3 {
+		t.Fatalf("HistoryLimit = %d, want 3", s.HistoryLimit())
+	}
+	persisted, err := st.Get("history_limit")
+	if err != nil {
+		t.Fatalf("Get(history_limit): %v", err)
+	}
+	if persisted != "3" {
+		t.Errorf("persisted history_limit = %q, want 3", persisted)
+	}
+}
+
+func TestPromptNoRoleplay(t *testing.T) {
+	prompt := strings.ToLower(promptTemplate)
+	for _, want := range []string{
+		"no bows",
+		"no roleplay",
+		"conversational language",
+		"not performing",
+		"🤵🏻‍♂️[clark]",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing no-roleplay/identity directive %q", want)
+		}
+	}
+	if strings.Contains(prompt, "elegant bow") {
+		t.Error("prompt still instructs a ritual bow")
+	}
+}
+
+func TestPromptHistoryRules(t *testing.T) {
+	for _, want := range []string{
+		"History-First",
+		"view_history",
+		"view_all_history",
+	} {
+		if !strings.Contains(promptTemplate, want) {
+			t.Errorf("prompt missing history directive %q", want)
+		}
+	}
+}
+
 func TestServiceFastPathStatusOff(t *testing.T) {
 	s, _, fake := newService(t)
 	jid := "628111@s.whatsapp.net"
@@ -1366,7 +1587,7 @@ func TestServiceFirstTurnGreetsVisitor(t *testing.T) {
 		t.Fatalf("Reply: %v", err)
 	}
 	sys := systemPromptOf(fake)
-	if !strings.Contains(sys, "The Visitor has just arrived") {
+	if !strings.Contains(sys, "A Visitor has arrived") {
 		t.Error("first visitor turn lacks the greeting directive")
 	}
 	if strings.Contains(sys, "Continue the ongoing conversation") {
@@ -1386,7 +1607,7 @@ func TestServiceFirstTurnMasterNoStatusRecital(t *testing.T) {
 	if !strings.Contains(sys, "Master has arrived") {
 		t.Error("first master turn lacks the master greeting directive")
 	}
-	if strings.Contains(sys, "The Visitor has just arrived") {
+	if strings.Contains(sys, "The Visitor has just arrived") || strings.Contains(sys, "A Visitor has arrived") {
 		t.Error("master was greeted as a visitor")
 	}
 	if strings.Contains(sys, "never announce your own status") == false {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/heyimteee/clark/internal/assistant"
@@ -262,6 +263,27 @@ func (a *App) Think(args []string) error {
 	return a.ast.SetThinking(args[0] == "on")
 }
 
+// History sets how many recent messages clark reviews on every turn.
+func (a *App) History(args []string) error {
+	available, err := a.ast.IsInitialized()
+	if err != nil {
+		return err
+	}
+	if !available {
+		return fmt.Errorf("No assistant is initiated Sir. Do 'clark init' first.")
+	}
+
+	if len(args) != 1 {
+		return fmt.Errorf("usage: clark history <N>")
+	}
+	limit, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("invalid history limit %q", args[0])
+	}
+
+	return a.ast.SetHistoryLimit(limit)
+}
+
 // View prints the current settings, VIP list, and per-VIP tool access.
 func (a *App) View() error {
 	available, err := a.ast.IsInitialized()
@@ -277,6 +299,7 @@ func (a *App) View() error {
 		"model", a.ast.Model(),
 		"status", a.ast.Enabled(),
 		"thinking", a.ast.Thinking(),
+		"history", a.ast.HistoryLimit(),
 		"context", a.ast.Context())
 	logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "Current VIP list")
 	for jid, name := range a.ast.VIPList() {
@@ -370,6 +393,7 @@ func (a *App) Help() error {
 		"ctx", "clark ctx -c <context> | -clear",
 		"toggle", "clark toggle",
 		"think", "clark think on|off",
+		"history", "clark history <N>",
 		"view", "clark view",
 		"access", "clark access -r <name|number> -tool <tool> -set on|off")
 	return nil

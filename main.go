@@ -9,15 +9,16 @@ import (
 
 func main() {
 	commands := map[string]struct{}{
-		"init":   {},
-		"run":    {},
-		"vip":    {},
-		"ctx":    {},
-		"toggle": {},
-		"think":  {},
-		"view":   {},
-		"access": {},
-		"help":   {},
+		"init":    {},
+		"run":     {},
+		"vip":     {},
+		"ctx":     {},
+		"toggle":  {},
+		"think":   {},
+		"history": {},
+		"view":    {},
+		"access":  {},
+		"help":    {},
 	}
 
 	if len(os.Args) < 2 {
@@ -32,7 +33,7 @@ func main() {
 		logging.Fatalf("USAGE", "unnecessary argument(s), usage: clark run")
 	}
 
-	if len(os.Args) < 3 && (os.Args[1] == "vip" || os.Args[1] == "ctx" || os.Args[1] == "access" || os.Args[1] == "think") {
+	if len(os.Args) < 3 && (os.Args[1] == "vip" || os.Args[1] == "ctx" || os.Args[1] == "access" || os.Args[1] == "think" || os.Args[1] == "history") {
 		logging.Fatalf("USAGE", "usage: clark %v [args]", os.Args[1])
 	}
 
@@ -55,6 +56,8 @@ func main() {
 		err = a.Toggle()
 	case "think":
 		err = a.Think(os.Args[2:])
+	case "history":
+		err = a.History(os.Args[2:])
 	case "view":
 		err = a.View()
 	case "access":

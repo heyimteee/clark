@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/heyimteee/clark/internal/store"
 	"github.com/heyimteee/clark/internal/tools"
 )
 
@@ -100,7 +101,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"set_access",
-		"Grant or revoke a tool for a VIP. VIPs may only ever hold web_search. Only the Master may use this.",
+		"Grant or revoke a tool for a VIP. VIPs may only ever hold web_search or view_history. Only the Master may use this.",
 		toolParams(map[string]any{
 			"recipient": map[string]any{"type": "string", "description": "A VIP's name or phone number"},
 			"tool":      map[string]any{"type": "string", "description": "The tool name, e.g. web_search"},
@@ -155,6 +156,113 @@ func (s *Service) registerManagementTools() {
 			return out, nil
 		},
 	)
+
+	s.tools.RegisterFunc(
+		"view_history",
+		"Show the stored conversation history for a chat. Without a recipient, shows the current chat; a limit shows only the most recent messages. Review the injected recent history first and call this only when you need more of the conversation.",
+		toolParams(map[string]any{
+			"recipient": map[string]any{"type": "string", "description": "Optional: a VIP's name or phone number. Only the Master may view another chat."},
+			"limit":     map[string]any{"type": "integer", "description": "Optional: how many of the most recent messages to show. Omit for the full history."},
+		}),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			jid := tools.Sender(ctx)
+			if recipient := tools.StringArg(args, "recipient"); recipient != "" {
+				if err := masterOnly(ctx); err != nil {
+					return "", err
+				}
+				rjid, ok := s.vip.Lookup(recipient)
+				if !ok {
+					return "", fmt.Errorf("no VIP found matching %q", recipient)
+				}
+				jid = rjid
+			}
+			return s.formatHistory(jid, tools.IntArg(args, "limit", 0))
+		},
+	)
+
+	s.tools.RegisterFunc(
+		"view_all_history",
+		"Show messages from every conversation, newest last. Optionally limit to the most recent N messages across all chats. Only the Master may use this.",
+		toolParams(map[string]any{
+			"limit": map[string]any{"type": "integer", "description": "Optional: show only the most recent N messages across all chats. Omit for everything stored."},
+		}),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			entries, err := s.history.AllRecentMessages(tools.IntArg(args, "limit", 0))
+			if err != nil {
+				return "", err
+			}
+			if len(entries) == 0 {
+				return "No conversation history is stored anywhere.", nil
+			}
+			lines := make([]string, 0, len(entries))
+			for _, e := range entries {
+				lines = append(lines, s.historySpeaker(e.JID, e.Role)+": "+e.Content)
+			}
+			return joinLines(lines), nil
+		},
+	)
+
+	s.tools.RegisterFunc(
+		"set_history_limit",
+		"Change how many recent messages are injected into every turn. Larger gives clark more memory per reply, smaller makes replies leaner and cheaper. Only the Master may use this.",
+		toolParams(map[string]any{
+			"limit": map[string]any{"type": "integer", "description": "Number of recent messages to keep in context, e.g. 10 or 5"},
+		}, "limit"),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			limit := tools.IntArg(args, "limit", 0)
+			if limit < 1 {
+				return "", fmt.Errorf("the limit must be at least 1")
+			}
+			if err := s.SetHistoryLimit(limit); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Understood, Master. I now review the %d most recent messages on every turn.", limit), nil
+		},
+	)
+}
+
+// formatHistory renders a chat's stored history as speaker-labelled lines.
+// A positive limit keeps only the most recent messages; otherwise the full
+// history is returned.
+func (s *Service) formatHistory(jid string, limit int) (string, error) {
+	var msgs []store.Message
+	var err error
+	if limit > 0 {
+		msgs, err = s.history.RecentMessages(jid, limit)
+	} else {
+		msgs, err = s.history.Messages(jid)
+	}
+	if err != nil {
+		return "", err
+	}
+	if len(msgs) == 0 {
+		return "No conversation history for this chat yet.", nil
+	}
+
+	lines := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		lines = append(lines, s.historySpeaker(jid, m.Role)+": "+m.Content)
+	}
+	return joinLines(lines), nil
+}
+
+// historySpeaker maps a stored message role to the speaker label used when
+// rendering history: clark himself for assistant messages, otherwise the chat
+// partner (a VIP's name, or the Master in his own chat).
+func (s *Service) historySpeaker(jid, role string) string {
+	if role == "assistant" {
+		return s.name
+	}
+	if contact, _ := s.vip.Check(jid); contact != "" {
+		return contact
+	}
+	return "The Master"
 }
 
 func masterOnly(ctx context.Context) error {

@@ -37,6 +37,15 @@ const maxNudges = 2
 // or looping model can never block the WhatsApp pipeline indefinitely.
 const maxTurnDuration = 2 * time.Minute
 
+// defaultHistoryLimit is how many recent messages are injected into each turn
+// unless the Master (or clark) configures a different limit.
+const defaultHistoryLimit = 10
+
+// defaultVIPGrants are the tools every VIP may invoke without an explicit
+// grant. web_search covers research; view_history lets a VIP recall their own
+// conversation (and lets clark honour the history-first rule mid-chat).
+var defaultVIPGrants = []string{"web_search", "view_history"}
+
 // iterationLimitMessage is returned when a genuine tool chain exhausts its
 // iteration budget while tools were still running.
 const iterationLimitMessage = "I have reached the limit of tool calls for this iteration, Master. Say _continue_ and I shall resume at once."
@@ -63,7 +72,7 @@ const (
 
 // visitorFirstTurnTask names the palace via the persona config.
 func (s *Service) visitorFirstTurnTask() string {
-	return fmt.Sprintf("The Visitor has just arrived. Greet them briefly, acknowledge the Master's availability, and host them with the grace befitting the %s (Whatsapp).", s.palaceName)
+	return fmt.Sprintf("A Visitor has arrived. Welcome them briefly, acknowledge the Master's availability, and chat with them conversationally as yourself — no roleplay, no ritual greetings, no bows. Host them with the grace befitting the %s (Whatsapp).", s.palaceName)
 }
 
 // nudgeFor tailors the corrective message to the tool the model must invoke.
@@ -107,6 +116,8 @@ type Service struct {
 	status   bool
 	context  string
 	think    bool
+
+	historyLimit int
 
 	// Persona, applied from config with butler-agnostic defaults.
 	masterName        string
@@ -183,10 +194,24 @@ func (s *Service) load() error {
 		}
 	}
 
+	historyLimit := defaultHistoryLimit
+	limitStr, err := s.settings.Get("history_limit")
+	if err != nil {
+		return err
+	}
+	if limitStr != "" {
+		limit, perr := strconv.Atoi(limitStr)
+		if perr != nil || limit < 1 {
+			return fmt.Errorf("Invalid history limit value Sir. Error: %w", perr)
+		}
+		historyLimit = limit
+	}
+
 	s.name = name
 	s.context = ctxValue
 	s.status = status
 	s.think = think
+	s.historyLimit = historyLimit
 	s.llm.SetThink(think)
 	return nil
 }
@@ -247,7 +272,7 @@ func (s *Service) AccessFor(jid string) ([]string, bool, error) {
 		return nil, false, err
 	}
 	if !ok {
-		return []string{"web_search"}, false, nil
+		return defaultVIPGrants, false, nil
 	}
 	return grants, true, nil
 }
@@ -334,6 +359,23 @@ func (s *Service) ToggleThinking() error {
 	return s.SetThinking(!s.think)
 }
 
+// HistoryLimit reports how many recent messages are injected per turn.
+func (s *Service) HistoryLimit() int { return s.historyLimit }
+
+// SetHistoryLimit configures the per-turn history window and persists it.
+func (s *Service) SetHistoryLimit(n int) error {
+	if n < 1 {
+		return fmt.Errorf("the history limit must be at least 1, Master")
+	}
+	if err := s.settings.Set("history_limit", strconv.Itoa(n)); err != nil {
+		return err
+	}
+
+	s.historyLimit = n
+	logging.Log("CLARK", logging.SevInfo, "HISTORY", "History limit changed", "limit", n)
+	return nil
+}
+
 // Reply produces an answer for a VIP's message, running any tool calls the
 // model requests. isSelf marks the Master chatting in his own chat.
 func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, error) {
@@ -350,11 +392,14 @@ func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf b
 		return "", fmt.Errorf("empty message content")
 	}
 
+	// Let tools know which conversation triggered them.
+	ctx = tools.WithSender(ctx, senderJID)
+
 	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
 		return "", err
 	}
 
-	history, err := s.history.Messages(senderJID)
+	history, err := s.history.RecentMessages(senderJID, s.historyLimit)
 	if err != nil {
 		return "", err
 	}
@@ -825,6 +870,7 @@ func (s *Service) viewAllText() string {
 	} else {
 		b.WriteString("*Thinking:* Off\n")
 	}
+	b.WriteString("*History:* " + strconv.Itoa(s.historyLimit) + " messages per turn\n")
 	b.WriteString("*Context:* " + s.context + "\n\n")
 	b.WriteString(s.viewVIPsText())
 	b.WriteString("\n\n")
@@ -898,7 +944,7 @@ func (s *Service) toolsForSender(senderJID string, isSelf bool) []tools.Tool {
 
 	grants, ok, err := s.access.GetTools(senderJID)
 	if err != nil || !ok {
-		grants = []string{"web_search"}
+		grants = defaultVIPGrants
 	}
 
 	granted := make(map[string]bool, len(grants))
