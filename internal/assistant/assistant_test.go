@@ -121,7 +121,10 @@ type fakeLLM struct {
 	err      error
 	got      []ollama.Message
 	gotTools []ollama.Tool
+	think    bool
 }
+
+func (f *fakeLLM) SetThink(on bool) { f.think = on }
 
 func (f *fakeLLM) Chat(_ context.Context, messages []ollama.Message, tools []ollama.Tool) (*ollama.ChatResult, error) {
 	f.got = messages
@@ -939,6 +942,76 @@ func TestServiceFastPathGuidanceVIPFallsThroughToModel(t *testing.T) {
 	}
 	if len(fake.got) == 0 {
 		t.Fatal("VIP guidance should fall through to the model, not be served hardcoded")
+	}
+}
+
+func TestServiceSetThinking(t *testing.T) {
+	s, st, fake := newService(t)
+
+	if s.Thinking() {
+		t.Fatal("thinking on by default, want off")
+	}
+	if err := s.SetThinking(true); err != nil {
+		t.Fatalf("SetThinking(true): %v", err)
+	}
+	if !s.Thinking() || !fake.think {
+		t.Fatalf("Thinking = %v, llm.think = %v, want both true", s.Thinking(), fake.think)
+	}
+
+	if err := s.ToggleThinking(); err != nil {
+		t.Fatalf("ToggleThinking: %v", err)
+	}
+	if s.Thinking() || fake.think {
+		t.Fatalf("Thinking = %v, llm.think = %v, want both false after toggle", s.Thinking(), fake.think)
+	}
+
+	got, err := st.Get("think")
+	if err != nil {
+		t.Fatalf("Get(think): %v", err)
+	}
+	if got != "false" {
+		t.Fatalf("persisted think = %q, want false", got)
+	}
+}
+
+func TestServiceFastPathThinking(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "628111@s.whatsapp.net"
+
+	for _, phrase := range []string{"thinking mode on", "reasoning mode on", "turn thinking on"} {
+		got, err := s.Reply(context.Background(), jid, phrase, true)
+		if err != nil {
+			t.Fatalf("Reply %q: %v", phrase, err)
+		}
+		if !s.Thinking() {
+			t.Fatalf("thinking still off after %q", phrase)
+		}
+		if !strings.Contains(got, "*On*") {
+			t.Errorf("Reply %q = %q, want on confirmation", phrase, got)
+		}
+	}
+
+	got, err := s.Reply(context.Background(), jid, "thinking mode off", true)
+	if err != nil {
+		t.Fatalf("Reply off: %v", err)
+	}
+	if s.Thinking() {
+		t.Fatal("thinking still on after 'thinking mode off'")
+	}
+	if !strings.Contains(got, "*Off*") {
+		t.Errorf("off Reply = %q, want off confirmation", got)
+	}
+
+	before := s.Thinking()
+	if _, err := s.Reply(context.Background(), jid, "toggle thinking", true); err != nil {
+		t.Fatalf("Reply toggle: %v", err)
+	}
+	if s.Thinking() == before {
+		t.Fatal("thinking unchanged after 'toggle thinking'")
+	}
+
+	if len(fake.got) != 0 {
+		t.Fatal("LLM was called for fast-path mutations")
 	}
 }
 

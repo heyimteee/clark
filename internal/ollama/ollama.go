@@ -55,6 +55,7 @@ type Client struct {
 	baseURL string
 	model   string
 	http    *http.Client
+	think   bool
 }
 
 // New returns a Client for the given base URL and model.
@@ -65,6 +66,9 @@ func New(baseURL, model string) *Client {
 		http:    &http.Client{Timeout: 5 * time.Minute},
 	}
 }
+
+// SetThink enables or disables reasoning tokens for subsequent chats.
+func (c *Client) SetThink(on bool) { c.think = on }
 
 type chatRequest struct {
 	Model    string    `json:"model"`
@@ -88,7 +92,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (*C
 		Messages: messages,
 		Tools:    tools,
 		Stream:   false,
-		Think:    false,
+		Think:    c.think,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode request: %w", err)

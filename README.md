@@ -59,7 +59,9 @@ Follow these steps to get your personal butler up and running.
     OLLAMA_MODEL=<model-tag>
     ```
     Use the model tag shown by `ollama list` on the server (e.g. `llama3.2:latest`).
-    Clark calls Ollama's native `/api/chat` endpoint with thinking disabled, so reasoning is off even for thinking-capable models.
+    Clark calls Ollama's native `/api/chat` endpoint. Reasoning mode is off by
+    default; enable it for thinking-capable models with `clark think on` or the
+    in-chat command `thinking mode on`.
 
     Optional variables:
     ```
@@ -135,6 +137,12 @@ Clark is managed via a set of simple commands.
     ./clark help
     ```
 
+-   **`think`**: Enables or disables the model's reasoning mode (`on`/`off`). Off by default; the choice persists.
+    ```sh
+    ./clark think on
+    ./clark think off
+    ```
+
 -   **`access`**: Manages a VIP's granted tools. VIPs may only ever hold `web_search`; the Master-only tools (`send_message`, `set_status`, `set_context`, `add_vip`, `delete_vip`, `set_access`, `get_state`) are never grantable.
     ```sh
     ./clark access -r "11234567890" -tool web_search -set on
@@ -151,6 +159,7 @@ conversing — they are handled instantly without calling the model and are
 | --- | --- |
 | `wake up buddy` / `wake clark` | Turn Clark on |
 | `silence clark` / `sleep clark` | Turn Clark off |
+| `thinking mode on` / `thinking mode off` / `toggle thinking` | Toggle reasoning mode |
 | `set my context to …` | Update your context |
 | `clear context` | Empty your context |
 | `add vip <number>, <name>, <relation>` | Admit someone to the inner circle |

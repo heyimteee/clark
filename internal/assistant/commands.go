@@ -46,6 +46,17 @@ func (s *Service) fastPath(senderJID, userMsg string, isSelf bool) (string, bool
 	}
 
 	switch {
+	case isThinkingCommand(userMsg):
+		on, toggle, _ := parseThinkingCommand(userMsg)
+		if toggle {
+			if err := s.ToggleThinking(); err != nil {
+				return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+			}
+		} else if err := s.SetThinking(on); err != nil {
+			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+		}
+		return thinkingReply(s.Thinking()), true, nil
+
 	case isStatusCommand(userMsg):
 		if err := s.applyStatusCommand(userMsg); err != nil {
 			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
@@ -189,6 +200,38 @@ func accessReply(recipient, tool string, enabled bool) string {
 		return "*Access Updated*\n\n_" + recipient + "_ has been *granted* `" + tool + "`."
 	}
 	return "*Access Updated*\n\n_" + recipient + "'s_ access to `" + tool + "` has been *revoked*."
+}
+
+func thinkingReply(on bool) string {
+	if on {
+		return "*Thinking Mode Updated*\n\nReasoning is now *On*, Master. I shall ponder before I speak."
+	}
+	return "*Thinking Mode Updated*\n\nReasoning is now *Off*, Master. I shall answer at once."
+}
+
+// isThinkingCommand reports whether the Master is commanding the reasoning mode.
+func isThinkingCommand(userMsg string) bool {
+	_, _, ok := parseThinkingCommand(userMsg)
+	return ok
+}
+
+// parseThinkingCommand extracts the requested polarity. toggle is true when the
+// user asks to flip reasoning rather than pin it to a specific state.
+func parseThinkingCommand(userMsg string) (on, toggle, ok bool) {
+	m := strings.ToLower(userMsg)
+	if !hasAny(m, "thinking", "reasoning") {
+		return false, false, false
+	}
+	if hasAny(m, "toggle", "flip") {
+		return false, true, true
+	}
+	if hasAny(m, "on", "enable", "start") {
+		return true, false, true
+	}
+	if hasAny(m, "off", "disable", "stop") {
+		return false, false, true
+	}
+	return false, false, false
 }
 
 // --- command detection -----------------------------------------------------
@@ -369,6 +412,7 @@ func (s *Service) guidanceText() string {
 		"*Hardcoded commands* (Master's own chat only):\n" +
 		"- `wake up buddy` / `wake clark` — turn me on\n" +
 		"- `silence clark` / `sleep clark` — turn me off\n" +
+		"- `thinking mode on` / `thinking mode off` — toggle reasoning\n" +
 		"- `set my context to ...` — update your context\n" +
 		"- `clear context` — empty your context\n" +
 		"- `add vip <number>, <name>, <relation>` — admit someone\n" +

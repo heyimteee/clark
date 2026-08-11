@@ -245,6 +245,23 @@ func (a *App) Toggle() error {
 	return a.ast.Toggle()
 }
 
+// Think enables or disables the model's reasoning mode.
+func (a *App) Think(args []string) error {
+	available, err := a.ast.IsInitialized()
+	if err != nil {
+		return err
+	}
+	if !available {
+		return fmt.Errorf("No assistant is initiated Sir. Do 'clark init' first.")
+	}
+
+	if len(args) != 1 || (args[0] != "on" && args[0] != "off") {
+		return fmt.Errorf("usage: clark think on|off")
+	}
+
+	return a.ast.SetThinking(args[0] == "on")
+}
+
 // View prints the current settings, VIP list, and per-VIP tool access.
 func (a *App) View() error {
 	available, err := a.ast.IsInitialized()
@@ -259,6 +276,7 @@ func (a *App) View() error {
 		"name", a.ast.Name(),
 		"model", a.ast.Model(),
 		"status", a.ast.Enabled(),
+		"thinking", a.ast.Thinking(),
 		"context", a.ast.Context())
 	logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "Current VIP list")
 	for jid, name := range a.ast.VIPList() {
@@ -351,6 +369,7 @@ func (a *App) Help() error {
 		"vip", "clark vip -a <number,name,relation> | -d <number> | -clear",
 		"ctx", "clark ctx -c <context> | -clear",
 		"toggle", "clark toggle",
+		"think", "clark think on|off",
 		"view", "clark view",
 		"access", "clark access -r <name|number> -tool <tool> -set on|off")
 	return nil

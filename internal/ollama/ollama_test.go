@@ -41,6 +41,25 @@ func TestChat(t *testing.T) {
 	}
 }
 
+func TestChatThinkEnabled(t *testing.T) {
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = readAll(t, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":{"content":"pondered"}}`))
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "test-model")
+	c.SetThink(true)
+	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if !strings.Contains(gotBody, `"think":true`) {
+		t.Errorf("request body should enable think: %s", gotBody)
+	}
+}
+
 func TestChatSendsTools(t *testing.T) {
 	var gotBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -84,6 +84,7 @@ func nudgeFor(hint string) string {
 // LLM generates replies from a chat history, optionally with tools.
 type LLM interface {
 	Chat(ctx context.Context, messages []ollama.Message, tools []ollama.Tool) (*ollama.ChatResult, error)
+	SetThink(on bool)
 }
 
 // pendingIter is a paused tool-calling iteration awaiting the sender's "continue".
@@ -105,6 +106,7 @@ type Service struct {
 	name     string
 	status   bool
 	context  string
+	think    bool
 
 	// Persona, applied from config with butler-agnostic defaults.
 	masterName        string
@@ -169,9 +171,23 @@ func (s *Service) load() error {
 		}
 	}
 
+	thinkStr, err := s.settings.Get("think")
+	if err != nil {
+		return err
+	}
+	think := false
+	if thinkStr != "" {
+		think, err = strconv.ParseBool(thinkStr)
+		if err != nil {
+			return fmt.Errorf("Invalid thinking value Sir. Error: %w", err)
+		}
+	}
+
 	s.name = name
 	s.context = ctxValue
 	s.status = status
+	s.think = think
+	s.llm.SetThink(think)
 	return nil
 }
 
@@ -296,6 +312,26 @@ func (s *Service) SetContext(contextInput string) error {
 	s.context = contextInput
 	logging.Log("CLARK", logging.SevInfo, "CONTEXT", "Master context loaded", "context", s.context)
 	return nil
+}
+
+// Thinking reports whether the model reasons before replying.
+func (s *Service) Thinking() bool { return s.think }
+
+// SetThinking enables or disables reasoning mode and persists the choice.
+func (s *Service) SetThinking(on bool) error {
+	if err := s.settings.Set("think", fmt.Sprintf("%v", on)); err != nil {
+		return err
+	}
+
+	s.think = on
+	s.llm.SetThink(on)
+	logging.Log("CLARK", logging.SevInfo, "THINK", "Thinking mode changed", "enabled", on)
+	return nil
+}
+
+// ToggleThinking flips reasoning mode.
+func (s *Service) ToggleThinking() error {
+	return s.SetThinking(!s.think)
 }
 
 // Reply produces an answer for a VIP's message, running any tool calls the
@@ -783,6 +819,11 @@ func (s *Service) viewAllText() string {
 		b.WriteString("*Status:* On\n")
 	} else {
 		b.WriteString("*Status:* Off\n")
+	}
+	if s.think {
+		b.WriteString("*Thinking:* On\n")
+	} else {
+		b.WriteString("*Thinking:* Off\n")
 	}
 	b.WriteString("*Context:* " + s.context + "\n\n")
 	b.WriteString(s.viewVIPsText())
