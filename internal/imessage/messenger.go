@@ -36,6 +36,7 @@ func (m *Messenger) Send(_ context.Context, chat, text string) error {
 		return errEmptyRecipient
 	}
 	text = gateway.PrefixMessage(text)
+	text = stripMarkdown(text)
 	if _, err := m.out.EnqueueIMessage(handle, text); err != nil {
 		logging.Log("IMESSAGE", logging.SevErr, "SEND", "Failed to queue iMessage", "to", handle, "error", err)
 		return err
@@ -87,6 +88,38 @@ func toHandle(target string) string {
 		return "+" + local
 	}
 	return t
+}
+
+// stripMarkdown removes WhatsApp-style rich-text markers so iMessage, which
+// does not render them, reads as clean plain text. Formatting is WhatsApp-only:
+// the assistant still emits markdown and this messenger is the only place it
+// gets removed. Only paired, non-whitespace delimiters are unwrapped, so
+// literals like "2*3" or "a * b" pass through untouched.
+func stripMarkdown(s string) string {
+	for _, re := range markdownStrippers {
+		s = re.ReplaceAllString(s, "$1")
+	}
+	return s
+}
+
+// markdownStrippers apply in order: block constructs first, then inline code
+// (double-backtick before single so multi-char code spans survive), then the
+// inline emphasis delimiters.
+var markdownStrippers = []*regexp.Regexp{
+	// "# Title" -> "Title"
+	regexp.MustCompile(`(?m)^#{1,6}\s+(.*)$`),
+	// "> quote" -> "quote"
+	regexp.MustCompile(`(?m)^>\s?(.*)$`),
+	// "``code``" -> "code"
+	regexp.MustCompile("``([^`]+)``"),
+	// "`code`" -> "code"
+	regexp.MustCompile("`([^`]+)`"),
+	// "*bold*" -> "bold"
+	regexp.MustCompile(`\*([^*\n]+)\*`),
+	// "_italic_" -> "italic"
+	regexp.MustCompile(`_([^_\n]+)_`),
+	// "~strike~" -> "strike"
+	regexp.MustCompile(`~([^~\n]+)~`),
 }
 
 var nonDigits = regexp.MustCompile(`[^0-9]`)

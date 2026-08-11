@@ -91,6 +91,53 @@ func TestMessengerSendPrefixesAndConverts(t *testing.T) {
 	}
 }
 
+func TestMessengerSendStripsMarkdown(t *testing.T) {
+	out := &fakeOutbound{}
+	m := NewMessenger(out, "+6281111111111")
+
+	err := m.Send(context.Background(), "6281267858909@s.whatsapp.net", "*Status Updated*\n\n_One moment, Master..._")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(out.enqueued) != 1 {
+		t.Fatalf("enqueued %d, want 1", len(out.enqueued))
+	}
+	got := out.enqueued[0].Text
+	if strings.Contains(got, "*") || strings.Contains(got, "_") || strings.Contains(got, "`") {
+		t.Errorf("text = %q, want markdown stripped", got)
+	}
+	for _, want := range []string{"Status Updated", "One moment, Master...", gateway.MessagePrefix} {
+		if !strings.Contains(got, want) {
+			t.Errorf("text = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestStripMarkdown(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"*bold*", "bold"},
+		{"_italic_", "italic"},
+		{"~strike~", "strike"},
+		{"`code`", "code"},
+		{"``code``", "code"},
+		{"# Header", "Header"},
+		{"## Sub", "Sub"},
+		{"> quoted", "quoted"},
+		{"*Status Updated*\n\nClark is now *On*.", "Status Updated\n\nClark is now On."},
+		{"- `set_context`: do the thing", "- set_context: do the thing"},
+		{"1. first\n2. second", "1. first\n2. second"},
+		{"a * b", "a * b"},
+		{"2*3", "2*3"},
+		{"plain text", "plain text"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := stripMarkdown(c.in); got != c.want {
+			t.Errorf("stripMarkdown(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestMessengerSendEmptyRecipient(t *testing.T) {
 	out := &fakeOutbound{}
 	m := NewMessenger(out, "+6281111111111")
