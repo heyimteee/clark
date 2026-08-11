@@ -2,10 +2,12 @@ package whatsapp
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/heyimteee/clark/internal/ollama"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -104,6 +106,7 @@ func (m *fakeMessenger) SendSelf(_ context.Context, _ string) error {
 	m.sentSelf++
 	return nil
 }
+
 func (m *fakeMessenger) ResolveSender(v *events.Message) types.JID {
 	return v.Info.Sender.ToNonAD()
 }
@@ -114,9 +117,11 @@ func (m *fakeMessenger) IsSelfChat(chat types.JID) bool {
 type fakeButler struct {
 	mu         sync.Mutex
 	enabled    bool
+	overrides  map[string]bool
 	prehandled string
 	replied    []string
 	replyDelay time.Duration
+	replyErr   error
 }
 
 func (b *fakeButler) Prehandle(_, text string, _ bool) (string, bool, error) {
@@ -129,6 +134,9 @@ func (b *fakeButler) Reply(_ context.Context, _, text string, _ bool) (string, e
 	if b.replyDelay > 0 {
 		time.Sleep(b.replyDelay)
 	}
+	if b.replyErr != nil {
+		return "", b.replyErr
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.replied = append(b.replied, text)
@@ -136,6 +144,12 @@ func (b *fakeButler) Reply(_ context.Context, _, text string, _ bool) (string, e
 }
 func (b *fakeButler) Relation(_ string) (string, bool) { return "Test (Friend)", true }
 func (b *fakeButler) Enabled() bool                    { return b.enabled }
+func (b *fakeButler) EnabledFor(jid string) bool {
+	if on, ok := b.overrides[jid]; ok {
+		return on
+	}
+	return b.enabled
+}
 
 // nonVIPButler mimics a fresh database where no one — not even the Master — is
 // registered in the inner circle yet.
@@ -357,5 +371,61 @@ func TestHandlerGroupIgnored(t *testing.T) {
 
 	if len(butler.replied) != 0 {
 		t.Fatalf("group message reached butler %d times, want 0", len(butler.replied))
+	}
+}
+
+func TestHandlerPerVIPOverrideEngagesWhenGlobalOff(t *testing.T) {
+	msgr := &fakeMessenger{}
+	vip := types.JID{User: "6281234567890", Server: "s.whatsapp.net"}
+	butler := &fakeButler{enabled: false, overrides: map[string]bool{vip.String(): true}}
+	h := newTestHandler(msgr, butler)
+
+	h.OnEvent(hmsg(vip, vip, false, "hello"))
+	h.Close()
+
+	if len(butler.replied) != 1 {
+		t.Fatalf("per-VIP-woken butler replied %d times, want 1", len(butler.replied))
+	}
+}
+
+func TestHandlerPerVIPOverrideIgnoredWhenGlobalOn(t *testing.T) {
+	msgr := &fakeMessenger{}
+	vip := types.JID{User: "6281234567890", Server: "s.whatsapp.net"}
+	butler := &fakeButler{enabled: true, overrides: map[string]bool{vip.String(): false}}
+	h := newTestHandler(msgr, butler)
+
+	h.OnEvent(hmsg(vip, vip, false, "hello"))
+
+	if len(butler.replied) != 0 {
+		t.Fatalf("per-VIP-silenced butler replied %d times, want 0", len(butler.replied))
+	}
+	if len(msgr.sentTo) != 0 {
+		t.Fatalf("sent %d messages, want 0", len(msgr.sentTo))
+	}
+}
+
+func TestHandlerRateLimitAlertsMasterAndApologizes(t *testing.T) {
+	msgr := &fakeMessenger{}
+	vip := types.JID{User: "6281234567890", Server: "s.whatsapp.net"}
+	butler := &fakeButler{
+		enabled:  true,
+		replyErr: fmt.Errorf("failed to execute model: %w", ollama.ErrRateLimited),
+	}
+	h := newTestHandler(msgr, butler)
+
+	h.OnEvent(hmsg(vip, vip, false, "hello"))
+	h.Close()
+
+	if len(butler.replied) != 0 {
+		t.Fatalf("rate-limited butler replied %d times, want 0", len(butler.replied))
+	}
+	if msgr.sentSelf != 1 {
+		t.Fatalf("master alerts = %d, want 1", msgr.sentSelf)
+	}
+	if len(msgr.sentTo) != 1 {
+		t.Fatalf("apologies sent = %d, want 1", len(msgr.sentTo))
+	}
+	if msgr.sentTo[0] != vip {
+		t.Errorf("apology sent to %v, want sender %v", msgr.sentTo[0], vip)
 	}
 }

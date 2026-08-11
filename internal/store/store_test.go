@@ -241,3 +241,100 @@ func TestAllRecentMessagesAcrossChats(t *testing.T) {
 		t.Errorf("limited window = %q..%q, want the newest 3 across chats", limited[0].Content, limited[2].Content)
 	}
 }
+
+func TestVIPStoreStatusLifecycle(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	jid := "6281234567890@s.whatsapp.net"
+
+	if on, ok, err := st.Enabled(jid); err != nil || ok {
+		t.Fatalf("Enabled before any override = %v/%v, want (false,false,nil)", on, ok)
+	}
+
+	if err := st.SetEnabled(jid, true); err != nil {
+		t.Fatalf("SetEnabled(true): %v", err)
+	}
+	if on, ok, err := st.Enabled(jid); err != nil || !ok || !on {
+		t.Fatalf("Enabled after on = %v/%v/%v, want (true,true,nil)", on, ok, err)
+	}
+
+	if err := st.SetEnabled(jid, false); err != nil {
+		t.Fatalf("SetEnabled(false): %v", err)
+	}
+	if on, ok, err := st.Enabled(jid); err != nil || !ok || on {
+		t.Fatalf("Enabled after off = %v/%v/%v, want (false,true,nil)", on, ok, err)
+	}
+
+	if err := st.ClearEnabled(jid); err != nil {
+		t.Fatalf("ClearEnabled: %v", err)
+	}
+	if on, ok, err := st.Enabled(jid); err != nil || ok {
+		t.Fatalf("Enabled after ClearEnabled = %v/%v/%v, want (false,false,nil)", on, ok, err)
+	}
+
+	for _, on := range []bool{true, false} {
+		if err := st.SetEnabled(jid, on); err != nil {
+			t.Fatalf("SetEnabled(%v): %v", on, err)
+		}
+	}
+	if err := st.ClearAllEnabled(); err != nil {
+		t.Fatalf("ClearAllEnabled: %v", err)
+	}
+	if on, ok, err := st.Enabled(jid); err != nil || ok {
+		t.Fatalf("Enabled after ClearAllEnabled = %v/%v/%v, want (false,false,nil)", on, ok, err)
+	}
+}
+
+func TestVIPStoreStatusCascadeOnDelete(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	jid := "6281234567890@s.whatsapp.net"
+	if err := st.Add(VIPEntry{JID: jid, Name: "Test", Relation: "Friend"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := st.SetEnabled(jid, true); err != nil {
+		t.Fatalf("SetEnabled: %v", err)
+	}
+
+	if err := st.Delete(jid); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if on, ok, err := st.Enabled(jid); err != nil || ok {
+		t.Fatalf("status survived Delete: %v/%v/%v, want (false,false,nil)", on, ok, err)
+	}
+}
+
+func TestVIPStoreStatusCascadeOnClearAll(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	for _, e := range []VIPEntry{
+		{JID: "6281234567890@s.whatsapp.net", Name: "Test", Relation: "Friend"},
+		{JID: "6289999999999@s.whatsapp.net", Name: "Second", Relation: "Colleague"},
+	} {
+		if err := st.Add(e); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		if err := st.SetEnabled(e.JID, true); err != nil {
+			t.Fatalf("SetEnabled: %v", err)
+		}
+	}
+
+	if err := st.ClearAll(); err != nil {
+		t.Fatalf("ClearAll: %v", err)
+	}
+	if on, ok, err := st.Enabled("6281234567890@s.whatsapp.net"); err != nil || ok {
+		t.Fatalf("status survived ClearAll: %v/%v/%v, want (false,false,nil)", on, ok, err)
+	}
+}

@@ -126,6 +126,13 @@ Clark is managed via a set of simple commands.
     ```sh
     ./clark toggle
     ```
+    A bare `toggle` flips everyone's status. You can set one person's personal
+    status, or everyone's explicitly:
+    ```sh
+    ./clark toggle -r "Tiara" -set on     # wake Tiara personally (others unchanged)
+    ./clark toggle -all off               # silence everyone (wipes personal overrides)
+    ```
+    `-r`/`-recipient` and `-all` are mutually exclusive; `-set` takes `on`/`off`.
 
 -   **`view`**: Displays the current assistant settings, including name, model, status, context, the VIP list, and each VIP's granted tools.
     ```sh
@@ -162,8 +169,11 @@ conversing — they are handled instantly without calling the model and are
 
 | What you type | What it does |
 | --- | --- |
-| `wake up buddy` / `wake clark` | Turn Clark on |
-| `silence clark` / `sleep clark` | Turn Clark off |
+| `wake up buddy` / `wake clark` | Turn Clark on for everyone (wipes personal overrides) |
+| `silence clark` / `sleep clark` | Turn Clark off for everyone (wipes personal overrides) |
+| `wake clark for <name>` / `for <name> wake clark` | Turn Clark on just for that person |
+| `silence <name>` / `sleep clark for <name>` | Turn Clark off just for that person |
+| `wake clark for everyone` / `silence clark for all` | Reset everyone to one status |
 | `thinking mode on` / `thinking mode off` / `toggle thinking` | Toggle reasoning mode |
 | `set history limit to 10` | How many past messages Clark reviews each turn |
 | `set my context to …` | Update your context |
@@ -174,6 +184,19 @@ conversing — they are handled instantly without calling the model and are
 | `grant <name> access to <tool>` / `revoke <name> access to <tool>` | Manage a VIP's tools |
 | `show me everything` | Full report (status, context, VIPs, tools) |
 | `help` / `tool guidance` / `show commands` | This manual, including the tools |
+
+**Status is layered.** There is one *default* status for everyone plus an
+optional *personal* status per VIP. A personal carve-out wins over the default;
+the default applies to everyone without one. Global commands (`wake up buddy`,
+`silence clark`, `toggle`, `set_status` without a recipient) set the default and
+wipe every personal override, so they always restore a single known state. Per-VIP
+commands (or `set_status` with a `recipient`) touch only that person. Unknown
+names are not treated as per-VIP targets — `wake up buddy` stays a global command.
+
+**Rate-limit failover.** If the model reports an HTTP 429 rate limit, Clark
+immediately turns himself off (persisted, personal overrides wiped), messages you
+with a notice in your own chat, and apologizes to the person he was answering —
+so he never keeps burning failed requests. Say `wake up buddy` to bring him back.
 
 ## Run with Docker
 
@@ -226,11 +249,11 @@ and he will suggest or invoke one whenever it genuinely helps:
 | `web_search` | VIPs + Master | Searches the web via Tavily and returns sourced snippets (needs `TAVILY_API_KEY`) |
 | `view_history` | VIPs + Master | Shows the stored conversation for a chat (full, or the most recent N). A VIP sees their own chat; the Master can view any chat |
 | `send_message` | Master only | Delivers a WhatsApp message to a VIP by name or number |
-| `set_status` | Master only | Turns Clark on or off |
+| `set_status` | Master only | Turns Clark on or off (with a `recipient`, only that VIP's personal status) |
 | `set_context` | Master only | Updates the master context |
 | `add_vip` / `delete_vip` | Master only | Manages the inner circle |
 | `set_access` | Master only | Grants/revokes a tool for a VIP |
-| `get_state` | Master only | Reports status, context, inner circle, and tools |
+| `get_state` | Master only | Reports status, context, inner circle, each VIP's effective status, and tools |
 | `view_all_history` | Master only | Shows messages from every conversation (full, or the most recent N across all chats) |
 | `set_history_limit` | Master only | Changes how many recent messages are injected every turn |
 

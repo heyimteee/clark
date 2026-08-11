@@ -29,6 +29,14 @@ func (s *Service) statusOffReply() string {
 	return "*Status Updated*\n\n" + s.name + " is now *Off*, Master. He will still answer you here."
 }
 
+func (s *Service) perVIPStatusOnReply(recipient string) string {
+	return "*Status Updated*\n\n_" + recipient + "_ may now reach me personally, Master."
+}
+
+func (s *Service) perVIPStatusOffReply(recipient string) string {
+	return "*Status Updated*\n\n_" + recipient + "_ has been personally silenced, Master."
+}
+
 // fastPath handles deterministic commands synchronously: hardcoded views and,
 // for the Master only, mutations of status, context, the inner circle, and
 // tool access. Returns a ready-to-send message and true when the request was
@@ -64,6 +72,25 @@ func (s *Service) fastPath(senderJID, userMsg string, isSelf bool) (string, bool
 			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
 		}
 		return historyLimitReply(limit), true, nil
+
+	case s.isPerVIPStatusCommand(userMsg):
+		recipient, on, everyone, _ := s.parsePerVIPStatusCommand(userMsg)
+		if everyone {
+			if err := s.SetStatus(on); err != nil {
+				return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+			}
+			if on {
+				return s.statusOnReply(), true, nil
+			}
+			return s.statusOffReply(), true, nil
+		}
+		if err := s.SetVIPStatus(recipient, on); err != nil {
+			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+		}
+		if on {
+			return s.perVIPStatusOnReply(recipient), true, nil
+		}
+		return s.perVIPStatusOffReply(recipient), true, nil
 
 	case isStatusCommand(userMsg):
 		if err := s.applyStatusCommand(userMsg); err != nil {
@@ -270,6 +297,55 @@ func parseThinkingCommand(userMsg string) (on, toggle, ok bool) {
 
 var statusCmdRe = regexp.MustCompile(`(?i)\b(on|off|online|offline|awake)\b`)
 
+// perVIPStatusRes matches per-VIP status requests. The captured group names
+// the target (a VIP, or "everyone"/"all" for a global command).
+var perVIPStatusRes = []struct {
+	re *regexp.Regexp
+	on bool
+}{
+	{regexp.MustCompile(`(?i)(?:wake|wake\s+up)\s+(?:clark\s+)?for\s+([^\s].+)$`), true},
+	{regexp.MustCompile(`(?i)(?:silence|silent|sleep|shut)\s+(?:clark\s+)?for\s+([^\s].+)$`), false},
+	{regexp.MustCompile(`(?i)for\s+([^\s].+)\s+(?:wake|wake\s+up)\s+clark\s*$`), true},
+	{regexp.MustCompile(`(?i)for\s+([^\s].+)\s+(?:silence|silent|sleep|shut)\s+clark\s*$`), false},
+	{regexp.MustCompile(`(?i)\bwake\s+up\s+([^\s].+)$`), true},
+	{regexp.MustCompile(`(?i)\bsilence\s+([^\s].+)$`), false},
+}
+
+// isPerVIPStatusCommand reports whether the Master is commanding a per-VIP or
+// everyone status change rather than clark's global status.
+func (s *Service) isPerVIPStatusCommand(userMsg string) bool {
+	_, _, _, ok := s.parsePerVIPStatusCommand(userMsg)
+	return ok
+}
+
+// parsePerVIPStatusCommand extracts a per-VIP status request. A target of
+// "everyone"/"all" reports everyone=true so the caller can set the global
+// status. Messages naming an unknown target are not consumed so the generic
+// status or model path can handle them ("wake up buddy" stays global).
+func (s *Service) parsePerVIPStatusCommand(userMsg string) (recipient string, on bool, everyone bool, ok bool) {
+	m := strings.ToLower(strings.TrimSpace(userMsg))
+	for _, c := range perVIPStatusRes {
+		subm := c.re.FindStringSubmatch(m)
+		if subm == nil {
+			continue
+		}
+		target := strings.TrimSpace(subm[1])
+		if isEveryoneTarget(target) {
+			return "", c.on, true, true
+		}
+		if _, found := s.vip.Lookup(target); !found {
+			return "", false, false, false
+		}
+		return target, c.on, false, true
+	}
+	return "", false, false, false
+}
+
+func isEveryoneTarget(target string) bool {
+	t := strings.TrimSpace(strings.ToLower(target))
+	return t == "everyone" || t == "all"
+}
+
 // isStatusCommand reports whether the message commands a status change.
 func isStatusCommand(userMsg string) bool {
 	m := strings.ToLower(userMsg)
@@ -442,8 +518,11 @@ func isGuidanceCommand(userMsg string) bool {
 func (s *Service) guidanceText() string {
 	return "*" + s.name + "'s Manual*\n\n" +
 		"*Hardcoded commands* (Master's own chat only):\n" +
-		"- `wake up buddy` / `wake clark` — turn me on\n" +
-		"- `silence clark` / `sleep clark` — turn me off\n" +
+		"- `wake up buddy` / `wake clark` — turn me on for everyone\n" +
+		"- `silence clark` / `sleep clark` — turn me off for everyone\n" +
+		"- `wake clark for <name>` — turn me on just for that person\n" +
+		"- `silence <name>` — turn me off just for that person\n" +
+		"- `wake clark for everyone` / `silence clark for all` — reset everyone to one status\n" +
 		"- `thinking mode on` / `thinking mode off` — toggle reasoning\n" +
 		"- `set history limit to 10` — how many past messages I review each turn\n" +
 		"- `set my context to ...` — update your context\n" +

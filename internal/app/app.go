@@ -233,14 +233,49 @@ func (a *App) Context(args []string) error {
 	return a.ast.SetContext(context)
 }
 
-// Toggle flips the assistant's enabled status.
-func (a *App) Toggle() error {
+// Toggle flips the assistant's enabled status. Bare usage flips everyone;
+// -r <name|number> -set on|off sets one VIP's personal status; -all on|off
+// sets everyone explicitly and clears personal statuses.
+func (a *App) Toggle(args []string) error {
 	available, err := a.ast.IsInitialized()
 	if err != nil {
 		return err
 	}
 	if !available {
 		return fmt.Errorf("No assistant is initiated Sir. Do 'clark init' first.")
+	}
+
+	fs := flag.NewFlagSet("toggle", flag.ContinueOnError)
+	var recipient string
+	var set string
+	var all string
+
+	fs.StringVar(&recipient, "recipient", "", "VIP name or number to toggle individually")
+	fs.StringVar(&recipient, "r", "", "VIP name or number (shorthand)")
+	fs.StringVar(&set, "set", "", "on or off")
+	fs.StringVar(&all, "all", "", "Set everyone explicitly to on or off")
+
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parsing args: %w", err)
+	}
+
+	if recipient != "" && all != "" {
+		return fmt.Errorf("cannot mix -r with -all")
+	}
+	if all != "" {
+		if all != "on" && all != "off" {
+			return fmt.Errorf("invalid -all %q. Use 'on' or 'off'", all)
+		}
+		return a.ast.SetStatus(all == "on")
+	}
+	if recipient != "" {
+		if set != "on" && set != "off" {
+			return fmt.Errorf("usage: clark toggle -r <name|number> -set on|off")
+		}
+		return a.ast.SetVIPStatus(recipient, set == "on")
+	}
+	if set != "" {
+		return fmt.Errorf("usage: clark toggle -set requires -r <name|number>")
 	}
 
 	return a.ast.Toggle()
@@ -304,7 +339,7 @@ func (a *App) View() error {
 	logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "Current VIP list")
 	for jid, name := range a.ast.VIPList() {
 		grants, _, _ := a.ast.AccessFor(jid)
-		logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "VIP entry", "jid", jid, "relation", name, "tools", grants)
+		logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "VIP entry", "jid", jid, "relation", name, "status", a.ast.EnabledFor(jid), "tools", grants)
 	}
 
 	return nil
@@ -391,7 +426,7 @@ func (a *App) Help() error {
 		"run", "clark run",
 		"vip", "clark vip -a <number,name,relation> | -d <number> | -clear",
 		"ctx", "clark ctx -c <context> | -clear",
-		"toggle", "clark toggle",
+		"toggle", "clark toggle | -r <name|number> -set on|off | -all on|off",
 		"think", "clark think on|off",
 		"history", "clark history <N>",
 		"view", "clark view",

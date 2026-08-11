@@ -2,11 +2,13 @@ package whatsapp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/heyimteee/clark/internal/logging"
+	"github.com/heyimteee/clark/internal/ollama"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -19,6 +21,9 @@ type Butler interface {
 	Reply(ctx context.Context, senderJID, text string, isSelf bool) (string, error)
 	Relation(jid string) (string, bool)
 	Enabled() bool
+	// EnabledFor reports whether a specific sender may reach clark. A per-sender
+	// status override wins; otherwise the global status applies.
+	EnabledFor(jid string) bool
 }
 
 // Notifier raises attention for urgent commands.
@@ -122,7 +127,7 @@ func (h *Handler) OnEvent(evt any) {
 	// Master is registered as a VIP), so a fresh install can be bootstrapped
 	// with wake/context/VIP commands. Everyone else must be an enabled VIP in a
 	// private chat.
-	if !isSelf && (!h.butler.Enabled() || !isVIP || v.Info.IsGroup) {
+	if !isSelf && (!h.butler.EnabledFor(senderStr) || !isVIP || v.Info.IsGroup) {
 		return
 	}
 
@@ -173,6 +178,9 @@ func (h *Handler) OnEvent(evt any) {
 const (
 	ackMaster      = "_One moment, Master..._"
 	apologyMessage = "_My apologies, but I am experiencing technical difficulties._ Please try again later."
+	// rateLimitMasterMessage is delivered to the Master's own chat when the
+	// model throttles the request; clark switches himself off at the same time.
+	rateLimitMasterMessage = "🚨 Attention Master!\n\nI have been silenced: the model is rate-limiting my requests. I have turned myself *Off* to stay reliable. Say _wake up buddy_ when you need me again."
 )
 
 // inbound is one message awaiting a slow, model-backed reply.
@@ -239,7 +247,14 @@ func (d *dispatcher) worker(ch <-chan inbound) {
 func (d *dispatcher) process(in inbound) {
 	reply, err := d.butler.Reply(d.ctx, in.senderJID, in.userMsg, in.isSelf)
 	if err != nil {
-		logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "AI response error", "error", err)
+		if errors.Is(err, ollama.ErrRateLimited) {
+			logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Model rate limited; master alerted and clark switched off", "error", err)
+			if serr := d.msgr.SendSelf(d.ctx, rateLimitMasterMessage); serr != nil {
+				logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to alert master about rate limit", "error", serr)
+			}
+		} else {
+			logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "AI response error", "error", err)
+		}
 		if err := d.msgr.Send(d.ctx, in.sender, apologyMessage); err != nil {
 			logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to send apology", "to", in.sender.User, "error", err)
 		}

@@ -13,15 +13,26 @@ import (
 func (s *Service) registerManagementTools() {
 	s.tools.RegisterFunc(
 		"set_status",
-		"Turn clark on or off. Only the Master may use this.",
+		"Turn clark on or off. With a recipient, only that VIP's personal status changes; without one, clark's status changes for everyone. Only the Master may use this.",
 		toolParams(map[string]any{
-			"on": map[string]any{"type": "boolean", "description": "true to wake clark, false to silence him"},
+			"on":        map[string]any{"type": "boolean", "description": "true to wake clark, false to silence him"},
+			"recipient": map[string]any{"type": "string", "description": "Optional: a VIP's name or phone number. When set, only that VIP's status changes."},
 		}, "on"),
 		func(ctx context.Context, args map[string]any) (string, error) {
 			if err := masterOnly(ctx); err != nil {
 				return "", err
 			}
 			on := tools.BoolArg(args, "on")
+			recipient := tools.StringArg(args, "recipient")
+			if recipient != "" {
+				if err := s.SetVIPStatus(recipient, on); err != nil {
+					return "", err
+				}
+				if on {
+					return "Understood, Master. " + recipient + " is now personally woken.", nil
+				}
+				return "Understood, Master. " + recipient + " is now personally silenced.", nil
+			}
 			if err := s.SetStatus(on); err != nil {
 				return "", err
 			}
@@ -131,7 +142,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"get_state",
-		"Report clark's current status, context, inner circle, each VIP's granted tools, and every available tool. Only the Master may use this.",
+		"Report clark's current status, context, inner circle, each VIP's effective status and granted tools, and every available tool. Only the Master may use this.",
 		toolParams(nil),
 		func(ctx context.Context, args map[string]any) (string, error) {
 			if err := masterOnly(ctx); err != nil {
@@ -143,7 +154,11 @@ func (s *Service) registerManagementTools() {
 			var vipLines []string
 			for jid, label := range s.vip.List() {
 				grants, _, _ := s.AccessFor(jid)
-				vipLines = append(vipLines, fmt.Sprintf("%s (%s): %s", label, jid, joinLines(grants)))
+				state := statusLabel(s.EnabledFor(jid))
+				if _, hasOverride := s.vip.IsEnabled(jid); hasOverride {
+					state += " (personal)"
+				}
+				vipLines = append(vipLines, fmt.Sprintf("%s (%s): %s [%s]", label, jid, state, joinLines(grants)))
 			}
 			sort.Strings(vipLines)
 			if len(vipLines) == 0 {

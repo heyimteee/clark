@@ -53,7 +53,7 @@ func main() {
 	case "ctx":
 		err = a.Context(os.Args[2:])
 	case "toggle":
-		err = a.Toggle()
+		err = a.Toggle(os.Args[2:])
 	case "think":
 		err = a.Think(os.Args[2:])
 	case "history":

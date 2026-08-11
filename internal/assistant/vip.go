@@ -16,6 +16,7 @@ type VIP struct {
 	store   store.VIPStore
 	entries map[string]string
 	byName  map[string]string
+	enabled map[string]bool
 }
 
 // NewVIP returns an empty VIP backed by the given store.
@@ -24,6 +25,7 @@ func NewVIP(s store.VIPStore) *VIP {
 		store:   s,
 		entries: make(map[string]string),
 		byName:  make(map[string]string),
+		enabled: make(map[string]bool),
 	}
 }
 
@@ -36,11 +38,20 @@ func (v *VIP) Load() error {
 
 	v.entries = make(map[string]string, len(entries))
 	v.byName = make(map[string]string, len(entries))
+	v.enabled = make(map[string]bool, len(entries))
 	for _, e := range entries {
 		label := fmt.Sprintf("%v (%v)", e.Name, e.Relation)
 		v.entries[e.JID] = label
 		v.byName[strings.ToLower(e.Name)] = e.JID
 		v.byName[strings.ToLower(label)] = e.JID
+
+		on, ok, err := v.store.Enabled(e.JID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			v.enabled[e.JID] = on
+		}
 	}
 
 	if len(v.entries) < 1 {
@@ -98,6 +109,52 @@ func (v *VIP) list() string {
 		return "None"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// IsEnabled reports a VIP's status override. hasOverride is false when the
+// VIP follows the global status instead of a personal carve-out.
+func (v *VIP) IsEnabled(jid string) (on bool, hasOverride bool) {
+	on, ok := v.enabled[jid]
+	return on, ok
+}
+
+// SetEnabled persists a VIP's status override and refreshes the cache.
+func (v *VIP) SetEnabled(jid string, on bool) error {
+	if _, ok := v.entries[jid]; !ok {
+		return fmt.Errorf("no VIP found matching %q", jid)
+	}
+	if err := v.store.SetEnabled(jid, on); err != nil {
+		return err
+	}
+	v.enabled[jid] = on
+	return nil
+}
+
+// EnabledMap returns every VIP's status override keyed by jid.
+func (v *VIP) EnabledMap() map[string]bool {
+	out := make(map[string]bool, len(v.enabled))
+	for jid, on := range v.enabled {
+		out[jid] = on
+	}
+	return out
+}
+
+// ClearEnabled removes a VIP's status override and refreshes the cache.
+func (v *VIP) ClearEnabled(jid string) error {
+	if err := v.store.ClearEnabled(jid); err != nil {
+		return err
+	}
+	delete(v.enabled, jid)
+	return nil
+}
+
+// ClearAllEnabled removes every VIP's status override and refreshes the cache.
+func (v *VIP) ClearAllEnabled() error {
+	if err := v.store.ClearAllEnabled(); err != nil {
+		return err
+	}
+	v.enabled = make(map[string]bool)
+	return nil
 }
 
 // Add parses and persists a "[number], [name], [relation]" entry, then reloads.

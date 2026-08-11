@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -85,6 +86,10 @@ type chatResponse struct {
 	} `json:"message"`
 }
 
+// ErrRateLimited marks a model reply refused because the server is throttling
+// requests (HTTP 429). Callers may use errors.Is to trigger failover behaviour.
+var ErrRateLimited = errors.New("ollama rate limited")
+
 // Chat sends the messages and returns the model's reply, including any tool calls.
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (*ChatResult, error) {
 	reqBody, err := json.Marshal(chatRequest{
@@ -117,6 +122,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (*C
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, fmt.Errorf("%w: %s", ErrRateLimited, strings.TrimSpace(string(respBody)))
+		}
 		return nil, fmt.Errorf("ollama returned %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 

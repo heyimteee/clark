@@ -52,10 +52,13 @@ func (s *Store) Delete(jid string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM vip_access WHERE jid = ?`, jid); err != nil {
 		return fmt.Errorf("fail to delete access: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM vip_status WHERE jid = ?`, jid); err != nil {
+		return fmt.Errorf("fail to delete status: %w", err)
+	}
 	return nil
 }
 
-// ClearAll removes every VIP entry and their access grants.
+// ClearAll removes every VIP entry, their access grants, and their status overrides.
 func (s *Store) ClearAll() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -65,6 +68,9 @@ func (s *Store) ClearAll() error {
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM vip_access`); err != nil {
 		return fmt.Errorf("fail to clear vip access: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM vip_status`); err != nil {
+		return fmt.Errorf("fail to clear vip status: %w", err)
 	}
 	return nil
 }

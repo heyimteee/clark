@@ -38,12 +38,16 @@ type Settings interface {
 	Set(key, value string) error
 }
 
-// VIPStore persists the inner-circle list.
+// VIPStore persists the inner-circle list and each VIP's status override.
 type VIPStore interface {
 	All() ([]VIPEntry, error)
 	Add(entry VIPEntry) error
 	Delete(jid string) error
 	ClearAll() error
+	SetEnabled(jid string, on bool) error
+	Enabled(jid string) (on bool, ok bool, err error)
+	ClearEnabled(jid string) error
+	ClearAllEnabled() error
 }
 
 // AccessStore persists each VIP's granted tool set.
@@ -103,6 +107,10 @@ func (s *Store) migrate() error {
 			jid TEXT PRIMARY KEY,
 			name TEXT,
 			relation TEXT
+		);`},
+		{"vip_status", `CREATE TABLE IF NOT EXISTS vip_status (
+			jid TEXT PRIMARY KEY,
+			enabled INTEGER NOT NULL
 		);`},
 		{"vip_access", `CREATE TABLE IF NOT EXISTS vip_access (
 			jid TEXT PRIMARY KEY,

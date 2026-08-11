@@ -4,6 +4,7 @@ package assistant
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -228,6 +229,15 @@ func (s *Service) Context() string { return s.context }
 // Enabled reports whether the assistant accepts and answers messages.
 func (s *Service) Enabled() bool { return s.status }
 
+// EnabledFor reports whether clark answers a given sender. A per-VIP status
+// override wins; otherwise the global status applies.
+func (s *Service) EnabledFor(jid string) bool {
+	if on, ok := s.vip.IsEnabled(jid); ok {
+		return on
+	}
+	return s.status
+}
+
 // Tools returns the shared tool registry so transports can register capabilities.
 func (s *Service) Tools() *tools.Registry { return s.tools }
 
@@ -317,14 +327,33 @@ func (s *Service) Toggle() error {
 	return s.SetStatus(!statusBool)
 }
 
-// SetStatus enables or disables the assistant and persists the choice.
+// SetStatus enables or disables the assistant and persists the choice. Setting
+// the global status resets every per-VIP override: a global command speaks for
+// the whole butler, so personal carve-outs are wiped.
 func (s *Service) SetStatus(on bool) error {
 	if err := s.settings.Set("status", fmt.Sprintf("%v", on)); err != nil {
+		return err
+	}
+	if err := s.vip.ClearAllEnabled(); err != nil {
 		return err
 	}
 
 	s.status = on
 	logging.Log("CLARK", logging.SevInfo, "STATUS", "Assistant status changed", "enabled", s.status)
+	return nil
+}
+
+// SetVIPStatus sets a per-VIP status override for a named or numbered VIP.
+// The global status still applies to everyone else.
+func (s *Service) SetVIPStatus(recipient string, on bool) error {
+	jid, ok := s.vip.Lookup(recipient)
+	if !ok {
+		return fmt.Errorf("no VIP found matching %q", recipient)
+	}
+	if err := s.vip.SetEnabled(jid, on); err != nil {
+		return err
+	}
+	logging.Log("CLARK", logging.SevInfo, "STATUS", "VIP status changed", "jid", jid, "enabled", on)
 	return nil
 }
 
@@ -415,7 +444,7 @@ func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf b
 			it.messages = append(it.messages, ollama.Message{Role: "user", Content: userMsg})
 			reply, pending, err := s.runToolLoop(ctx, it.messages, userMsg, s.toolsForSender(senderJID, it.isSelf), it.isSelf)
 			if err != nil {
-				return "", err
+				return "", s.handleModelError(err)
 			}
 			if pending != nil {
 				s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: it.isSelf, messages: pending})
@@ -448,7 +477,7 @@ func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf b
 		}
 	}
 
-	systemPrompt, err := s.renderPrompt(s.name, s.context, relation, describeTools(available), task)
+	systemPrompt, err := s.renderPrompt(s.name, s.context, statusLabel(s.EnabledFor(senderJID)), relation, describeTools(available), task)
 	if err != nil {
 		return "", err
 	}
@@ -464,7 +493,7 @@ func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf b
 
 	reply, pending, err := s.runToolLoop(ctx, messages, userMsg, available, isSelf)
 	if err != nil {
-		return "", fmt.Errorf("failed to execute model: %w", err)
+		return "", fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
 	}
 
 	logging.Log("OLLAMA", logging.SevInfo, "RESPONSE", "Generation completed",
@@ -503,13 +532,29 @@ type promptData struct {
 	ExceptionVisitors string
 }
 
+// handleModelError reacts to a failed model call. A rate limit immediately
+// switches clark off (persisted, per-VIP overrides wiped) and is surfaced as
+// ollama.ErrRateLimited so the transport can alert the Master. Any other
+// failure passes through untouched.
+func (s *Service) handleModelError(err error) error {
+	if errors.Is(err, ollama.ErrRateLimited) {
+		if serr := s.SetStatus(false); serr != nil {
+			logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Failed to switch clark off after rate limit", "error", serr)
+		}
+		logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Model rate limited; clark switched off", "error", err)
+		return fmt.Errorf("%w: %s", ollama.ErrRateLimited, err.Error())
+	}
+	return err
+}
+
 // renderPrompt fills the prompt template with the current turn's context.
-func (s *Service) renderPrompt(name, masterStatus, visitor, toolsList, task string) (string, error) {
+// butlerStatus is the effective status for this sender (override or global).
+func (s *Service) renderPrompt(name, masterStatus, butlerStatus, visitor, toolsList, task string) (string, error) {
 	data := promptData{
 		ButlerName:        name,
 		MasterName:        s.masterName,
 		MasterStatus:      masterStatus,
-		ButlerStatus:      statusLabel(s.status),
+		ButlerStatus:      butlerStatus,
 		InnerCircle:       s.vip.list(),
 		Visitor:           visitor,
 		Tools:             toolsList,
@@ -897,7 +942,13 @@ func (s *Service) viewVIPsText() string {
 		if len(grants) > 0 {
 			toolsList = strings.Join(grants, ", ")
 		}
-		b.WriteString("- " + vips[jid] + " (`" + jid + "`): `" + toolsList + "`\n")
+		state := statusLabel(s.EnabledFor(jid))
+		if _, hasOverride := s.vip.IsEnabled(jid); hasOverride {
+			state += " (personal)"
+		} else {
+			state += " (default)"
+		}
+		b.WriteString("- " + vips[jid] + " (`" + jid + "`) · *" + state + "* — `" + toolsList + "`\n")
 	}
 	return b.String()
 }
