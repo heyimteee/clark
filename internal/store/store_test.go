@@ -60,6 +60,57 @@ func TestSettingsNotInitialized(t *testing.T) {
 	}
 }
 
+func TestSettingsExtraKeysStillInitialized(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	if err := st.InitDefaults(); err != nil {
+		t.Fatalf("InitDefaults: %v", err)
+	}
+
+	// Optional settings written by later features (thinking mode, history
+	// limit) grow the table beyond the seeded defaults; that must not make an
+	// initialized database look uninitialized.
+	for _, key := range []string{"think", "history_limit"} {
+		if err := st.Set(key, "false"); err != nil {
+			t.Fatalf("Set(%s): %v", key, err)
+		}
+	}
+	ok, err := st.IsInitialized()
+	if err != nil {
+		t.Fatalf("IsInitialized: %v", err)
+	}
+	if !ok {
+		t.Fatal("IsInitialized = false after extra settings were added")
+	}
+}
+
+func TestSettingsPartialInitNotInitialized(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	// Only one of the required defaults present.
+	if err := st.Set("name", "Clark"); err != nil {
+		t.Fatalf("Set(name): %v", err)
+	}
+	if err := st.Set("think", "false"); err != nil {
+		t.Fatalf("Set(think): %v", err)
+	}
+	ok, err := st.IsInitialized()
+	if err != nil {
+		t.Fatalf("IsInitialized: %v", err)
+	}
+	if ok {
+		t.Fatal("IsInitialized = true when required defaults are missing")
+	}
+}
+
 func TestVIPStoreCRUD(t *testing.T) {
 	st, err := Open(":memory:")
 	if err != nil {

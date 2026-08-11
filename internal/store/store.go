@@ -143,7 +143,8 @@ func (s *Store) IsInitialized() (bool, error) {
 	defer cancel()
 
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM assistant_setting`).Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM assistant_setting WHERE key IN ('name', 'status', 'context')`).Scan(&count); err != nil {
 		return false, fmt.Errorf("fail to load table <assistant_setting>: %w", err)
 	}
 	return count == 3, nil
