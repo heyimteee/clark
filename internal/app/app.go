@@ -151,19 +151,31 @@ func (a *App) VIP(args []string) error {
 	fs := flag.NewFlagSet("vip", flag.ContinueOnError)
 	var addTarget string
 	var delTarget string
+	var clear bool
 
 	fs.StringVar(&addTarget, "add", "", "Add New VIP")
 	fs.StringVar(&addTarget, "a", "", "Add New VIP (shorthand)")
 	fs.StringVar(&delTarget, "delete", "", "Delete VIP")
 	fs.StringVar(&delTarget, "d", "", "Delete VIP (shorthand)")
+	fs.BoolVar(&clear, "clear", false, "Empty the entire VIP list")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parsing args: %w", err)
 	}
 
-	if addTarget == "" && delTarget == "" {
+	if addTarget == "" && delTarget == "" && !clear {
 		fs.Usage()
 		return fmt.Errorf("empty input")
+	}
+
+	if clear {
+		if addTarget != "" || delTarget != "" {
+			return fmt.Errorf("cannot mix -clear with -add or -delete")
+		}
+		if err := a.ast.ClearVIPs(); err != nil {
+			return fmt.Errorf("clearing VIP list: %w", err)
+		}
+		logging.Log("MEMORY", logging.SevInfo, "VIPCLEAR", "Inner circle emptied")
 	}
 
 	if addTarget != "" {
@@ -200,12 +212,21 @@ func (a *App) Context(args []string) error {
 
 	fs := flag.NewFlagSet("ctx", flag.ContinueOnError)
 	var context string
+	var clear bool
 
 	fs.StringVar(&context, "change", "", "Change Context")
 	fs.StringVar(&context, "c", "", "Change Context (Shorthand)")
+	fs.BoolVar(&clear, "clear", false, "Empty the master context")
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if clear {
+		if context != "" {
+			return fmt.Errorf("cannot mix -clear with -change")
+		}
+		return a.ast.SetContext("")
 	}
 
 	return a.ast.SetContext(context)
@@ -319,5 +340,18 @@ func (a *App) Access(args []string) error {
 
 	logging.Log("MEMORY", logging.SevInfo, "ACCESS", "Access updated",
 		"jid", jid, "tool", tool, "enabled", enabled, "grants", grants)
+	return nil
+}
+
+// Help prints the CLI usage.
+func (a *App) Help() error {
+	logging.Log("CLARK", logging.SevInfo, "HELP", "clark commands",
+		"init", "clark init",
+		"run", "clark run",
+		"vip", "clark vip -a <number,name,relation> | -d <number> | -clear",
+		"ctx", "clark ctx -c <context> | -clear",
+		"toggle", "clark toggle",
+		"view", "clark view",
+		"access", "clark access -r <name|number> -tool <tool> -set on|off")
 	return nil
 }

@@ -161,6 +161,14 @@ func (v *VIP) Delete(input string) error {
 	return v.Load()
 }
 
+// Clear empties the entire inner circle and reloads.
+func (v *VIP) Clear() error {
+	if err := v.store.ClearAll(); err != nil {
+		return err
+	}
+	return v.Load()
+}
+
 func sanitizeJID(input string) (string, error) {
 	id := strings.Split(input, "@")[0]
 	id = regexp.MustCompile(`[^0-9]`).ReplaceAllString(id, "")

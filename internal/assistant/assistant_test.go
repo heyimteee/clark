@@ -837,6 +837,111 @@ func TestServiceFastPathWakeUpBuddy(t *testing.T) {
 	}
 }
 
+func TestServiceFastPathClearContext(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "628111@s.whatsapp.net"
+
+	if _, err := s.Reply(context.Background(), jid, "set my context to in the garden", true); err != nil {
+		t.Fatalf("Reply set context: %v", err)
+	}
+	if s.Context() != "in the garden" {
+		t.Fatalf("Context = %q, want set before clearing", s.Context())
+	}
+
+	got, err := s.Reply(context.Background(), jid, "clear context", true)
+	if err != nil {
+		t.Fatalf("Reply clear context: %v", err)
+	}
+	if s.Context() != "" {
+		t.Fatalf("Context = %q, want empty after 'clear context'", s.Context())
+	}
+	if !strings.Contains(got, "*Context Cleared*") {
+		t.Errorf("Reply = %q, want *Context Cleared* confirmation", got)
+	}
+	if len(fake.got) != 0 {
+		t.Fatal("LLM was called for a fast-path mutation")
+	}
+}
+
+func TestServiceClearVIPs(t *testing.T) {
+	s, _, _ := newService(t)
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	if err := s.SetAccess("6281234567890@s.whatsapp.net", []string{"web_search"}); err != nil {
+		t.Fatalf("SetAccess: %v", err)
+	}
+
+	if err := s.ClearVIPs(); err != nil {
+		t.Fatalf("ClearVIPs: %v", err)
+	}
+	if len(s.VIPList()) != 0 {
+		t.Fatalf("VIPList = %v, want empty", s.VIPList())
+	}
+	if _, ok, err := s.AccessFor("6281234567890@s.whatsapp.net"); err != nil || ok {
+		t.Fatalf("access grant survived ClearVIPs: ok=%v err=%v, want gone", ok, err)
+	}
+}
+
+func TestServiceFastPathClearVIPs(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "628111@s.whatsapp.net"
+
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+
+	got, err := s.Reply(context.Background(), jid, "clear vips", true)
+	if err != nil {
+		t.Fatalf("Reply clear vips: %v", err)
+	}
+	if len(s.VIPList()) != 0 {
+		t.Fatalf("VIPList = %v, want empty after 'clear vips'", s.VIPList())
+	}
+	if !strings.Contains(got, "*Inner Circle Cleared*") {
+		t.Errorf("Reply = %q, want *Inner Circle Cleared* confirmation", got)
+	}
+	if len(fake.got) != 0 {
+		t.Fatal("LLM was called for a fast-path mutation")
+	}
+}
+
+func TestServiceFastPathGuidanceMasterOnly(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "628111@s.whatsapp.net"
+
+	for _, phrase := range []string{"show commands", "tool guidance", "help"} {
+		got, err := s.Reply(context.Background(), jid, phrase, true)
+		if err != nil {
+			t.Fatalf("Reply %q: %v", phrase, err)
+		}
+		if !strings.Contains(got, "Manual") || !strings.Contains(got, "wake up buddy") {
+			t.Errorf("Reply %q = %q, want the Master's manual with hardcoded commands", phrase, got)
+		}
+	}
+	if len(fake.got) != 0 {
+		t.Fatal("LLM was called for guidance")
+	}
+}
+
+func TestServiceFastPathGuidanceVIPFallsThroughToModel(t *testing.T) {
+	s, _, fake := newService(t)
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+
+	got, err := s.Reply(context.Background(), "6281234567890@s.whatsapp.net", "show commands", false)
+	if err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if strings.Contains(got, "Manual") || strings.Contains(got, "wake up buddy") {
+		t.Errorf("VIP received the Master's manual: %q", got)
+	}
+	if len(fake.got) == 0 {
+		t.Fatal("VIP guidance should fall through to the model, not be served hardcoded")
+	}
+}
+
 func TestServiceFastPathStatusOff(t *testing.T) {
 	s, _, fake := newService(t)
 	jid := "628111@s.whatsapp.net"

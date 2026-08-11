@@ -111,12 +111,14 @@ Clark is managed via a set of simple commands.
         ./clark vip -a "11234567890,John Doe,Colleague"
         ```
     -   **Delete:** `./clark vip -d 11234567890`
+    -   **Clear (empty the whole list):** `./clark vip -clear`
     -   **List:** `./clark vip`
 
 -   **`ctx`**: Sets the master context for the AI. This tells the butler your current status.
     ```sh
     ./clark ctx -c "Currently in a board meeting until 5 PM."
     ```
+    Clear it with `./clark ctx -clear`.
 
 -   **`toggle`**: Toggles the assistant's active status (on/off). When off, Clark stays silent toward VIPs but still answers you in your own chat (the self-chat), so you can keep commanding him.
     ```sh
@@ -128,11 +130,35 @@ Clark is managed via a set of simple commands.
     ./clark view
     ```
 
+-   **`help`**: Prints the CLI usage for every command.
+    ```sh
+    ./clark help
+    ```
+
 -   **`access`**: Manages a VIP's granted tools. VIPs may only ever hold `web_search`; the Master-only tools (`send_message`, `set_status`, `set_context`, `add_vip`, `delete_vip`, `set_access`, `get_state`) are never grantable.
     ```sh
     ./clark access -r "11234567890" -tool web_search -set on
     ./clark access -r "John Doe" -tool web_search -set off
     ```
+
+## In-chat commands
+
+In your own chat (the self-chat) you can run hardcoded commands instead of
+conversing — they are handled instantly without calling the model and are
+**Master-only** (VIPs can never trigger them):
+
+| What you type | What it does |
+| --- | --- |
+| `wake up buddy` / `wake clark` | Turn Clark on |
+| `silence clark` / `sleep clark` | Turn Clark off |
+| `set my context to …` | Update your context |
+| `clear context` | Empty your context |
+| `add vip <number>, <name>, <relation>` | Admit someone to the inner circle |
+| `delete vip <name>` | Remove someone |
+| `clear vips` | Empty the whole inner circle |
+| `grant <name> access to <tool>` / `revoke <name> access to <tool>` | Manage a VIP's tools |
+| `show me everything` | Full report (status, context, VIPs, tools) |
+| `help` / `tool guidance` / `show commands` | This manual, including the tools |
 
 ## Run with Docker
 
@@ -200,7 +226,7 @@ Clark is split into small, interface-driven packages so each concern scales and 
 
 ```
 main.go                       thin entry point: validates args, dispatches
-internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/view/access)
+internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/view/access/help)
 internal/config               single .env load + validation
 internal/logging              structured colored log emitter + whatsmeow adapter
 internal/store                persistence interfaces + SQLite implementation

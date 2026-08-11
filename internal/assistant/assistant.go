@@ -215,6 +215,15 @@ func (s *Service) VIPList() map[string]string {
 	return s.vip.List()
 }
 
+// ClearVIPs empties the inner circle and its access grants, then reloads.
+func (s *Service) ClearVIPs() error {
+	if err := s.vip.Clear(); err != nil {
+		return err
+	}
+	logging.Log("MEMORY", logging.SevInfo, "VIPCLEAR", "Inner circle emptied")
+	return nil
+}
+
 // AccessFor returns a VIP's granted tools. A missing row defaults to web_search.
 func (s *Service) AccessFor(jid string) ([]string, bool, error) {
 	grants, ok, err := s.access.GetTools(jid)

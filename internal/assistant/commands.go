@@ -13,9 +13,11 @@ import (
 const (
 	contextUpdatedHeader = "*Context Updated*"
 
-	vipAddedHeader   = "*Inner Circle Updated*"
-	vipDeletedReply  = "*Inner Circle Updated*\n\nThe entry has been struck from the ledger, Master."
-	commandErrorTmpl = "*Command Not Performed*\n\n_%s_"
+	vipAddedHeader    = "*Inner Circle Updated*"
+	vipDeletedReply   = "*Inner Circle Updated*\n\nThe entry has been struck from the ledger, Master."
+	clearContextReply = "*Context Cleared*\n\nMaster's context has been emptied."
+	clearVIPsReply    = "*Inner Circle Cleared*\n\nThe ledger is empty, Master. Every entry has been struck."
+	commandErrorTmpl  = "*Command Not Performed*\n\n_%s_"
 )
 
 func (s *Service) statusOnReply() string {
@@ -60,6 +62,12 @@ func (s *Service) fastPath(senderJID, userMsg string, isSelf bool) (string, bool
 		}
 		return contextUpdatedReply(text), true, nil
 
+	case isClearContextCommand(userMsg):
+		if err := s.SetContext(""); err != nil {
+			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+		}
+		return clearContextReply, true, nil
+
 	case isAddVIPCommand(userMsg):
 		payload, _ := parseAddVIPCommand(userMsg)
 		if err := s.AddVIP(payload); err != nil {
@@ -73,6 +81,15 @@ func (s *Service) fastPath(senderJID, userMsg string, isSelf bool) (string, bool
 			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
 		}
 		return vipDeletedReply, true, nil
+
+	case isClearVIPsCommand(userMsg):
+		if err := s.ClearVIPs(); err != nil {
+			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+		}
+		return clearVIPsReply, true, nil
+
+	case isGuidanceCommand(userMsg):
+		return s.guidanceText(), true, nil
 
 	case isAccessCommand(userMsg):
 		recipient, tool, enabled, _ := parseAccessCommand(userMsg)
@@ -242,6 +259,24 @@ func parseContextCommand(userMsg string) (string, bool) {
 	return "", false
 }
 
+var clearContextRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:clear|empty|erase|wipe|reset|forget)\s+(?:the\s+|my\s+|clark(?:'s)?\s+)?(?:master\s+)?context\s*\.?\s*$`),
+}
+
+func isClearContextCommand(userMsg string) bool {
+	_, ok := parseClearContextCommand(userMsg)
+	return ok
+}
+
+func parseClearContextCommand(userMsg string) (string, bool) {
+	for _, re := range clearContextRes {
+		if re.MatchString(userMsg) {
+			return "", true
+		}
+	}
+	return "", false
+}
+
 var addVIPRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:add|register)\s+(?:a|new|the)?\s*(?:vip|member)\s+(.+)$`),
 	regexp.MustCompile(`(?i)(?:add|register)\s+(.+?)\s+to\s+(?:the\s+)?(?:vip\s*list|inner\s+circle)`),
@@ -284,6 +319,65 @@ func parseDeleteVIPCommand(userMsg string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+var clearVIPsRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:clear|empty|erase|wipe|reset)\s+(?:the\s+)?(?:vip\s*list|vips|inner\s+circle|ledger)\s*\.?\s*$`),
+	regexp.MustCompile(`(?i)\bremove\s+all\s+(?:the\s+)?vips\s*\.?\s*$`),
+}
+
+func isClearVIPsCommand(userMsg string) bool {
+	_, ok := parseClearVIPsCommand(userMsg)
+	return ok
+}
+
+func parseClearVIPsCommand(userMsg string) (string, bool) {
+	for _, re := range clearVIPsRes {
+		if re.MatchString(userMsg) {
+			return "", true
+		}
+	}
+	return "", false
+}
+
+// guidancePhrases are the hardcoded phrases that summon the Master's manual.
+// Deliberately distinct from viewRequest's report phrases so VIPs keep their
+// granted-tools report while only the Master gets the full command guide.
+var guidancePhrases = []string{
+	"tool guidance", "show guidance",
+	"butler's manual", "show me your manual",
+	"show commands", "show me the commands", "show your commands",
+	"list commands", "list of commands", "command list", "list your commands",
+	"what commands do you have", "what commands can you run", "which commands do you have",
+	"how do i use you", "how do i command you", "how to use you", "how do you work",
+}
+
+// isGuidanceCommand reports whether the Master is asking for the command guide.
+func isGuidanceCommand(userMsg string) bool {
+	m := strings.ToLower(strings.TrimSpace(userMsg))
+	if m == "help" {
+		return true
+	}
+	return hasAny(m, guidancePhrases...)
+}
+
+// guidanceText is the Master's manual: the hardcoded commands he can run plus
+// the tools at Clark's disposal. It is only ever served through the fast path,
+// which is gated to the Master's own chat.
+func (s *Service) guidanceText() string {
+	return "*" + s.name + "'s Manual*\n\n" +
+		"*Hardcoded commands* (Master's own chat only):\n" +
+		"- `wake up buddy` / `wake clark` — turn me on\n" +
+		"- `silence clark` / `sleep clark` — turn me off\n" +
+		"- `set my context to ...` — update your context\n" +
+		"- `clear context` — empty your context\n" +
+		"- `add vip <number>, <name>, <relation>` — admit someone\n" +
+		"- `delete vip <name>` — remove someone\n" +
+		"- `clear vips` — empty the inner circle\n" +
+		"- `grant <name> access to <tool>` — grant a tool\n" +
+		"- `revoke <name> access to <tool>` — revoke a tool\n" +
+		"- `show me everything` — full report\n\n" +
+		formatTools(s.tools.List())
 }
 
 var accessCmdRes = []struct {

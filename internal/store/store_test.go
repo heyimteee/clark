@@ -92,6 +92,41 @@ func TestVIPStoreCRUD(t *testing.T) {
 	}
 }
 
+func TestVIPStoreClearAll(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	for i, e := range []VIPEntry{
+		{JID: "6281234567890@s.whatsapp.net", Name: "Test", Relation: "Friend"},
+		{JID: "6289999999999@s.whatsapp.net", Name: "Second", Relation: "Colleague"},
+	} {
+		if err := st.Add(e); err != nil {
+			t.Fatalf("Add(%d): %v", i, err)
+		}
+	}
+	if err := st.SetTools("6281234567890@s.whatsapp.net", []string{"web_search"}); err != nil {
+		t.Fatalf("SetTools: %v", err)
+	}
+
+	if err := st.ClearAll(); err != nil {
+		t.Fatalf("ClearAll: %v", err)
+	}
+
+	entries, err := st.All()
+	if err != nil {
+		t.Fatalf("All after ClearAll: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("All after ClearAll = %+v, want empty", entries)
+	}
+	if _, ok, err := st.GetTools("6281234567890@s.whatsapp.net"); err != nil || ok {
+		t.Fatalf("access grant survived ClearAll: ok=%v err=%v, want gone", ok, err)
+	}
+}
+
 func TestHistoryKeepsLast30(t *testing.T) {
 	st, err := Open(":memory:")
 	if err != nil {

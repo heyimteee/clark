@@ -16,6 +16,7 @@ func main() {
 		"toggle": {},
 		"view":   {},
 		"access": {},
+		"help":   {},
 	}
 
 	if len(os.Args) < 2 {
@@ -55,6 +56,8 @@ func main() {
 		err = a.View()
 	case "access":
 		err = a.Access(os.Args[2:])
+	case "help":
+		err = a.Help()
 	}
 
 	if err != nil {

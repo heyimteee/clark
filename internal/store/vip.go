@@ -54,3 +54,17 @@ func (s *Store) Delete(jid string) error {
 	}
 	return nil
 }
+
+// ClearAll removes every VIP entry and their access grants.
+func (s *Store) ClearAll() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM vip`); err != nil {
+		return fmt.Errorf("fail to clear vip list: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM vip_access`); err != nil {
+		return fmt.Errorf("fail to clear vip access: %w", err)
+	}
+	return nil
+}

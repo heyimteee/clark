@@ -36,6 +36,7 @@ type VIPStore interface {
 	All() ([]VIPEntry, error)
 	Add(entry VIPEntry) error
 	Delete(jid string) error
+	ClearAll() error
 }
 
 // AccessStore persists each VIP's granted tool set.
