@@ -18,6 +18,7 @@ Clark connects to your WhatsApp account as a client and listens for incoming mes
 
 - **AI-Powered Responses:** Leverages local language models via your own Ollama server for natural and intelligent conversations.
 - **WhatsApp Integration:** Seamlessly connects to your WhatsApp account using the `whatsmeow` library.
+- **iMessage Integration:** A macOS bridge daemon watches your Messages database and routes iMessage traffic through the same butler pipeline, over HTTPS.
 - **Configurable Persona:** The AI operates based on a "Butler Protocol," ensuring all responses are professional and in character.
 - **VIP Management:** You control which contacts the bot interacts with through a simple command.
 - **Context-Aware:** Set a "master context" (e.g., "In a meeting," "On vacation") to inform the AI of your status.
@@ -239,6 +240,79 @@ Notes:
   `add vip 6281234567890, Tiara, Girlfriend`). Existing users who copied their
   `mystore.db` into `data/clark.db` before first run skip this entirely.
 
+## iMessage bridge (optional)
+
+Clark can serve iMessage in addition to WhatsApp. A small daemon runs on your Mac,
+watches `~/Library/Messages/chat.db` (read-only), forwards inbound messages to the
+Clark host over HTTPS, and delivers outbound replies via the Messages app.
+
+```
+iMessage -> [macOS bridge] --HTTPS--> NPM (reverse proxy) --> clark :8090 (Docker)
+```
+
+All traffic is bridge-initiated: the Mac never opens an inbound port, and the
+bridge API is never published to a host port. Access control is identical to
+WhatsApp — only VIPs (and your own chat) get through.
+
+### Server side (Debian host, once)
+
+1.  Generate a shared token and add it to your `.env`:
+
+    ```
+    IMESSAGE_ENABLED=1
+    IMESSAGE_BRIDGE_TOKEN=<long-random-string>
+    IMESSAGE_SELF_HANDLE=+6281234567890   # your own iMessage handle
+    NPM_NETWORK=npm_default               # your Nginx Proxy Manager network
+    ```
+
+2.  Redeploy:
+
+    ```sh
+    git pull && docker compose up -d --build
+    ```
+
+3.  In Nginx Proxy Manager, create a Proxy Host `clark.<your-domain>` →
+    `http://clark:8090` using the same certificate as your other services. The
+    `send_imessage` and self-chat tools need your VIPs' iMessage handles:
+    register each person with `vip -a "<handle>,<name>,<relation>"` where the
+    handle is their iMessage address (e.g. `+6281234567890` or an email address).
+    A single VIP entry covers both WhatsApp and iMessage: the two formats
+    (`628...` JID vs `+628...`) canonicalize to the same record.
+
+### Mac side (bridge daemon, once)
+
+1.  Give the terminal you install from Full Disk Access
+    (`System Settings > Privacy & Security > Full Disk Access`) so the bridge can
+    read `~/Library/Messages/chat.db`.
+2.  Run the installer from this checkout:
+
+    ```sh
+    ./scripts/install-bridge.sh https://clark.<your-domain> <IMESSAGE_BRIDGE_TOKEN>
+    ```
+
+    It builds `cmd/imessage-bridge`, installs a launchd agent
+    (`com.clark.imessage-bridge`), and starts it now and on every login.
+3.  The first outbound send triggers an Automation prompt for Messages.app —
+    allow it.
+4.  Send yourself a test iMessage and text `wake up buddy` from your own chat.
+    Logs: `/usr/local/var/log/clark-bridge.log`.
+
+Optional bridge env vars (set in the plist or environment): `IMESSAGE_OWN_HANDLE`
+(automatic otherwise), `IMESSAGE_TLS_ROOTCA` (path to a self-signed root CA, only
+needed if your reverse proxy uses a certificate Clark doesn't trust), and
+`IMESSAGE_POLL_INTERVAL` (seconds, default 1).
+
+### How the bridge works
+
+- **Inbound:** polls chat.db every second for new rows, filtering out
+  self-sent, system, reaction, and group messages, and tracks a ROWID watermark
+  in `~/Library/Application Support/clark-bridge/state.json` so restarts never
+  replay or miss messages. A message is only marked delivered once the host
+  accepts it.
+- **Outbound:** polls the host's queue, sends via AppleScript's `send` verb on
+  the iMessage service, then acks. A failed delivery is never re-served (no
+  double-sends); stale picked messages show up in the host logs.
+
 ## Tools
 
 Clark can call tools while composing a reply. Each tool is described to the model,
@@ -249,6 +323,7 @@ and he will suggest or invoke one whenever it genuinely helps:
 | `web_search` | VIPs + Master | Searches the web via Tavily and returns sourced snippets (needs `TAVILY_API_KEY`) |
 | `view_history` | VIPs + Master | Shows the stored conversation for a chat (full, or the most recent N). A VIP sees their own chat; the Master can view any chat |
 | `send_message` | Master only | Delivers a WhatsApp message to a VIP by name or number |
+| `send_imessage` | Master only | Delivers an iMessage to a VIP by name or handle (needs the bridge enabled) |
 | `set_status` | Master only | Turns Clark on or off (with a `recipient`, only that VIP's personal status) |
 | `set_context` | Master only | Updates the master context |
 | `add_vip` / `delete_vip` | Master only | Manages the inner circle |
@@ -275,6 +350,7 @@ Clark is split into small, interface-driven packages so each concern scales and 
 
 ```
 main.go                       thin entry point: validates args, dispatches
+cmd/imessage-bridge           macOS bridge daemon: chat.db watcher, HTTPS client, osascript sender
 internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/think/history/view/access/help)
 internal/config               single .env load + validation
 internal/logging              structured colored log emitter + whatsmeow adapter
@@ -283,14 +359,17 @@ internal/ollama               Ollama /api/chat client (tools, optional think mod
 internal/tools                tool registry + shared argument helpers
 internal/websearch            Tavily search client
 internal/assistant            butler service: settings, VIP rules, prompt, tool loop, replies
+internal/gateway              transport-neutral message pipeline (handler, echo tracker, prefixes)
+internal/imessage             iMessage bridge transport: HTTP API, outbound queue, messenger
 internal/whatsapp             WhatsApp transport: messenger, handler pipeline, echo tracker
 internal/notify               desktop notifications
 ```
 
-Dependencies flow downward (`app -> whatsapp, assistant, store, ollama, notify`); the
-message handler depends on small interfaces (`Messenger`, `Butler`, `Notifier`) rather
-than concrete types, so adding a transport, command, or AI backend means adding an
-implementation, not editing the pipeline.
+Dependencies flow downward (`app -> whatsapp, imessage, assistant, store, ollama, notify`);
+both transports feed the shared `gateway` pipeline, and the message handler depends
+on small interfaces (`Messenger`, `Butler`, `Notifier`) rather than concrete types,
+so adding a transport, command, or AI backend means adding an implementation, not
+editing the pipeline.
 
 ## License
 

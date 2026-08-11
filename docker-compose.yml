@@ -17,12 +17,21 @@ services:
       - PALACE_NAME=${PALACE_NAME:-Palace}
       - BYPASS_PHRASE=${BYPASS_PHRASE:-get him to me}
       - INNER_CIRCLE=${INNER_CIRCLE:-}
+      # iMessage bridge transport. Never published to a host port: NPM proxies
+      # https://clark.<domain>/ to http://clark:8090 inside the Docker network.
+      - IMESSAGE_ENABLED=${IMESSAGE_ENABLED:-0}
+      - IMESSAGE_LISTEN_ADDR=:8090
+      - IMESSAGE_BRIDGE_TOKEN=${IMESSAGE_BRIDGE_TOKEN:-}
+      - IMESSAGE_SELF_HANDLE=${IMESSAGE_SELF_HANDLE:-}
       # Headless container: no desktop notifications.
       - CLARK_NO_NOTIFY=1
       - TZ=${TZ:-Asia/Jakarta}
     volumes:
       # Persists the SQLite database (WhatsApp session + settings + history).
       - ./data:/data
+    networks:
+      - clark
+      - npm
     logging:
       driver: json-file
       options:
@@ -30,3 +39,13 @@ services:
         max-file: "2"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+# clark's private network (inbound from NPM only).
+networks:
+  clark:
+    driver: bridge
+  # The Nginx Proxy Manager network. If yours uses a different name (e.g. a
+  # project-prefixed `npm_default`), set NPM_NETWORK accordingly.
+  npm:
+    external: true
+    name: ${NPM_NETWORK:-npm_default}

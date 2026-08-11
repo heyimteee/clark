@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.clark.imessage-bridge</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/imessage-bridge</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>IMESSAGE_BRIDGE_URL</key>
+		<string>https://clark.YOUR-DOMAIN</string>
+		<key>IMESSAGE_BRIDGE_TOKEN</key>
+		<string>YOUR-SHARED-TOKEN</string>
+		<key>IMESSAGE_OWN_HANDLE</key>
+		<string></string>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/usr/local/var/log/clark-bridge.log</string>
+	<key>StandardErrorPath</key>
+	<string>/usr/local/var/log/clark-bridge.log</string>
+</dict>
+</plist>

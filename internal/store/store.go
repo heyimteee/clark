@@ -59,9 +59,9 @@ type AccessStore interface {
 
 // OutboundMessage is one iMessage awaiting bridge delivery.
 type OutboundMessage struct {
-	ID        int64
-	Recipient string
-	Text      string
+	ID        int64  `json:"id"`
+	Recipient string `json:"recipient"`
+	Text      string `json:"text"`
 }
 
 // HistoryStore persists per-contact chat history.
