@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 
+	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -11,45 +12,31 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Messenger abstracts the WhatsApp transport the handler needs.
-type Messenger interface {
-	Self() types.JID
-	Send(ctx context.Context, to types.JID, text string) error
-	SendSelf(ctx context.Context, text string) error
-	ResolveSender(v *events.Message) types.JID
-	IsSelfChat(chat types.JID) bool
-}
-
-// messagePrefix brands every outbound message from clark.
-const messagePrefix = "`🤵🏻‍♂️[CLARK]`\n"
-
-// prefixMessage prepends clark's branding to an outbound message.
-func prefixMessage(text string) string {
-	return messagePrefix + text
-}
-
-// WAMessenger sends and resolves messages through whatsmeow.
+// WAMessenger sends and resolves messages through whatsmeow. It implements
+// gateway.Messenger so it plugs straight into the shared pipeline.
 type WAMessenger struct {
 	client *whatsmeow.Client
-	echo   *EchoTracker
+	echo   *gateway.EchoTracker
 }
 
 // NewMessenger wraps a whatsmeow client with echo tracking.
-func NewMessenger(client *whatsmeow.Client, echo *EchoTracker) *WAMessenger {
+func NewMessenger(client *whatsmeow.Client, echo *gateway.EchoTracker) *WAMessenger {
 	return &WAMessenger{client: client, echo: echo}
 }
 
-// Self returns clark's own JID.
-func (m *WAMessenger) Self() types.JID {
-	if m.client == nil || m.client.Store == nil || m.client.Store.ID == nil {
-		return types.JID{}
-	}
-	return m.client.Store.ID.ToNonAD()
+// Self returns clark's own JID as a string.
+func (m *WAMessenger) Self() string {
+	return m.SelfJID().String()
 }
 
-// Send delivers a message and tracks its ID as an echo.
-func (m *WAMessenger) Send(ctx context.Context, to types.JID, text string) error {
-	text = prefixMessage(text)
+// Send delivers a message to a chat and tracks its ID as an echo.
+func (m *WAMessenger) Send(ctx context.Context, chat, text string) error {
+	to, err := types.ParseJID(chat)
+	if err != nil {
+		logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to send message", "to", chat, "error", err)
+		return err
+	}
+	text = gateway.PrefixMessage(text)
 	resp, err := m.client.SendMessage(ctx, to, &waE2E.Message{
 		Conversation: proto.String(text),
 	})
@@ -64,8 +51,8 @@ func (m *WAMessenger) Send(ctx context.Context, to types.JID, text string) error
 
 // SendSelf delivers a message to clark's own chat.
 func (m *WAMessenger) SendSelf(ctx context.Context, text string) error {
-	text = prefixMessage(text)
-	resp, err := m.client.SendMessage(ctx, m.Self(), &waE2E.Message{
+	text = gateway.PrefixMessage(text)
+	resp, err := m.client.SendMessage(ctx, m.SelfJID(), &waE2E.Message{
 		Conversation: proto.String(text),
 	})
 	if err != nil {
@@ -74,6 +61,14 @@ func (m *WAMessenger) SendSelf(ctx context.Context, text string) error {
 	}
 	m.echo.Mark(string(resp.ID))
 	return nil
+}
+
+// SelfJID returns clark's own JID.
+func (m *WAMessenger) SelfJID() types.JID {
+	if m.client == nil || m.client.Store == nil || m.client.Store.ID == nil {
+		return types.JID{}
+	}
+	return m.client.Store.ID.ToNonAD()
 }
 
 // ResolveSender maps the message sender to a phone-number JID where possible.

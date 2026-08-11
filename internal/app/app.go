@@ -12,6 +12,7 @@ import (
 
 	"github.com/heyimteee/clark/internal/assistant"
 	"github.com/heyimteee/clark/internal/config"
+	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/notify"
 	"github.com/heyimteee/clark/internal/ollama"
@@ -132,7 +133,7 @@ func (a *App) Run() error {
 
 // notifier picks the desktop notifier, or a silent no-op in headless
 // environments (CLARK_NO_NOTIFY=1).
-func (a *App) notifier() whatsapp.Notifier {
+func (a *App) notifier() gateway.Notifier {
 	if a.cfg.NoNotify {
 		return notify.Silent{}
 	}

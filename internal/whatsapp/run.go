@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/tools"
 	"github.com/mdp/qrterminal"
@@ -18,8 +19,8 @@ import (
 // Options wires the transport to the rest of clark.
 type Options struct {
 	DBPath   string
-	Butler   Butler
-	Notifier Notifier
+	Butler   gateway.Butler
+	Notifier gateway.Notifier
 	Tools    *tools.Registry
 	// BypassPhrase is the urgent-alert command word (default "get him to me").
 	BypassPhrase string
@@ -50,7 +51,7 @@ func Run(ctx context.Context, opts Options) error {
 		logging.Log("WHATSAPP", logging.SevWarn, "VERSION", "Using bundled WhatsApp version", "version", store.GetWAVersion())
 	}
 
-	echo := NewEchoTracker()
+	echo := gateway.NewEchoTracker()
 	msgr := NewMessenger(client, echo)
 	if opts.Tools != nil && opts.NameToJID != nil {
 		registerSendMessageTool(opts.Tools, msgr, opts.NameToJID)
@@ -86,7 +87,7 @@ func Run(ctx context.Context, opts Options) error {
 
 // registerSendMessageTool wires the send_message capability, which lets the
 // Master have clark deliver a message to a VIP by name or number.
-func registerSendMessageTool(reg *tools.Registry, msgr Messenger, nameToJID func(string) (string, bool)) {
+func registerSendMessageTool(reg *tools.Registry, msgr *WAMessenger, nameToJID func(string) (string, bool)) {
 	reg.RegisterFunc(
 		"send_message",
 		"Send a WhatsApp message to a VIP on the Master's behalf. Only the Master may use this.",
@@ -112,11 +113,10 @@ func registerSendMessageTool(reg *tools.Registry, msgr Messenger, nameToJID func
 			if !ok {
 				return "", fmt.Errorf("no VIP found matching %q", recipient)
 			}
-			to, err := types.ParseJID(jid)
-			if err != nil {
+			if _, err := types.ParseJID(jid); err != nil {
 				return "", fmt.Errorf("invalid recipient jid %q: %w", jid, err)
 			}
-			if err := msgr.Send(ctx, to, message); err != nil {
+			if err := msgr.Send(ctx, jid, message); err != nil {
 				return "", err
 			}
 			return "Message delivered to " + recipient + ".", nil

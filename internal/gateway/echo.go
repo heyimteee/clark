@@ -1,4 +1,4 @@
-package whatsapp
+package gateway
 
 import "sync"
 
