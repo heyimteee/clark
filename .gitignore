@@ -33,3 +33,6 @@ go.work.sum
 
 utils/
 *.db
+
+# Docker volume (persisted SQLite + WhatsApp session data)
+data/

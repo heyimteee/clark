@@ -66,6 +66,25 @@ Follow these steps to get your personal butler up and running.
     CLARK_DB=mystore.db          # SQLite path (default mystore.db)
     CLARK_LOG_FORMAT=json        # switch logs from colored to JSON
     NO_COLOR=1                   # disable ANSI colors
+    TAVILY_API_KEY=tvly-...      # enable the web_search tool (optional)
+    CLARK_NO_NOTIFY=1            # suppress desktop notifications (headless/Docker)
+    ```
+
+    The `TAVILY_API_KEY` unlocks web search so Clark can answer with current,
+    sourced facts. Get a free key (1,000 searches/month, no credit card) at
+    https://tavily.com. The key lives only in your gitignored `.env` — never
+    commit it.
+
+    **Persona (optional):** Clark's prompt carries no personal data of its own.
+    Set these in `.env` to shape who he serves. All are optional — omit them and
+    Clark uses generic butler wording. See `.env.example` for the full list.
+
+    ```
+    MASTER_NAME=Sir Tristan Al Harrish Basori   # who the butler serves
+    PROTOCOL_NAME=Basori                        # renders "The Basori Protocol"
+    PALACE_NAME=Basori Digital Palace           # household name
+    BYPASS_PHRASE=get him to me                 # urgent-alert command word
+    INNER_CIRCLE=Tiara|Girlfriend;Anang|Father  # dearest persons, "Name|Relation"
     ```
 
 5.  **Initialize the Assistant:**
@@ -99,15 +118,74 @@ Clark is managed via a set of simple commands.
     ./clark ctx -c "Currently in a board meeting until 5 PM."
     ```
 
--   **`toggle`**: Toggles the assistant's active status (on/off). The bot will not respond if toggled off.
+-   **`toggle`**: Toggles the assistant's active status (on/off). When off, Clark stays silent toward VIPs but still answers you in your own chat (the self-chat), so you can keep commanding him.
     ```sh
     ./clark toggle
     ```
 
--   **`view`**: Displays the current assistant settings, including name, model, status, context, and the VIP list.
+-   **`view`**: Displays the current assistant settings, including name, model, status, context, the VIP list, and each VIP's granted tools.
     ```sh
     ./clark view
     ```
+
+-   **`access`**: Manages a VIP's granted tools. VIPs may only ever hold `web_search`; the Master-only tools (`send_message`, `set_status`, `set_context`, `add_vip`, `delete_vip`, `set_access`, `get_state`) are never grantable.
+    ```sh
+    ./clark access -r "11234567890" -tool web_search -set on
+    ./clark access -r "John Doe" -tool web_search -set off
+    ```
+
+## Run with Docker
+
+A multi-stage `Dockerfile` builds a static binary and runs Clark in a minimal
+container. The SQLite database (WhatsApp session, settings, history) lives on a
+volume, so the container restarts seamlessly.
+
+1.  Copy `.env.example` to `.env` and fill in at least `OLLAMA_MODEL` (plus
+    `OLLAMA_URL` if your Ollama isn't reachable at the default).
+
+2.  Build and start:
+
+    ```sh
+    docker compose up -d
+    ```
+
+3.  First run shows a QR code in the logs — scan it from your WhatsApp
+    (`Settings > Linked Devices`) to link the account:
+
+    ```sh
+    docker compose logs -f
+    ```
+
+4.  Watch it come online, then stop tailing:
+    `Ctrl-C` (logs only; the container keeps running).
+
+Notes:
+- `OLLAMA_URL` defaults to `http://host.docker.internal:11434` so Clark can
+  reach Ollama running on the host. Set it explicitly in `.env` if your model
+  server is elsewhere.
+- Desktop notifications are off inside the container (`CLARK_NO_NOTIFY=1`);
+  urgent alerts still reach you as a WhatsApp message to your own chat.
+- On a fresh database Clark starts *silent*: VIP messages are ignored until you
+  text `wake` from your own chat (or run `docker compose exec clark clark toggle`).
+
+## Tools
+
+Clark can call tools while composing a reply. Each tool is described to the model,
+and he will suggest or invoke one whenever it genuinely helps:
+
+| Tool | Who can use it | What it does |
+| --- | --- | --- |
+| `web_search` | VIPs + Master | Searches the web via Tavily and returns sourced snippets (needs `TAVILY_API_KEY`) |
+| `send_message` | Master only | Delivers a WhatsApp message to a VIP by name or number |
+| `set_status` | Master only | Turns Clark on or off |
+| `set_context` | Master only | Updates the master context |
+| `add_vip` / `delete_vip` | Master only | Manages the inner circle |
+| `set_access` | Master only | Grants/revokes a tool for a VIP |
+| `get_state` | Master only | Reports status, context, inner circle, and tools |
+
+Ask him in your own chat — e.g. "what can you do?" or "send a message to Tiara" —
+and he will use the right tool. Search results are treated as reference data, never
+instructions.
 
 ## Project Layout
 
@@ -115,12 +193,14 @@ Clark is split into small, interface-driven packages so each concern scales and 
 
 ```
 main.go                       thin entry point: validates args, dispatches
-internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/view)
+internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/view/access)
 internal/config               single .env load + validation
 internal/logging              structured colored log emitter + whatsmeow adapter
 internal/store                persistence interfaces + SQLite implementation
-internal/ollama               Ollama /api/chat client
-internal/assistant            butler service: settings, VIP rules, prompt, replies
+internal/ollama               Ollama /api/chat client (tools, think disabled)
+internal/tools                tool registry + shared argument helpers
+internal/websearch            Tavily search client
+internal/assistant            butler service: settings, VIP rules, prompt, tool loop, replies
 internal/whatsapp             WhatsApp transport: messenger, handler pipeline, echo tracker
 internal/notify               desktop notifications
 ```

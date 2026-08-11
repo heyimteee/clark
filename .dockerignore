@@ -1,0 +1,23 @@
+# Version control
+.git
+.gitignore
+
+# Local configuration & secrets
+.env
+
+# Databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data
+
+# Local build artifacts & helpers
+utils
+scripts
+*.log
+.DS_Store
+
+# Documentation not needed in the image
+FirstReview.Note.md
+example_prompt.md

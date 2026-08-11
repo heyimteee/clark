@@ -1,0 +1,32 @@
+services:
+  clark:
+    build: .
+    image: clark:latest
+    container_name: clark
+    restart: unless-stopped
+    environment:
+      # Ollama: use your .env value, or default to the Docker host.
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:?set OLLAMA_MODEL in your .env}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      # First-boot master context (overridable later via WhatsApp self-chat).
+      - CLARK_CONTEXT=${CLARK_CONTEXT:-Available}
+      # Persona — everything below is optional and only configures the prompt.
+      - MASTER_NAME=${MASTER_NAME:-the Master}
+      - PROTOCOL_NAME=${PROTOCOL_NAME:-Butler}
+      - PALACE_NAME=${PALACE_NAME:-Palace}
+      - BYPASS_PHRASE=${BYPASS_PHRASE:-get him to me}
+      - INNER_CIRCLE=${INNER_CIRCLE:-}
+      # Headless container: no desktop notifications.
+      - CLARK_NO_NOTIFY=1
+      - TZ=${TZ:-Asia/Jakarta}
+    volumes:
+      # Persists the SQLite database (WhatsApp session + settings + history).
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
