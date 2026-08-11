@@ -57,6 +57,13 @@ type AccessStore interface {
 	DeleteAccess(jid string) error
 }
 
+// OutboundMessage is one iMessage awaiting bridge delivery.
+type OutboundMessage struct {
+	ID        int64
+	Recipient string
+	Text      string
+}
+
 // HistoryStore persists per-contact chat history.
 type HistoryStore interface {
 	SaveMessage(jid, role, content string) error
@@ -126,6 +133,14 @@ func (s *Store) migrate() error {
 			role TEXT,
 			content TEXT,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`},
+		{"imessage_outbound", `CREATE TABLE IF NOT EXISTS imessage_outbound (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			recipient TEXT NOT NULL,
+			text TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			picked_at DATETIME
 		);`},
 	}
 

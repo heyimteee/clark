@@ -13,6 +13,7 @@ import (
 	"github.com/heyimteee/clark/internal/assistant"
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/gateway"
+	"github.com/heyimteee/clark/internal/imessage"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/notify"
 	"github.com/heyimteee/clark/internal/ollama"
@@ -101,7 +102,8 @@ func (a *App) Init() error {
 	return a.ast.Init()
 }
 
-// Run starts the WhatsApp listener.
+// Run starts the WhatsApp listener and, when enabled, the iMessage bridge
+// server. Both block until ctx is done; a transport error stops the other.
 func (a *App) Run() error {
 	available, err := a.ast.IsInitialized()
 	if err != nil {
@@ -121,14 +123,39 @@ func (a *App) Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	return whatsapp.Run(ctx, whatsapp.Options{
-		DBPath:       a.cfg.DBPath,
-		Butler:       a.ast,
-		Notifier:     a.notifier(),
-		Tools:        a.ast.Tools(),
-		BypassPhrase: a.cfg.BypassPhrase,
-		NameToJID:    a.ast.LookupJID,
-	})
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- whatsapp.Run(ctx, whatsapp.Options{
+			DBPath:       a.cfg.DBPath,
+			Butler:       a.ast,
+			Notifier:     a.notifier(),
+			Tools:        a.ast.Tools(),
+			BypassPhrase: a.cfg.BypassPhrase,
+			NameToJID:    a.ast.LookupJID,
+		})
+	}()
+
+	if a.cfg.IMessageEnabled {
+		logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "iMessage bridge transport enabled",
+			"listen", a.cfg.IMessageListenAddr)
+		go func() {
+			errCh <- imessage.Run(ctx, imessage.Options{
+				Out:          a.st,
+				Butler:       a.ast,
+				Notifier:     a.notifier(),
+				Tools:        a.ast.Tools(),
+				SelfHandle:   a.cfg.IMessageSelfHandle,
+				BypassPhrase: a.cfg.BypassPhrase,
+				ListenAddr:   a.cfg.IMessageListenAddr,
+				Token:        a.cfg.IMessageBridgeToken,
+				NameToHandle: a.ast.LookupIMessage,
+			})
+		}()
+	}
+
+	err = <-errCh
+	stop()
+	return err
 }
 
 // notifier picks the desktop notifier, or a silent no-op in headless

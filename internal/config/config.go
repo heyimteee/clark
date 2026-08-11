@@ -25,6 +25,13 @@ type Config struct {
 	BypassPhrase string   // BYPASS_PHRASE     e.g. "get him to me"
 	InnerCircle  []Person // INNER_CIRCLE    e.g. "Tiara|Girlfriend;Anang|Father"
 	NoNotify     bool     // CLARK_NO_NOTIFY   suppress desktop notifications (headless)
+
+	// iMessage bridge transport. The bridge daemon on the Mac watches
+	// chat.db and polls this transport's HTTP API over the reverse proxy.
+	IMessageEnabled     bool   // IMESSAGE_ENABLED       "true" to serve the bridge API
+	IMessageListenAddr  string // IMESSAGE_LISTEN_ADDR   default ":8090"
+	IMessageBridgeToken string // IMESSAGE_BRIDGE_TOKEN  shared secret for the bridge
+	IMessageSelfHandle  string // IMESSAGE_SELF_HANDLE   Master's own "+6281111111111"
 }
 
 // Person is a named person with an optional relation to the Master.
@@ -57,6 +64,11 @@ func Load() (*Config, error) {
 	noNotify := os.Getenv("CLARK_NO_NOTIFY")
 	noNotifyOn := noNotify == "1" || noNotify == "true" || noNotify == "on"
 
+	listenAddr := os.Getenv("IMESSAGE_LISTEN_ADDR")
+	if listenAddr == "" {
+		listenAddr = ":8090"
+	}
+
 	return &Config{
 		OllamaURL:    ollamaURL,
 		OllamaModel:  model,
@@ -69,7 +81,17 @@ func Load() (*Config, error) {
 		BypassPhrase: os.Getenv("BYPASS_PHRASE"),
 		InnerCircle:  parsePeople(os.Getenv("INNER_CIRCLE")),
 		NoNotify:     noNotifyOn,
+
+		IMessageEnabled:     envOn(os.Getenv("IMESSAGE_ENABLED")),
+		IMessageListenAddr:  listenAddr,
+		IMessageBridgeToken: os.Getenv("IMESSAGE_BRIDGE_TOKEN"),
+		IMessageSelfHandle:  os.Getenv("IMESSAGE_SELF_HANDLE"),
 	}, nil
+}
+
+// envOn interprets a boolean-style environment variable ("1", "true", "on").
+func envOn(v string) bool {
+	return v == "1" || v == "true" || v == "on"
 }
 
 // parsePeople parses the INNER_CIRCLE list. Format: "Name|Relation;Name|Relation".

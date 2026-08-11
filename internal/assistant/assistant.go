@@ -251,6 +251,14 @@ func (s *Service) LookupJID(input string) (string, bool) {
 	return s.vip.Lookup(input)
 }
 
+// LookupIMessage resolves a name or number to a canonical identity for
+// iMessage outbound delivery. VIPs are stored as phone JIDs, so today this is
+// identical to the WhatsApp resolution; the seam stays separate so an
+// email-handle VIP (no @s.whatsapp.net JID) can be resolved here later.
+func (s *Service) LookupIMessage(input string) (string, bool) {
+	return s.vip.Lookup(input)
+}
+
 // AddVIP parses and persists a "[number], [name], [relation]" entry.
 func (s *Service) AddVIP(input string) error {
 	return s.vip.Add(input)
