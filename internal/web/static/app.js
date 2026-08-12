@@ -16,7 +16,7 @@
   let historyVip = "";
   let historyAll = false;
   let historyLoading = false;
-  let historySort = "newest";
+  let vipSort = "default";
   let voiceOn = false;
   let recording = false;
   let mediaRecorder = null;
@@ -209,6 +209,12 @@
               '<div id="access-list"></div>' +
             "</div>" +
             '<div class="card tile-vips"><h2>VIPs</h2><p class="sub">people who reach clark</p>' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-3) 0 var(--space-4)">' +
+                '<div class="scope-tabs" id="vip-sort">' +
+                  '<button data-sort="default" class="active">default</button>' +
+                  '<button data-sort="az">A→Z</button>' +
+                '</div>' +
+              '</div>' +
               '<div class="vip-tools">' +
                 '<div class="vip-form">' +
                   '<label class="field"><span class="lbl">number</span><input id="vip-num" class="input" placeholder="628123456789"></label>' +
@@ -237,11 +243,6 @@
                 '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-soft)">' +
                 '<input type="checkbox" id="hist-all"> show more</label>' +
                 '<div class="spacer"></div>' +
-                '<div class="scope-tabs" id="hist-sort">' +
-                  '<button data-sort="newest" class="active">newest</button>' +
-                  '<button data-sort="oldest">oldest</button>' +
-                  '<button data-sort="az">A→Z</button>' +
-                '</div>' +
                 '<button class="btn mini" id="hist-refresh">refresh</button>' +
               "</div>" +
               '<div class="hist-list" id="hist-list"></div>' +
@@ -371,12 +372,12 @@
     });
     $("#hist-refresh").addEventListener("click", refreshHistory);
 
-    document.querySelectorAll("#hist-sort button").forEach(function (btn) {
+    document.querySelectorAll("#vip-sort button").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        document.querySelectorAll("#hist-sort button").forEach(function (b) { b.classList.remove("active"); });
+        document.querySelectorAll("#vip-sort button").forEach(function (b) { b.classList.remove("active"); });
         btn.classList.add("active");
-        historySort = btn.dataset.sort;
-        refreshHistory();
+        vipSort = btn.dataset.sort;
+        renderVips();
       });
     });
 
@@ -450,7 +451,8 @@
 
   function renderVips() {
     const tbody = $("#vip-table tbody");
-    const vips = (state && state.vips) || [];
+    let vips = (state && state.vips) || [];
+    if (vipSort === "az") vips = vips.slice().sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
     if (!vips.length) {
       tbody.innerHTML = '<tr><td colspan="6" class="empty">no vip\u2019s yet \u2014 add one above</td></tr>';
     } else {
@@ -538,8 +540,6 @@
       if (historyAll) q += "&limit=200";
       const d = await api("/web/api/history" + q);
       const entries = (d && d.entries) || [];
-      if (historySort === "newest") entries.reverse();
-      if (historySort === "az") entries.sort(function (a, b) { return (a.content || "").localeCompare(b.content || ""); });
       const list = $("#hist-list");
       if (!entries.length) {
         list.innerHTML = '<div id="hist-empty">no history yet</div>';
