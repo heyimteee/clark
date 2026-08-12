@@ -436,8 +436,8 @@
           return '<span class="chip on">' + esc(t) + "</span>";
         }).join("");
         const toggle = v.enabled
-          ? '<button class="btn mini" data-vip="' + esc(v.jid) + '" data-vip-action="off">off</button>'
-          : '<button class="btn mini" data-vip="' + esc(v.jid) + '" data-vip-action="on">on</button>';
+          ? '<button class="btn mini state-on" data-vip="' + esc(v.jid) + '" data-vip-action="off">on</button>'
+          : '<button class="btn mini" data-vip="' + esc(v.jid) + '" data-vip-action="on">off</button>';
         return "<tr>" +
           '<td class="jid">' + esc(v.jid) + "</td>" +
           '<td class="name">' + esc(v.name || "\u2014") + "</td>" +

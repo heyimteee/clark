@@ -435,6 +435,8 @@ label.field .lbl {
   align-items: end;
 }
 
+.vip-form .btn { align-self: stretch; display: flex; align-items: center; justify-content: center; }
+
 .bulk-form {
   display: flex;
   flex-direction: column;
@@ -486,6 +488,12 @@ label.field .lbl {
 }
 
 .chip.on { background: var(--ok-bg); color: var(--ok-ink); border-color: transparent; }
+
+.btn.state-on {
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+  border-color: var(--ok-ink);
+}
 
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 
