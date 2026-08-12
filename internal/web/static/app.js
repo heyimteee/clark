@@ -16,14 +16,19 @@
   let historyVip = "";
   let historyAll = false;
   let historyLoading = false;
-  let micArmed = false;
+  let voiceOn = false;
   let recording = false;
   let mediaRecorder = null;
   let audioCtx = null;
+  let analyser = null;
+  let vadRAF = 0;
+  let micStream = null;
+  let chunks = [];
+  let silenceStart = 0;
+  let recStartAt = 0;
   let wakeRecognition = null;
-  let bubbleOpen = false;
+  let wakeHeld = false;
   let chatBusy = false;
-  let pendingBubble = null;
 
   const $ = function (sel, root) {
     return (root || document).querySelector(sel);
@@ -168,7 +173,6 @@
             '<button id="mode-bento" class="active">bento</button>' +
             '<button id="mode-chat">chat</button>' +
           "</div>" +
-          '<button id="btn-bubble" class="btn" title="voice bubble">voice</button>' +
           '<button id="btn-logout" class="btn">lock</button>' +
         "</div></header>" +
         '<main class="container" id="main">' +
@@ -192,12 +196,12 @@
                 '<div class="row"><span class="k">tts</span><span class="v" id="voice-tts"></span></div>' +
                 '<div class="row"><span class="k">voice</span><span class="v" id="voice-voice"></span></div>' +
               "</div>" +
+              '<div class="toggle-row"><div><div class="t-lbl">voice on</div><div class="t-desc">wake word + hands-free talk</div></div>' +
+                '<label class="switch"><input type="checkbox" id="voice-toggle"><span class="track"></span><span class="knob"></span></label></div>' +
               '<div class="voice-actions" id="voice-actions">' +
-                '<button class="btn" id="btn-mic" title="click to talk">mic</button>' +
-                '<button class="btn" id="btn-wake" title="wake word">wake</button>' +
-                '<button class="btn" id="btn-testtts">test</button>' +
+                '<button class="btn" id="btn-testtts">test voice</button>' +
               "</div>" +
-              '<div id="voice-status">voice disabled on server</div>' +
+              '<div id="voice-status">voice off \u2014 flip the toggle</div>' +
             "</div>" +
             '<div class="card tile-access"><h2>Access</h2><p class="sub">tools per contact</p>' +
               '<select id="vip-picker" class="input"></select>' +
@@ -218,7 +222,7 @@
                 "</div>" +
               "</div>" +
               '<table id="vip-table"><thead>' +
-                '<tr><th>number</th><th>name</th><th>relation</th><th>enabled</th><th>access</th><th></th></tr>' +
+                '<tr><th>number</th><th>name</th><th>relation</th><th title="whether clark responds to this person">active</th><th>access</th><th></th></tr>' +
               "</thead><tbody></tbody></table>" +
             "</div>" +
             '<div class="card tile-history"><h2>History</h2><p class="sub">recent turns</p>' +
@@ -281,7 +285,6 @@
     $("#btn-logout").addEventListener("click", logout);
     $("#mode-bento").addEventListener("click", function () { setMode("bento"); });
     $("#mode-chat").addEventListener("click", function () { setMode("chat"); });
-    $("#btn-bubble").addEventListener("click", toggleBubble);
   }
 
   function setMode(m) {
@@ -327,8 +330,7 @@
     $("#btn-vip-bulk").addEventListener("click", addVIPBulk);
     $("#vip-picker").addEventListener("change", renderAccess);
     $("#btn-testtts").addEventListener("click", testTTS);
-    $("#btn-mic").addEventListener("click", toggleMic);
-    $("#btn-wake").addEventListener("click", toggleWake);
+    $("#voice-toggle").addEventListener("change", onVoiceToggle);
 
     const tabs = document.querySelectorAll(".scope-tabs button");
     tabs.forEach(function (b) {
@@ -412,10 +414,13 @@
     $("#voice-voice").textContent = v.ttsVoice || "\u2014";
     const avail = !!v.ttsEngine;
     const st = $("#voice-status");
-    if (avail) {
-      st.textContent = "voice ready \u00b7 wake word \u201cclark\u201d";
-    } else {
+    const toggle = $("#voice-toggle");
+    if (!avail && !voiceOn) {
       st.textContent = "voice disabled on server";
+      toggle.disabled = true;
+    } else if (!voiceOn) {
+      st.textContent = "voice off \u2014 flip the toggle";
+      toggle.disabled = false;
     }
     $("#btn-testtts").style.visibility = avail ? "" : "hidden";
   }
@@ -468,9 +473,10 @@
     }
     const grants = vip.access || [];
     list.innerHTML = tools.map(function (t) {
-      const on = grants.indexOf(t) !== -1;
-      return '<div class="a-row"><span class="a-name">' + esc(t) + "</span>" +
-        '<label class="switch"><input type="checkbox" data-tool="' + esc(t) + '" data-jid="' + esc(jid) + '"' + (on ? " checked" : "") + ">" +
+      const name = t && t.name ? t.name : String(t);
+      const on = grants.indexOf(name) !== -1;
+      return '<div class="a-row"><span class="a-name">' + esc(name) + "</span>" +
+        '<label class="switch"><input type="checkbox" data-tool="' + esc(name) + '" data-jid="' + esc(jid) + '"' + (on ? " checked" : "") + ">" +
         '<span class="track"></span><span class="knob"></span></label></div>';
     }).join("") || '<div class="a-row" style="color:var(--ink-faint)">no tools</div>';
 
@@ -564,18 +570,11 @@
         chatBusy = false;
         setTyping(false);
         appendChat("clark", f.text || "");
-        if (pendingBubble) {
-          speakBubble(pendingBubble);
-          pendingBubble = null;
-        }
+        if (voiceOn && f.text) speakTTS(f.text);
       } else if (f.type === "error") {
         chatBusy = false;
         setTyping(false);
         appendChat("clark", f.message || "something went wrong");
-        if (pendingBubble) {
-          speakBubble(pendingBubble);
-          pendingBubble = null;
-        }
       } else if (f.type === "pong") {
         /* keepalive ok */
       }
@@ -778,37 +777,18 @@
 
   /* ---------------- voice ---------------- */
 
-  function toggleBubble() {
-    bubbleOpen = !bubbleOpen;
-    if (bubbleOpen) openBubble();
-    else $("#voice-bubble") && $("#voice-bubble").remove();
-  }
-
-  function openBubble() {
-    let b = $("#voice-bubble");
-    if (b) return;
-    b = el(
-      '<div id="voice-bubble">' +
-        '<div class="vb-head"><span class="vb-title">voice</span>' +
-        '<button class="close" id="vb-close" title="close">\u2715</button></div>' +
-        '<div id="vb-status">tap mic, then talk</div>' +
-        '<div id="vb-wave"></div>' +
-        '<div id="vb-transcript"></div>' +
-        '<div id="vb-actions">' +
-          '<button class="btn" id="vb-mic">mic</button>' +
-          '<button class="btn" id="vb-speak" disabled>speak reply</button>' +
-        "</div>" +
-      "</div>"
-    );
-    document.body.appendChild(b);
-    $("#vb-close").addEventListener("click", toggleBubble);
-    $("#vb-mic").addEventListener("click", toggleMic);
-    $("#vb-speak").addEventListener("click", function () { speakReply(); });
-
-    for (let i = 0; i < 16; i++) {
-      $("#vb-wave").appendChild(el('<span class="bar"></span>'));
-    }
-  }
+  const AFFIRMATIONS = [
+    "Sir.",
+    "Listening, Sir.",
+    "Right here, Sir.",
+    "Yes, Sir?",
+    "At your service, Sir.",
+    "I\u2019m here, Sir.",
+    "How can I help, Sir?",
+    "Ready when you are, Sir.",
+    "Standing by, Sir.",
+    "Go ahead, Sir."
+  ];
 
   async function testTTS() {
     const status = $("#voice-status");
@@ -817,11 +797,13 @@
       const d = await api("/web/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: "Hello, I\u2019m clark. Voice is working." }),
+        body: JSON.stringify({ text: "Hello, I\u2019m Clark. Voice is working." }),
       });
       if (!d || !d.audio) throw new Error("no audio");
       const a = new Audio("data:audio/wav;base64," + d.audio);
-      a.onended = function () { if (status) status.textContent = "ready"; };
+      a.onended = function () {
+        if (status) status.textContent = voiceOn ? "say \u201cclark\u201d" : "voice off \u2014 flip the toggle";
+      };
       a.onerror = function () { if (status) status.textContent = "playback failed"; };
       a.play();
     } catch (e) {
@@ -829,54 +811,171 @@
     }
   }
 
-  async function toggleMic() {
-    if (recording) { stopRecording(); return; }
-    if (!micArmed) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        micArmed = true;
-        $("#voice-actions").classList.add("mic-armed");
-        const status = $("#voice-status");
-        if (status) status.textContent = "mic ready \u2014 click again to record";
-        window.__clarkStream = stream;
-      } catch (e) {
-        toast("mic unavailable: " + e.message);
+  async function onVoiceToggle() {
+    if ($("#voice-toggle").checked) await armVoice();
+    else disarmVoice();
+  }
+
+  async function armVoice() {
+    const status = $("#voice-status");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast("mic unavailable in this browser");
+      $("#voice-toggle").checked = false;
+      return;
+    }
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      toast("mic permission denied: " + e.message);
+      $("#voice-toggle").checked = false;
+      if (status) status.textContent = "mic unavailable";
+      return;
+    }
+    voiceOn = true;
+    setupAnalyser();
+    startWake();
+  }
+
+  function disarmVoice() {
+    voiceOn = false;
+    wakeHeld = false;
+    stopWake();
+    stopRecording();
+    if (micStream) {
+      micStream.getTracks().forEach(function (t) { t.stop(); });
+      micStream = null;
+    }
+    const status = $("#voice-status");
+    if (status) status.textContent = "voice off \u2014 flip the toggle";
+  }
+
+  function setupAnalyser() {
+    if (!micStream) return;
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const src = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    src.connect(analyser);
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  }
+
+  function startWake() {
+    if (!voiceOn || wakeRecognition || wakeHeld) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const status = $("#voice-status");
+    if (!SR) {
+      if (status) status.textContent = "wake word unsupported \u2014 use a Chromium browser";
+      return;
+    }
+    const r = new SR();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = "en-US";
+    r.onresult = function (ev) {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const t = (ev.results[i][0] || {}).transcript || "";
+        if (t.toLowerCase().indexOf("clark") !== -1) { handleWake(); return; }
       }
-    } else {
-      startRecording();
+    };
+    r.onerror = function () {};
+    r.onend = function () {
+      wakeRecognition = null;
+      if (voiceOn && !recording && !wakeHeld) startWake();
+    };
+    r.start();
+    wakeRecognition = r;
+    if (status) status.textContent = "say \u201cclark\u201d";
+  }
+
+  function stopWake() {
+    if (wakeRecognition) {
+      const r = wakeRecognition;
+      wakeRecognition = null;
+      try { r.stop(); } catch (e) {}
     }
   }
 
+  function handleWake() {
+    if (recording || wakeHeld) return;
+    stopWake();
+    wakeHeld = true;
+    const phrase = AFFIRMATIONS[Math.floor(Math.random() * AFFIRMATIONS.length)];
+    const status = $("#voice-status");
+    if (status) status.textContent = "\u201c" + phrase + "\u201d";
+    speakTTS(phrase).then(function () {
+      startRecording();
+      wakeHeld = false;
+    });
+  }
+
+  function speakTTS(text) {
+    return api("/web/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text }),
+    }).then(function (d) {
+      return new Promise(function (resolve) {
+        if (!d || !d.audio) { resolve(); return; }
+        const a = new Audio("data:audio/wav;base64," + d.audio);
+        a.onended = resolve;
+        a.onerror = resolve;
+        a.play();
+      });
+    }).catch(function () {});
+  }
+
   function startRecording() {
-    const stream = window.__clarkStream;
-    if (!stream) { toggleMic(); return; }
+    if (!micStream || recording) return;
     if (typeof MediaRecorder === "undefined") { toast("recording unsupported"); return; }
     recording = true;
-    $("#voice-actions").classList.add("recording");
-    const status = $("#voice-status");
-    if (status) status.textContent = "recording\u2026 click mic to stop";
-    const bubble = $("#vb-transcript");
-    if (bubble) bubble.textContent = "listening\u2026";
-
+    recStartAt = performance.now();
+    silenceStart = 0;
     chunks = [];
-    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder = new MediaRecorder(micStream);
     mediaRecorder.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
     mediaRecorder.onstop = onRecordingStop;
     mediaRecorder.start();
+    const status = $("#voice-status");
+    if (status) status.textContent = "listening\u2026";
+    vadRAF = requestAnimationFrame(vadLoop);
+  }
+
+  function vadLoop() {
+    if (!recording || !analyser) return;
+    const buf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    const rms = Math.sqrt(sum / buf.length);
+    const now = performance.now();
+    if (rms > 0.02) {
+      silenceStart = 0;
+    } else if (!silenceStart) {
+      silenceStart = now;
+    } else if (now - silenceStart > 1500 && now - recStartAt > 600) {
+      stopRecording();
+      return;
+    }
+    vadRAF = requestAnimationFrame(vadLoop);
   }
 
   function stopRecording() {
-    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+    if (vadRAF) cancelAnimationFrame(vadRAF);
+    vadRAF = 0;
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    } else {
+      onRecordingStop();
+    }
   }
 
   async function onRecordingStop() {
     recording = false;
-    $("#voice-actions").classList.remove("recording");
     const status = $("#voice-status");
     if (status) status.textContent = "transcribing\u2026";
-
     try {
-      const blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      const mime = mediaRecorder ? mediaRecorder.mimeType : "audio/webm";
+      const blob = new Blob(chunks, { type: mime || "audio/webm" });
       const wav = await blobToWav(blob);
       const b64 = await bufferToBase64(wav);
       const d = await api("/web/api/stt", {
@@ -886,97 +985,24 @@
       });
       const text = (d && d.text || "").trim();
       if (!text) {
-        if (status) status.textContent = "nothing heard \u2014 try again";
+        if (status) status.textContent = "nothing heard \u2014 say \u201cclark\u201d to retry";
+        if (voiceOn) startWake();
         return;
       }
-      if (bubbleOpen) {
-        const tr = $("#vb-transcript");
-        if (tr) tr.textContent = text;
-      }
-      if (status) status.textContent = "heard you \u2014 sending";
-      await sendVoiceText(text);
+      if (status) status.textContent = "heard you \u2014 sending\u2026";
+      sendVoiceText(text);
+      if (voiceOn) startWake();
     } catch (e) {
       if (status) status.textContent = "transcription failed";
+      if (voiceOn) startWake();
     }
   }
 
-  async function sendVoiceText(text) {
+  function sendVoiceText(text) {
     if (!chatWs || chatWs.readyState !== WebSocket.OPEN) { toast("chat link offline"); return; }
     chatBusy = true;
     setTyping(true);
-    if (bubbleOpen) pendingBubble = true;
     sendFrame("chat", { text: text });
-  }
-
-  function speakBubble(_unused) {
-    speakReply();
-  }
-
-  async function speakReply() {
-    const last = $("#chat-list .msg.clark:not(.typing) .bubble");
-    if (!last) return;
-    const text = last.textContent.replace(/\s*\u00b7.*$/, "").trim();
-    if (!text) return;
-    const btn = $("#vb-speak");
-    if (btn) btn.disabled = true;
-    try {
-      const d = await api("/web/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text }),
-      });
-      if (d && d.audio) {
-        const a = new Audio("data:audio/wav;base64," + d.audio);
-        a.onended = function () { if (btn) btn.disabled = false; };
-        a.onerror = function () { if (btn) btn.disabled = false; };
-        a.play();
-      }
-    } catch (e) {
-      if (btn) btn.disabled = false;
-    }
-  }
-
-  function toggleWake() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const status = $("#voice-status");
-    if (!SR) {
-      if (status) status.textContent = "wake word unsupported in this browser";
-      return;
-    }
-    if (wakeRecognition) {
-      wakeRecognition.stop();
-      wakeRecognition = null;
-      if (status) status.textContent = "wake word off";
-      return;
-    }
-    const r = new SR();
-    r.continuous = true;
-    r.interimResults = true;
-    r.lang = "en-US";
-    r.onresult = function (ev) {
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const t = ev.results[i][0].transcript.toLowerCase();
-        if (t.indexOf("clark") !== -1) {
-          if (status) status.textContent = "wake \u201ccalled clark\u201d \u2014 recording";
-          if (!recording && micArmed) startRecording();
-          else if (!recording) {
-            navigator.mediaDevices.getUserMedia({ audio: true })
-              .then(function (stream) {
-                micArmed = true;
-                window.__clarkStream = stream;
-                startRecording();
-              }).catch(function () {});
-          }
-        }
-      }
-    };
-    r.onerror = function () {};
-    r.onend = function () {
-      if (wakeRecognition) { try { r.start(); } catch (e) {} }
-    };
-    r.start();
-    wakeRecognition = r;
-    if (status) status.textContent = "wake word on \u2014 say \u201cclark\u201d";
   }
 
   function blobToWav(blob) {
@@ -1043,6 +1069,7 @@
   }, 25000);
 
   window.addEventListener("beforeunload", function () {
+    stopWake();
     if (recording && mediaRecorder) { try { mediaRecorder.stop(); } catch (e) {} }
     if (chatWs) chatWs.close();
     if (logsWs) logsWs.close();

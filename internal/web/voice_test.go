@@ -74,7 +74,7 @@ func TestVoiceStatusAvailable(t *testing.T) {
 	if out["available"] != true {
 		t.Errorf("available = %v, want true", out["available"])
 	}
-	if out["sttModel"] != "whisper-turbo" || out["ttsEngine"] != "piper" || out["ttsVoice"] != "en_US-amy-medium" {
+	if out["sttModel"] != "whisper-turbo" || out["ttsEngine"] != "piper" || out["ttsVoice"] != "en_US-lessac-medium" {
 		t.Errorf("voice status = %v", out)
 	}
 }

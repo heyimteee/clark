@@ -60,14 +60,14 @@ func TestLoadWebDisabledDefaults(t *testing.T) {
 	if cfg.TTSEngine != "piper" {
 		t.Errorf("TTSEngine = %q, want piper", cfg.TTSEngine)
 	}
-	if cfg.TTSVoice != "en_US-amy-medium" {
-		t.Errorf("TTSVoice = %q, want en_US-amy-medium", cfg.TTSVoice)
+	if cfg.TTSVoice != "en_US-lessac-medium" {
+		t.Errorf("TTSVoice = %q, want en_US-lessac-medium", cfg.TTSVoice)
 	}
 	if cfg.PiperBin != "/opt/piper/piper" {
 		t.Errorf("PiperBin = %q, want /opt/piper/piper", cfg.PiperBin)
 	}
-	if cfg.PiperVoice != "/opt/piper/voices/en_US-amy-medium.onnx" {
-		t.Errorf("PiperVoice = %q, want /opt/piper/voices/en_US-amy-medium.onnx", cfg.PiperVoice)
+	if cfg.PiperVoice != "/opt/piper/voices/en_US-lessac-medium.onnx" {
+		t.Errorf("PiperVoice = %q, want /opt/piper/voices/en_US-lessac-medium.onnx", cfg.PiperVoice)
 	}
 }
 

@@ -41,7 +41,7 @@ type Config struct {
 	WhisperScript   string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
 	WhisperModelDir string // WHISPER_MODEL_DIR faster-whisper model dir (default /opt/whisper/model)
 	TTSEngine       string // TTS_ENGINE    "piper" now, "bark" later
-	TTSVoice        string // TTS_VOICE     Piper voice id (default en_US-amy-medium)
+	TTSVoice        string // TTS_VOICE     Piper voice id (default en_US-lessac-medium)
 	PiperBin        string // PIPER_BIN     piper executable (default /opt/piper/piper)
 	PiperVoice      string // PIPER_VOICE   piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
 }
@@ -114,7 +114,7 @@ func Load() (*Config, error) {
 
 	ttsVoice := os.Getenv("TTS_VOICE")
 	if ttsVoice == "" {
-		ttsVoice = "en_US-amy-medium"
+		ttsVoice = "en_US-lessac-medium"
 	}
 
 	piperBin := os.Getenv("PIPER_BIN")

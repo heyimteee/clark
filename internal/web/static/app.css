@@ -359,6 +359,8 @@ label.field .lbl {
   margin-top: var(--space-2);
 }
 
+.ctx-save-row .btn { flex: 1; }
+
 /* voice tile */
 
 .voice-meta { margin-bottom: var(--space-4); }
@@ -382,9 +384,6 @@ label.field .lbl {
   margin-top: var(--space-3);
   flex-wrap: wrap;
 }
-
-.mic-armed .btn.talk { border-color: var(--warn-ink); color: var(--warn-ink); }
-.mic-armed.recording .btn.talk { border-color: var(--err-ink); color: var(--err-ink); background: var(--err-bg); }
 
 #voice-status {
   margin-top: var(--space-3);
@@ -424,13 +423,12 @@ label.field .lbl {
 
 .vip-tools {
   display: flex;
+  flex-direction: column;
   gap: var(--space-4);
-  flex-wrap: wrap;
   margin-top: var(--space-4);
 }
 
 .vip-form {
-  flex: 1 1 320px;
   display: grid;
   grid-template-columns: 1fr 1fr 1fr auto;
   gap: 8px;
@@ -438,7 +436,9 @@ label.field .lbl {
 }
 
 .bulk-form {
-  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .bulk-form textarea { min-height: 58px; }
@@ -694,81 +694,6 @@ label.field .lbl {
 #chat-input:focus { outline: none; border-color: var(--ink); }
 
 #chat-send { border-radius: 12px; padding: 11px 22px; }
-
-/* ---------- voice bubble ---------- */
-
-#voice-bubble {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  width: 300px;
-  z-index: 40;
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: 16px;
-  padding: var(--space-4);
-}
-
-#voice-bubble .vb-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-3);
-}
-
-#voice-bubble .vb-title {
-  font-family: var(--serif);
-  font-size: 16px;
-  font-weight: 500;
-}
-
-#voice-bubble .close {
-  border: 0;
-  background: none;
-  color: var(--ink-faint);
-  font-size: 16px;
-  line-height: 1;
-}
-
-#vb-status {
-  font-size: 12px;
-  color: var(--ink-soft);
-  min-height: 34px;
-  margin-bottom: var(--space-3);
-}
-
-#vb-wave {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  height: 26px;
-  margin-bottom: var(--space-3);
-}
-
-#vb-wave .bar {
-  width: 3px;
-  border-radius: 2px;
-  background: var(--accent);
-  height: 4px;
-  transition: height 90ms ease;
-}
-
-#vb-transcript {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--ink);
-  min-height: 40px;
-  max-height: 96px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-#vb-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: var(--space-3);
-}
 
 /* ---------- logs strip ---------- */
 

@@ -13,8 +13,8 @@ COPY . .
 RUN CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -linkmode external -extldflags -static" -o /out/clark .
 
 # ---- piper stage ----
-# TTS voice model (en_US-amy-medium, ~60 MB) + its config, baked in so the
-# container never phones home at runtime.
+# TTS voice model (en_US-lessac-medium, ~60 MB, male) + its config, baked in so
+# the container never phones home at runtime.
 FROM debian:bookworm-slim AS piper-download
 
 RUN apt-get update \
@@ -22,10 +22,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/piper/voices \
-    && curl -fsSL -o /opt/piper/voices/en_US-amy-medium.onnx \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx \
-    && curl -fsSL -o /opt/piper/voices/en_US-amy-medium.onnx.json \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
+    && curl -fsSL -o /opt/piper/voices/en_US-lessac-medium.onnx \
+        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx \
+    && curl -fsSL -o /opt/piper/voices/en_US-lessac-medium.onnx.json \
+        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
 
 # ---- runtime stage ----
 # bookworm-slim (glibc) because piper's binaries are glibc-linked and fail on
@@ -50,7 +50,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV CLARK_DB=/data/clark.db
 ENV PIPER_BIN=/usr/local/bin/piper
-ENV PIPER_VOICE=/opt/piper/voices/en_US-amy-medium.onnx
+ENV PIPER_VOICE=/opt/piper/voices/en_US-lessac-medium.onnx
 ENV WHISPER_SCRIPT=/opt/whisper/run.py
 ENV WHISPER_MODEL_DIR=/opt/whisper/model
 WORKDIR /data

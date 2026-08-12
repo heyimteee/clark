@@ -122,7 +122,7 @@ func (f *fakeTTS) Synthesize(_ context.Context, _ string) ([]byte, error) {
 	return f.wav, nil
 }
 
-func (f *fakeTTS) Voice() string { return "en_US-amy-medium" }
+func (f *fakeTTS) Voice() string { return "en_US-lessac-medium" }
 
 func bearer(r *http.Request, token string) *http.Request {
 	r.Header.Set("Authorization", "Bearer "+token)

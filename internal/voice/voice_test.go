@@ -120,7 +120,7 @@ func TestPiperSynthesizeWAVHeader(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-amy-medium.onnx")
+	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-lessac-medium.onnx")
 	wav, err := p.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
@@ -179,7 +179,7 @@ func TestPiperCommandArgs(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-amy-medium.onnx")
+	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-lessac-medium.onnx")
 	if _, err := p.Synthesize(context.Background(), "hi"); err != nil {
 		t.Fatalf("Synthesize: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestPiperCommandArgs(t *testing.T) {
 	if gotName != "/opt/piper/piper" {
 		t.Errorf("binary = %q, want /opt/piper/piper", gotName)
 	}
-	want := []string{"--model", "/opt/piper/voices/en_US-amy-medium.onnx", "--output-raw"}
+	want := []string{"--model", "/opt/piper/voices/en_US-lessac-medium.onnx", "--output-raw"}
 	if strings.Join(gotArgs, " ") != strings.Join(want, " ") {
 		t.Errorf("args = %v, want %v", gotArgs, want)
 	}
@@ -202,7 +202,7 @@ func TestPiperSynthesizeErrors(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-amy-medium.onnx")
+	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-lessac-medium.onnx")
 	if _, err := p.Synthesize(context.Background(), "hi"); err == nil {
 		t.Error("Synthesize succeeded despite piper exiting 1")
 	}
@@ -214,9 +214,9 @@ func TestPiperSynthesizeErrors(t *testing.T) {
 
 // TestPiperVoiceName strips the .onnx extension for the UI.
 func TestPiperVoiceName(t *testing.T) {
-	p := NewPiper("/bin/piper", filepath.Join("voices", "en_US-amy-medium.onnx"))
-	if got := p.Voice(); got != "en_US-amy-medium" {
-		t.Errorf("Voice() = %q, want en_US-amy-medium", got)
+	p := NewPiper("/bin/piper", filepath.Join("voices", "en_US-lessac-medium.onnx"))
+	if got := p.Voice(); got != "en_US-lessac-medium" {
+		t.Errorf("Voice() = %q, want en_US-lessac-medium", got)
 	}
 }
 
