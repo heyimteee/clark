@@ -437,7 +437,7 @@ label.field .lbl {
   align-items: end;
 }
 
-.vip-form .btn { align-self: stretch; display: flex; align-items: center; justify-content: center; }
+.vip-form .btn { margin-bottom: 1px; }
 
 .bulk-form {
   display: flex;
@@ -701,6 +701,70 @@ label.field .lbl {
 .msg.user .meta { text-align: right; }
 
 .msg.clark.typing .bubble { color: var(--ink-faint); }
+
+/* Typing animation — three bouncing dots */
+.typing-dots {
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px 0;
+  margin-bottom: 4px;
+}
+
+.typing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  animation: bounce 1.2s infinite ease-in-out;
+}
+
+.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.3; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* Collapsible thinking/reasoning block */
+.thinking-block {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.thinking-block summary {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking-block summary:hover {
+  background: var(--bg);
+}
+
+.thinking-text {
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  border-top: 1px solid var(--line);
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg.user .bubble .thinking-block {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.msg.user .thinking-text { color: rgba(255, 255, 255, 0.8); }
+
+.err-msg { color: var(--err-ink); font-size: 13px; }
 
 #quick-msgs {
   width: min(760px, 100%);

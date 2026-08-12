@@ -16,7 +16,7 @@ func TestReplyLLMBypassesFastPath(t *testing.T) {
 	ctx := context.Background()
 
 	viaLLM, _, fake := newService(t)
-	text, err := viaLLM.ReplyLLM(ctx, "web", fastPathPhrase, true)
+	text, _, err := viaLLM.ReplyLLM(ctx, "web", fastPathPhrase, true)
 	if err != nil {
 		t.Fatalf("ReplyLLM: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestWebHistoryIsolated(t *testing.T) {
 		t.Fatalf("AddVIP: %v", err)
 	}
 
-	if _, err := s.ReplyLLM(ctx, "web", "hello there", true); err != nil {
+	if _, _, err := s.ReplyLLM(ctx, "web", "hello there", true); err != nil {
 		t.Fatalf("ReplyLLM: %v", err)
 	}
 	if len(fake.got) == 0 {
@@ -104,10 +104,10 @@ func TestReplyLLMRejectsBadInput(t *testing.T) {
 	s, _, _ := newService(t)
 	ctx := context.Background()
 
-	if _, err := s.ReplyLLM(ctx, "", "hi", true); err == nil {
+	if _, _, err := s.ReplyLLM(ctx, "", "hi", true); err == nil {
 		t.Error("ReplyLLM accepted an empty sender jid")
 	}
-	if _, err := s.ReplyLLM(ctx, "web", "", true); err == nil {
+	if _, _, err := s.ReplyLLM(ctx, "web", "", true); err == nil {
 		t.Error("ReplyLLM accepted an empty message")
 	}
 }

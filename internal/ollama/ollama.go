@@ -48,6 +48,7 @@ type ToolFunction struct {
 // ChatResult is a model reply: content and any tool calls to run.
 type ChatResult struct {
 	Content   string
+	Thinking  string
 	ToolCalls []ToolCall
 }
 
@@ -82,6 +83,7 @@ type chatRequest struct {
 type chatResponse struct {
 	Message struct {
 		Content   string     `json:"content"`
+		Thinking  string     `json:"thinking"`
 		ToolCalls []ToolCall `json:"tool_calls"`
 	} `json:"message"`
 }
@@ -139,6 +141,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (*C
 
 	return &ChatResult{
 		Content:   chatResp.Message.Content,
+		Thinking:  chatResp.Message.Thinking,
 		ToolCalls: chatResp.Message.ToolCalls,
 	}, nil
 }

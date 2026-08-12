@@ -37,32 +37,6 @@ func (s *Service) perVIPStatusOffReply(recipient string) string {
 	return "*Status Updated*\n\n_" + recipient + "_ has been personally silenced, Sir."
 }
 
-// prehandleCommand handles deterministic commands that the LLM does not
-// know about (thinking mode, history-limit). It runs even in the web
-// session where the full fast-path is bypassed.
-func (s *Service) prehandleCommand(userMsg string) (string, bool, error) {
-	switch {
-	case isThinkingCommand(userMsg):
-		on, toggle, _ := parseThinkingCommand(userMsg)
-		if toggle {
-			if err := s.ToggleThinking(); err != nil {
-				return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-			}
-		} else if err := s.SetThinking(on); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return thinkingReply(s.Thinking()), true, nil
-
-	case isHistoryLimitCommand(userMsg):
-		limit, _ := parseHistoryLimitCommand(userMsg)
-		if err := s.SetHistoryLimit(limit); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return historyLimitReply(limit), true, nil
-	}
-	return "", false, nil
-}
-
 // fastPath handles deterministic commands synchronously: hardcoded views and,
 // for the Master only, mutations of status, context, the inner circle, and
 // tool access. Returns a ready-to-send message and true when the request was

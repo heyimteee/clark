@@ -438,47 +438,49 @@ func (s *Service) SetHistoryLimit(n int) error {
 // Reply produces an answer for a VIP's message, running any tool calls the
 // model requests. isSelf marks the Master chatting in his own chat.
 func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, error) {
-	return s.reply(ctx, senderJID, userMsg, isSelf, true)
+	content, _, err := s.reply(ctx, senderJID, userMsg, isSelf, true)
+	return content, err
 }
 
 // ReplyLLM runs the full model pipeline and skips the deterministic fast
 // path, so the web console's chat always gets a genuine AI reply with every
-// tool available. Used by the Master's web session only.
-func (s *Service) ReplyLLM(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, error) {
+// tool available. Returns both the reply content and any reasoning text
+// (empty when thinking mode is off).
+func (s *Service) ReplyLLM(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, string, error) {
 	return s.reply(ctx, senderJID, userMsg, isSelf, false)
 }
 
 // reply implements both entry points. allowFastPath decides whether
 // deterministic commands (views and Master-only mutations) are answered
 // hardcoded; the web session sets it false so the model always runs.
-func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, allowFastPath bool) (string, error) {
+func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, allowFastPath bool) (string, string, error) {
 	if senderJID == "" {
-		return "", fmt.Errorf("empty sender JID")
+		return "", "", fmt.Errorf("empty sender JID")
 	}
 
 	_, isVIP := s.vip.Check(senderJID)
 	if !isSelf && !isVIP {
-		return "", fmt.Errorf("sender not in VIP list")
+		return "", "", fmt.Errorf("sender not in VIP list")
 	}
 
 	if userMsg == "" {
-		return "", fmt.Errorf("empty message content")
+		return "", "", fmt.Errorf("empty message content")
 	}
 
 	// Let tools know which conversation triggered them.
 	ctx = tools.WithSender(ctx, senderJID)
 
 	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	history, err := s.history.RecentMessages(senderJID, s.historyLimit)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if len(history) == 0 {
-		return "", fmt.Errorf("no chat history available")
+		return "", "", fmt.Errorf("no chat history available")
 	}
 
 	// Resume a paused iteration when the sender says "continue".
@@ -486,15 +488,16 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 		if isContinueMsg(userMsg) {
 			s.clearPending(senderJID)
 			it.messages = append(it.messages, ollama.Message{Role: "user", Content: userMsg})
-			reply, pending, err := s.runToolLoop(ctx, it.messages, userMsg, s.toolsForSender(senderJID, it.isSelf), it.isSelf)
+			reply, thinking, pending, err := s.runToolLoop(ctx, it.messages, userMsg, s.toolsForSender(senderJID, it.isSelf), it.isSelf)
 			if err != nil {
-				return "", s.handleModelError(err)
+				return "", thinking, s.handleModelError(err)
 			}
 			if pending != nil {
 				s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: it.isSelf, messages: pending})
 				reply = iterationLimitMessage
 			}
-			return s.saveReply(senderJID, reply)
+			saved, err := s.saveReply(senderJID, reply)
+			return saved, thinking, err
 		}
 		s.clearPending(senderJID)
 	}
@@ -502,20 +505,13 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	// Fast path: deterministic commands (views, and Master-only mutations of
 	// status, context, the inner circle, and tool access) are answered with
 	// hardcoded messages instead of a model round-trip. The web session
-	// bypasses the full fast-path so every console turn is a genuine AI reply,
-	// but deterministic commands (thinking, history-limit) must still be
-	// handled because the LLM doesn't know about them.
+	// bypasses it so every console turn is a genuine AI reply.
 	if allowFastPath {
 		if reply, handled, err := s.fastPath(senderJID, userMsg, isSelf); err != nil {
-			return "", err
+			return "", "", err
 		} else if handled {
-			return s.saveReply(senderJID, reply)
-		}
-	} else {
-		if reply, handled, err := s.prehandleCommand(userMsg); err != nil {
-			return "", err
-		} else if handled {
-			return s.saveReply(senderJID, reply)
+			saved, err := s.saveReply(senderJID, reply)
+			return saved, "", err
 		}
 	}
 
@@ -534,7 +530,7 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 
 	systemPrompt, err := s.renderPrompt(s.name, s.context, statusLabel(s.EnabledFor(senderJID)), relation, describeTools(available), task)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	messages := make([]ollama.Message, 0, len(history)+1)
@@ -546,9 +542,9 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	logging.Log("OLLAMA", logging.SevInfo, "REQUEST", "Generating response", "model", s.model)
 	start := time.Now()
 
-	reply, pending, err := s.runToolLoop(ctx, messages, userMsg, available, isSelf)
+	reply, thinking, pending, err := s.runToolLoop(ctx, messages, userMsg, available, isSelf)
 	if err != nil {
-		return "", fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
+		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
 	}
 
 	logging.Log("OLLAMA", logging.SevInfo, "RESPONSE", "Generation completed",
@@ -560,7 +556,8 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 		reply = iterationLimitMessage
 	}
 
-	return s.saveReply(senderJID, reply)
+	saved, err := s.saveReply(senderJID, reply)
+	return saved, thinking, err
 }
 
 // saveReply persists an assistant reply and returns it.
@@ -656,10 +653,9 @@ func formatExceptionVisitors(people []config.Person) string {
 }
 
 // runToolLoop drives the model: ask, run tool calls, and repeat up to
-// maxToolRounds until a plain reply is produced. If the budget is exhausted
-// mid-task it returns the accumulated messages so the caller can offer the
-// sender a second iteration.
-func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, userMsg string, available []tools.Tool, isSelf bool) (string, []ollama.Message, error) {
+// maxToolRounds until a plain reply is produced. Returns the content, the
+// accumulated reasoning text, messages for possible continuation, and error.
+func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, userMsg string, available []tools.Tool, isSelf bool) (string, string, []ollama.Message, error) {
 	if isSelf {
 		ctx = tools.WithMaster(ctx)
 	}
@@ -670,25 +666,30 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 	requestTools := toOllamaTools(available)
 	ranTools := make(map[string]bool)
 	nudges := 0
+	var lastThinking string
 	for round := 0; round < maxToolRounds; round++ {
 		result, err := s.llm.Chat(loopCtx, messages, requestTools)
 		if err != nil {
 			if loopCtx.Err() == context.DeadlineExceeded {
-				return s.tooSlowMessage(), nil, nil
+				return s.tooSlowMessage(), lastThinking, nil, nil
 			}
 			if round == 0 {
-				return "", nil, err
+				return "", lastThinking, nil, err
 			}
-			return "I beg your pardon, Sir, but something interrupted my train of thought. Pray _continue_ and I shall resume my duties at once.", nil, nil
+			return "I beg your pardon, Sir, but something interrupted my train of thought. Pray _continue_ and I shall resume my duties at once.", lastThinking, nil, nil
+		}
+
+		if result.Thinking != "" {
+			lastThinking = result.Thinking
 		}
 
 		if len(result.ToolCalls) == 0 {
 			needed, hint := s.needsAction(userMsg, result.Content, available)
 			if !needed || hintSatisfied(hint, ranTools) {
-				return result.Content, nil, nil
+				return result.Content, lastThinking, nil, nil
 			}
 			if nudges >= maxNudges {
-				return couldNotActMessage, nil, nil
+				return couldNotActMessage, lastThinking, nil, nil
 			}
 			nudges++
 			messages = append(messages, ollama.Message{Role: "assistant", Content: result.Content})
@@ -708,7 +709,7 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 		}
 	}
 
-	return "", messages, nil
+	return "", lastThinking, messages, nil
 }
 
 // needsAction reports whether the model must be pushed to invoke a tool for

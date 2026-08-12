@@ -586,21 +586,99 @@
       if (ws === chatWs) setTimeout(connectChat, 3000);
     };
     ws.onerror = function () { ws.close(); };
+    let streamBubble = null;
+    let streamText = "";
     ws.onmessage = function (ev) {
       let f;
       try { f = JSON.parse(ev.data); } catch (e) { return; }
       if (f.type === "ack") {
         setTyping(false);
+        // Create the bubble shell + typing animation.
+        const who = "clark";
+        const meta = who + " \u00b7 " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const li = el(
+          '<div class="msg ' + who + '">' +
+            '<div class="bubble">' +
+              '<div class="typing-dots"><span></span><span></span><span></span></div>' +
+              '<span class="meta">' + meta + "</span>" +
+            "</div>" +
+          "</div>"
+        );
+        $("#chat-list").appendChild(li);
+        scrollChat();
+        streamBubble = li.querySelector(".bubble");
+        streamText = "";
+      } else if (f.type === "thinking") {
+        // Show reasoning in a collapsible section inside the bubble.
+        if (streamBubble) {
+          const det = el(
+            '<details class="thinking-block">' +
+              '<summary>reasoning</summary>' +
+              '<div class="thinking-text">' + renderMarkup(f.text || "") + "</div>" +
+            "</details>"
+          );
+          // Insert before the typing dots or meta.
+          const meta = streamBubble.querySelector(".meta");
+          if (meta) streamBubble.insertBefore(det, meta);
+          else streamBubble.appendChild(det);
+          scrollChat();
+        }
+      } else if (f.type === "token") {
+        // Append word-by-word; remove typing animation on first token.
+        if (streamBubble) {
+          const dots = streamBubble.querySelector(".typing-dots");
+          if (dots) dots.remove();
+          // Add or extend a text node.
+          let textNode = streamBubble.querySelector(".stream-text");
+          if (!textNode) {
+            textNode = el("<span class='stream-text'></span>");
+            const meta = streamBubble.querySelector(".meta");
+            if (meta) streamBubble.insertBefore(textNode, meta);
+            else streamBubble.appendChild(textNode);
+          }
+          textNode.textContent += f.text;
+          streamText += f.text;
+          scrollChat();
+        }
+      } else if (f.type === "done") {
+        chatBusy = false;
+        if (streamBubble) {
+          const dots = streamBubble.querySelector(".typing-dots");
+          if (dots) dots.remove();
+          // Replace stream text with rendered markdown.
+          const textNode = streamBubble.querySelector(".stream-text");
+          if (textNode) textNode.outerHTML = renderMarkup(streamText);
+          // Speak reply if voice is on.
+          if (voiceOn && streamText.trim()) speakTTS(streamText.trim());
+          refreshAfterTurn();
+        }
+        streamBubble = null;
+        streamText = "";
       } else if (f.type === "reply") {
+        // Legacy fallback.
         chatBusy = false;
         setTyping(false);
         appendChat("clark", f.text || "");
         if (voiceOn && f.text) speakTTS(f.text);
         refreshAfterTurn();
+        streamBubble = null;
+        streamText = "";
       } else if (f.type === "error") {
         chatBusy = false;
         setTyping(false);
-        appendChat("clark", f.message || "something went wrong");
+        if (streamBubble) {
+          const dots = streamBubble.querySelector(".typing-dots");
+          if (dots) dots.remove();
+          const meta = streamBubble.querySelector(".meta");
+          const errEl = el('<div class="err-msg">' + renderMarkup(f.message || "something went wrong") + "</div>");
+          if (meta) streamBubble.insertBefore(errEl, meta);
+          else streamBubble.appendChild(errEl);
+          refreshAfterTurn();
+        } else {
+          appendChat("clark", f.message || "something went wrong");
+        }
+        streamBubble = null;
+        streamText = "";
       } else if (f.type === "pong") {
         /* keepalive ok */
       }
@@ -615,6 +693,11 @@
     return true;
   }
 
+  function scrollChat() {
+    var scroll = $("#chat-scroll");
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  }
+
   function appendChat(who, text) {
     const li = el(
       '<div class="msg ' + who + '"><div class="bubble">' + renderMarkup(text) +
@@ -623,17 +706,15 @@
     );
     const list = $("#chat-list");
     list.appendChild(li);
-    const scroll = $("#chat-scroll");
-    scroll.scrollTop = scroll.scrollHeight;
+    scrollChat();
   }
 
   function setTyping(on) {
     const existing = $("#chat-list .typing");
     if (on && !existing) {
-      const li = el('<div class="msg clark typing"><div class="bubble">thinking…</div></div>');
+      const li = el('<div class="msg clark typing"><div class="bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div></div>');
       $("#chat-list").appendChild(li);
-      const scroll = $("#chat-scroll");
-      scroll.scrollTop = scroll.scrollHeight;
+      scrollChat();
     } else if (!on && existing) {
       existing.remove();
     }

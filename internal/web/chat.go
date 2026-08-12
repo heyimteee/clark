@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -88,8 +89,7 @@ func (s *Server) chatAuth(ctx context.Context, c *websocket.Conn) bool {
 }
 
 // handleChatTurn runs one full-AI turn for the web session and streams the
-// outcome back as a single reply or error frame. An ack is sent immediately,
-// mirroring the Master's "one moment" so the bubble has instant feedback.
+// outcome back: thinking (if any), then word-by-word tokens, then done.
 func (s *Server) handleChatTurn(ctx context.Context, c *websocket.Conn, frame chatFrame) {
 	if frame.Text == "" {
 		s.writeFrame(ctx, c, map[string]any{"type": "error", "message": "empty message"})
@@ -99,7 +99,7 @@ func (s *Server) handleChatTurn(ctx context.Context, c *websocket.Conn, frame ch
 	turnCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	reply, err := s.butler.ReplyLLM(turnCtx, webJID, frame.Text, true)
+	reply, thinking, err := s.butler.ReplyLLM(turnCtx, webJID, frame.Text, true)
 	if err != nil {
 		if errors.Is(err, ollama.ErrRateLimited) {
 			s.writeFrame(ctx, c, map[string]any{"type": "error", "message": "I'm a bit swamped. Try again in a minute or two."})
@@ -109,7 +109,26 @@ func (s *Server) handleChatTurn(ctx context.Context, c *websocket.Conn, frame ch
 		s.writeFrame(ctx, c, map[string]any{"type": "error", "message": "something went wrong"})
 		return
 	}
-	s.writeFrame(ctx, c, map[string]any{"type": "reply", "text": reply})
+
+	// Stream reasoning if thinking mode is on and the model produced it.
+	if thinking != "" {
+		s.writeFrame(ctx, c, map[string]any{"type": "thinking", "text": thinking})
+	}
+
+	// Stream the reply word-by-word for a natural typing feel.
+	words := strings.Fields(reply)
+	for i, word := range words {
+		if i > 0 {
+			time.Sleep(25 * time.Millisecond)
+		}
+		token := word
+		if i < len(words)-1 {
+			token += " "
+		}
+		s.writeFrame(ctx, c, map[string]any{"type": "token", "text": token})
+	}
+
+	s.writeFrame(ctx, c, map[string]any{"type": "done"})
 }
 
 func (s *Server) writeFrame(ctx context.Context, c *websocket.Conn, v any) {

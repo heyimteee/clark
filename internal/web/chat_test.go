@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,36 +10,69 @@ import (
 	"github.com/heyimteee/clark/internal/ollama"
 )
 
-func TestChatAuthThenReply(t *testing.T) {
+// wsReadReply reads the ack then collects token+thinking+done frames and
+// returns the full text and any thinking string.
+func wsReadReply(t *testing.T, c *websocket.Conn) (text, thinking string) {
+	t.Helper()
+	// Read ack
+	ack := wsReadJSON(t, c)
+	if ack["type"] != "ack" {
+		t.Fatalf("expected ack, got %v", ack)
+	}
+	// Read streaming frames until done.
+	var parts []string
+	var thinkParts []string
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for done frame")
+		default:
+		}
+		f := wsReadJSON(t, c)
+		switch f["type"] {
+		case "thinking":
+			thinkParts = append(thinkParts, f["text"].(string))
+		case "token":
+			parts = append(parts, f["text"].(string))
+		case "done":
+			return strings.Join(parts, ""), strings.Join(thinkParts, "")
+		case "error":
+			t.Fatalf("error frame: %v", f)
+		default:
+			t.Fatalf("unexpected frame type: %v", f["type"])
+		}
+	}
+}
+
+// fastPathPhrase is a deterministic view command the fast path would answer
+// hardcoded instead of asking the model.
+const fastPathPhrase = "list of tools"
+
+// TestChatDeliversFullAIReply ensures every chat turn reaches the model and
+// the reply arrives as streaming token frames + done.
+func TestChatDeliversFullAIReply(t *testing.T) {
 	ts, _, llm, _ := newTestServer(t)
 	tok := login(t, ts)
 
 	c := wsDial(t, ts, "/web/api/chat")
 	wsWriteJSON(t, c, map[string]any{"type": "auth", "token": tok})
-
-	frame := wsReadJSON(t, c)
-	if frame["type"] != "auth" || frame["ok"] != true {
-		t.Fatalf("auth frame = %v, want auth ok", frame)
+	auth := wsReadJSON(t, c)
+	if auth["type"] != "auth" || auth["ok"] != true {
+		t.Fatalf("auth frame = %v, want auth ok", auth)
 	}
 
 	wsWriteJSON(t, c, map[string]any{"type": "chat", "text": "list of tools"})
-	ack := wsReadJSON(t, c)
-	if ack["type"] != "ack" {
-		t.Fatalf("ack frame = %v, want ack", ack)
-	}
-	reply := wsReadJSON(t, c)
-	if reply["type"] != "reply" {
-		t.Fatalf("reply frame = %v, want reply", reply)
-	}
-	text, _ := reply["text"].(string)
+	text, _ := wsReadReply(t, c)
 	if text == "" {
-		t.Errorf("reply text empty: %v", reply)
+		t.Error("streaming reply text is empty")
 	}
 	if len(llm.got) == 0 {
 		t.Error("chat did not reach the model (fast path would have answered hardcoded)")
 	}
 }
 
+// TestChatRejectsBadAuth ensures a wrong token closes the connection.
 func TestChatRejectsBadAuth(t *testing.T) {
 	ts, _, _, _ := newTestServer(t)
 
@@ -56,6 +90,7 @@ func TestChatRejectsBadAuth(t *testing.T) {
 	}
 }
 
+// TestChatRequiresAuthFirst ensures chat frames before auth get an error.
 func TestChatRequiresAuthFirst(t *testing.T) {
 	ts, _, _, _ := newTestServer(t)
 
@@ -67,26 +102,28 @@ func TestChatRequiresAuthFirst(t *testing.T) {
 		t.Fatalf("first frame = %v, want error (auth required)", frame)
 	}
 	if msg, _ := frame["message"].(string); msg == "" {
-		t.Error("auth-required error frame has no message")
+		t.Error("error frame has no message")
 	}
 }
 
-func TestChatPingPong(t *testing.T) {
+// TestChatPongRespondsToPing ensures ping frames get pong replies.
+func TestChatPongRespondsToPing(t *testing.T) {
 	ts, _, _, _ := newTestServer(t)
 	tok := login(t, ts)
 
 	c := wsDial(t, ts, "/web/api/chat")
 	wsWriteJSON(t, c, map[string]any{"type": "auth", "token": tok})
-	wsReadJSON(t, c) // auth ok
+	wsReadJSON(t, c)
 
 	wsWriteJSON(t, c, map[string]any{"type": "ping"})
-	frame := wsReadJSON(t, c)
-	if frame["type"] != "pong" {
-		t.Fatalf("frame = %v, want pong", frame)
+	pong := wsReadJSON(t, c)
+	if pong["type"] != "pong" {
+		t.Fatalf("pong frame = %v, want pong", pong)
 	}
 }
 
-func TestChatSurfacesRateLimit(t *testing.T) {
+// TestChatRateLimitPropagates ensures model rate-limit errors surface.
+func TestChatRateLimitPropagates(t *testing.T) {
 	ts, _, llm, _ := newTestServer(t)
 	tok := login(t, ts)
 	llm.err = ollama.ErrRateLimited
@@ -106,6 +143,7 @@ func TestChatSurfacesRateLimit(t *testing.T) {
 	}
 }
 
+// TestChatSerializesPerConnection ensures a burst of messages is serial.
 func TestChatSerializesPerConnection(t *testing.T) {
 	ts, _, _, _ := newTestServer(t)
 	tok := login(t, ts)
@@ -114,20 +152,19 @@ func TestChatSerializesPerConnection(t *testing.T) {
 	wsWriteJSON(t, c, map[string]any{"type": "auth", "token": tok})
 	wsReadJSON(t, c)
 
-	// A burst of chat frames must each get exactly one ack + one reply.
+	// A burst of chat frames must each get exactly one reply (token + done).
 	for i := 0; i < 3; i++ {
 		wsWriteJSON(t, c, map[string]any{"type": "chat", "text": "hello"})
 	}
 	for i := 0; i < 3; i++ {
-		if ack := wsReadJSON(t, c); ack["type"] != "ack" {
-			t.Fatalf("burst ack %d = %v, want ack", i, ack)
-		}
-		if reply := wsReadJSON(t, c); reply["type"] != "reply" {
-			t.Fatalf("burst reply %d = %v, want reply", i, reply)
+		text, _ := wsReadReply(t, c)
+		if text == "" {
+			t.Fatalf("burst reply %d is empty", i)
 		}
 	}
 }
 
+// TestChatUnknownMessageType ensures unrecognized frames get an error.
 func TestChatUnknownMessageType(t *testing.T) {
 	ts, _, _, _ := newTestServer(t)
 	tok := login(t, ts)

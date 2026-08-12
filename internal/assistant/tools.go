@@ -44,6 +44,27 @@ func (s *Service) registerManagementTools() {
 	)
 
 	s.tools.RegisterFunc(
+		"set_thinking",
+		"Toggle clark's reasoning/thinking mode. When enabled, clark thinks through problems step-by-step before answering. Only the Master may use this.",
+		toolParams(map[string]any{
+			"on": map[string]any{"type": "boolean", "description": "true to enable thinking mode, false to disable it"},
+		}, "on"),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			on := tools.BoolArg(args, "on")
+			if err := s.SetThinking(on); err != nil {
+				return "", err
+			}
+			if on {
+				return "Thinking mode is now on, Sir. I will reason through problems before answering.", nil
+			}
+			return "Thinking mode is now off, Sir. I will respond directly.", nil
+		},
+	)
+
+	s.tools.RegisterFunc(
 		"set_context",
 		"Update the master context that describes the Master's current status. Triggered by phrasings like 'my context is ...', 'remember that ...', 'note that ...', 'set my context to ...'. Only the Master may use this.",
 		toolParams(map[string]any{
