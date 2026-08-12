@@ -40,7 +40,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the faster-whisper tiny model (downloaded from HF at build time).
-RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8').save_to_disk('/opt/whisper/model')"
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-tiny', local_dir='/opt/whisper/model')"
 
 COPY --from=build /out/clark /usr/local/bin/clark
 COPY --from=piper-download /opt/piper /opt/piper
