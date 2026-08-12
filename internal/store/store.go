@@ -12,15 +12,15 @@ import (
 
 // Message is a single chat history entry.
 type Message struct {
-	Role    string
-	Content string
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // HistoryEntry is one stored message tagged with its conversation.
 type HistoryEntry struct {
-	JID     string
-	Role    string
-	Content string
+	JID     string `json:"jid"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // VIPEntry is a person admitted to the inner circle.

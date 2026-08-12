@@ -322,7 +322,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	if _, err := s.butler.ReplyLLM(ctx, body.JID, body.Text, true); err != nil {
+	reply, err := s.butler.ReplyLLM(ctx, body.JID, body.Text, true)
+	if err != nil {
 		if errors.Is(err, ollama.ErrRateLimited) {
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "I'm a bit swamped. Try again in a minute or two."})
 			return
@@ -330,7 +331,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to deliver message"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"state": s.state()})
+	writeJSON(w, http.StatusOK, map[string]any{"state": s.state(), "reply": reply})
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {

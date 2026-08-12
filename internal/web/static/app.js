@@ -520,7 +520,7 @@
         return '<div class="hist-row">' +
           '<span class="hist-time">' + esc(t) + "</span>" +
           '<span class="hist-who ' + (e.role === "user" ? "you" : "ck") + '">' + who + "</span>" +
-          '<span class="hist-text">' + esc(e.text) + "</span>" +
+          '<span class="hist-text">' + esc(e.content) + "</span>" +
           "</div>";
       }).join("");
     } catch (e) {

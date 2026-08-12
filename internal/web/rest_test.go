@@ -47,6 +47,14 @@ func TestHistoryWebScope(t *testing.T) {
 	if len(entries) == 0 {
 		t.Fatal("history returned no entries")
 	}
+	// The API contract (§6.4) is lowercase role/content, which the SPA reads.
+	first, _ := entries[0].(map[string]any)
+	if first["role"] != "user" {
+		t.Errorf("entry role = %v, want user", first["role"])
+	}
+	if first["content"] != "hi" {
+		t.Errorf("entry content = %v, want hi", first["content"])
+	}
 }
 
 func TestHistoryRejectsUnknownScope(t *testing.T) {
@@ -248,6 +256,9 @@ func TestSendMessage(t *testing.T) {
 	}
 	if out["state"] == nil {
 		t.Fatal("send did not return a fresh state snapshot")
+	}
+	if out["reply"] != "Indubitably." {
+		t.Errorf("send reply = %v, want Indubitably.", out["reply"])
 	}
 }
 
