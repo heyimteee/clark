@@ -34,13 +34,16 @@ type Config struct {
 	IMessageSelfHandle  string // IMESSAGE_SELF_HANDLE   Master's own "+6281111111111"
 
 	// Web console transport. Serves the bento dashboard + chat on :8090.
-	WebEnabled bool   // WEB_ENABLED   "1"/"true"/"on" to serve the console
-	WebToken   string // WEB_TOKEN     required when WEB_ENABLED
-	STTModel   string // STT_MODEL     Ollama model for transcription (default whisper-turbo)
-	TTSEngine  string // TTS_ENGINE    "piper" now, "bark" later
-	TTSVoice   string // TTS_VOICE     Piper voice id (default en_US-amy-medium)
-	PiperBin   string // PIPER_BIN     piper executable (default /opt/piper/piper)
-	PiperVoice string // PIPER_VOICE   piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
+	WebEnabled      bool   // WEB_ENABLED   "1"/"true"/"on" to serve the console
+	WebToken        string // WEB_TOKEN     required when WEB_ENABLED
+	STTEngine       string // STT_ENGINE    "faster-whisper" (default) or "ollama"
+	STTModel        string // STT_MODEL     Ollama model for transcription (default whisper-turbo; STT_ENGINE=ollama only)
+	WhisperScript   string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
+	WhisperModelDir string // WHISPER_MODEL_DIR faster-whisper model dir (default /opt/whisper/model)
+	TTSEngine       string // TTS_ENGINE    "piper" now, "bark" later
+	TTSVoice        string // TTS_VOICE     Piper voice id (default en_US-amy-medium)
+	PiperBin        string // PIPER_BIN     piper executable (default /opt/piper/piper)
+	PiperVoice      string // PIPER_VOICE   piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
 }
 
 // Person is a named person with an optional relation to the Master.
@@ -84,9 +87,24 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("WEB_ENABLED=1 requires WEB_TOKEN set in your .env. Generate one with: openssl rand -hex 32")
 	}
 
+	sttEngine := os.Getenv("STT_ENGINE")
+	if sttEngine == "" {
+		sttEngine = "faster-whisper"
+	}
+
 	sttModel := os.Getenv("STT_MODEL")
 	if sttModel == "" {
 		sttModel = "whisper-turbo"
+	}
+
+	whisperScript := os.Getenv("WHISPER_SCRIPT")
+	if whisperScript == "" {
+		whisperScript = "/opt/whisper/run.py"
+	}
+
+	whisperModelDir := os.Getenv("WHISPER_MODEL_DIR")
+	if whisperModelDir == "" {
+		whisperModelDir = "/opt/whisper/model"
 	}
 
 	ttsEngine := os.Getenv("TTS_ENGINE")
@@ -127,13 +145,16 @@ func Load() (*Config, error) {
 		IMessageBridgeToken: os.Getenv("IMESSAGE_BRIDGE_TOKEN"),
 		IMessageSelfHandle:  os.Getenv("IMESSAGE_SELF_HANDLE"),
 
-		WebEnabled: webEnabled,
-		WebToken:   webToken,
-		STTModel:   sttModel,
-		TTSEngine:  ttsEngine,
-		TTSVoice:   ttsVoice,
-		PiperBin:   piperBin,
-		PiperVoice: piperVoice,
+		WebEnabled:      webEnabled,
+		WebToken:        webToken,
+		STTEngine:       sttEngine,
+		STTModel:        sttModel,
+		WhisperScript:   whisperScript,
+		WhisperModelDir: whisperModelDir,
+		TTSEngine:       ttsEngine,
+		TTSVoice:        ttsVoice,
+		PiperBin:        piperBin,
+		PiperVoice:      piperVoice,
 	}, nil
 }
 

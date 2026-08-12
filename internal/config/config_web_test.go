@@ -14,7 +14,10 @@ func loadFromEnv(t *testing.T, env map[string]string) (*Config, error) {
 	_ = os.Unsetenv("OLLAMA_URL")
 	_ = os.Unsetenv("WEB_ENABLED")
 	_ = os.Unsetenv("WEB_TOKEN")
+	_ = os.Unsetenv("STT_ENGINE")
 	_ = os.Unsetenv("STT_MODEL")
+	_ = os.Unsetenv("WHISPER_SCRIPT")
+	_ = os.Unsetenv("WHISPER_MODEL_DIR")
 	_ = os.Unsetenv("TTS_ENGINE")
 	_ = os.Unsetenv("TTS_VOICE")
 	_ = os.Unsetenv("PIPER_BIN")
@@ -45,6 +48,15 @@ func TestLoadWebDisabledDefaults(t *testing.T) {
 	if cfg.STTModel != "whisper-turbo" {
 		t.Errorf("STTModel = %q, want whisper-turbo", cfg.STTModel)
 	}
+	if cfg.STTEngine != "faster-whisper" {
+		t.Errorf("STTEngine = %q, want faster-whisper", cfg.STTEngine)
+	}
+	if cfg.WhisperScript != "/opt/whisper/run.py" {
+		t.Errorf("WhisperScript = %q, want /opt/whisper/run.py", cfg.WhisperScript)
+	}
+	if cfg.WhisperModelDir != "/opt/whisper/model" {
+		t.Errorf("WhisperModelDir = %q, want /opt/whisper/model", cfg.WhisperModelDir)
+	}
 	if cfg.TTSEngine != "piper" {
 		t.Errorf("TTSEngine = %q, want piper", cfg.TTSEngine)
 	}
@@ -71,14 +83,17 @@ func TestLoadWebEnabledWithoutTokenFails(t *testing.T) {
 
 func TestLoadWebEnabledWithToken(t *testing.T) {
 	cfg, err := loadFromEnv(t, map[string]string{
-		"OLLAMA_MODEL": "gemma4:cloud",
-		"WEB_ENABLED":  "1",
-		"WEB_TOKEN":    "s3cret",
-		"STT_MODEL":    "whisper-large-v3",
-		"TTS_ENGINE":   "bark",
-		"TTS_VOICE":    "v2/en_US-speaker_1",
-		"PIPER_BIN":    "/custom/piper",
-		"PIPER_VOICE":  "/custom/voices/amy.onnx",
+		"OLLAMA_MODEL":      "gemma4:cloud",
+		"WEB_ENABLED":       "1",
+		"WEB_TOKEN":         "s3cret",
+		"STT_ENGINE":        "ollama",
+		"STT_MODEL":         "whisper-large-v3",
+		"WHISPER_SCRIPT":    "/custom/run.py",
+		"WHISPER_MODEL_DIR": "/custom/model",
+		"TTS_ENGINE":        "bark",
+		"TTS_VOICE":         "v2/en_US-speaker_1",
+		"PIPER_BIN":         "/custom/piper",
+		"PIPER_VOICE":       "/custom/voices/amy.onnx",
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -91,6 +106,15 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 	}
 	if cfg.STTModel != "whisper-large-v3" {
 		t.Errorf("STTModel = %q, want whisper-large-v3", cfg.STTModel)
+	}
+	if cfg.STTEngine != "ollama" {
+		t.Errorf("STTEngine = %q, want ollama", cfg.STTEngine)
+	}
+	if cfg.WhisperScript != "/custom/run.py" {
+		t.Errorf("WhisperScript = %q, want /custom/run.py", cfg.WhisperScript)
+	}
+	if cfg.WhisperModelDir != "/custom/model" {
+		t.Errorf("WhisperModelDir = %q, want /custom/model", cfg.WhisperModelDir)
 	}
 	if cfg.TTSEngine != "bark" {
 		t.Errorf("TTSEngine = %q, want bark", cfg.TTSEngine)

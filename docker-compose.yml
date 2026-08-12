@@ -27,6 +27,9 @@ services:
       # enabled: the server refuses to start without it (port 443 is public).
       - WEB_ENABLED=${WEB_ENABLED:-1}
       - WEB_TOKEN=${WEB_TOKEN:?set WEB_TOKEN in your .env}
+      # Speech seam. STT runs faster-whisper (baked into the image); STT_ENGINE=ollama
+      # uses the Ollama whisper model instead. TTS runs piper (also baked in).
+      - STT_ENGINE=${STT_ENGINE:-faster-whisper}
       - STT_MODEL=${STT_MODEL:-whisper-turbo}
       - TTS_ENGINE=${TTS_ENGINE:-piper}
       - TTS_VOICE=${TTS_VOICE:-en_US-amy-medium}

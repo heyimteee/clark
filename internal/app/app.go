@@ -182,28 +182,52 @@ func (a *App) Run() error {
 	return err
 }
 
-// buildVoiceEngine assembles the STT/TTS seam. STT (Ollama Whisper) is always
-// wired; TTS is only wired when the piper binary and voice exist, so a missing
-// piper degrades to "TTS unavailable" instead of a hard crash.
+// buildVoiceEngine assembles the STT/TTS seam. Engines are only wired when
+// their prerequisites exist, so a missing whisper model or piper degrades to
+// "voice unavailable" instead of a hard crash.
 func buildVoiceEngine(cfg *config.Config) *voice.Engine {
-	engine := &voice.Engine{STT: voice.NewOllamaWhisper(cfg.OllamaURL, cfg.STTModel)}
+	return &voice.Engine{STT: buildSTTEngine(cfg), TTS: buildTTSEngine(cfg)}
+}
 
+func buildSTTEngine(cfg *config.Config) voice.STT {
+	switch cfg.STTEngine {
+	case "faster-whisper", "":
+		if _, err := os.Stat(cfg.WhisperScript); err != nil {
+			logging.Log("VOICE", logging.SevWarn, "STT", "Whisper runner missing; STT disabled", "script", cfg.WhisperScript)
+			return nil
+		}
+		if _, err := os.Stat(cfg.WhisperModelDir); err != nil {
+			logging.Log("VOICE", logging.SevWarn, "STT", "Whisper model missing; STT disabled", "model", cfg.WhisperModelDir)
+			return nil
+		}
+		logging.Log("VOICE", logging.SevInfo, "STT", "faster-whisper ready", "model", cfg.WhisperModelDir)
+		return voice.NewFasterWhisper(cfg.WhisperScript, cfg.WhisperModelDir)
+	case "ollama":
+		logging.Log("VOICE", logging.SevInfo, "STT", "Ollama whisper wired", "model", cfg.STTModel)
+		return voice.NewOllamaWhisper(cfg.OllamaURL, cfg.STTModel)
+	default:
+		logging.Log("VOICE", logging.SevWarn, "STT", "Unknown STT engine; disabled", "engine", cfg.STTEngine)
+		return nil
+	}
+}
+
+func buildTTSEngine(cfg *config.Config) voice.TTS {
 	switch cfg.TTSEngine {
 	case "piper":
 		if _, err := os.Stat(cfg.PiperBin); err != nil {
 			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper binary missing; TTS disabled", "bin", cfg.PiperBin)
-			return engine
+			return nil
 		}
 		if _, err := os.Stat(cfg.PiperVoice); err != nil {
 			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper voice missing; TTS disabled", "voice", cfg.PiperVoice)
-			return engine
+			return nil
 		}
-		engine.TTS = voice.NewPiper(cfg.PiperBin, cfg.PiperVoice)
 		logging.Log("VOICE", logging.SevInfo, "TTS", "Piper ready", "bin", cfg.PiperBin, "voice", cfg.PiperVoice)
+		return voice.NewPiper(cfg.PiperBin, cfg.PiperVoice)
 	default:
 		logging.Log("VOICE", logging.SevWarn, "TTS", "Unknown TTS engine; disabled", "engine", cfg.TTSEngine)
+		return nil
 	}
-	return engine
 }
 
 // notifier picks the desktop notifier, or a silent no-op in headless
