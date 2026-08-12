@@ -35,7 +35,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip \
-    && pip3 install --no-cache-dir piper-tts \
+    && pip3 install --no-cache-dir --break-system-packages piper-tts \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/clark /usr/local/bin/clark
