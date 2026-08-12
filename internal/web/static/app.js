@@ -616,8 +616,54 @@
 
   function renderMarkup(text) {
     let s = esc(text);
+
+    // Fenced code blocks -> <pre><code>, held aside so their newlines survive.
+    const blocks = [];
+    s = s.replace(/```[^\n]*\n?([\s\S]*?)```/g, function (_, body) {
+      blocks.push("<pre><code>" + body + "</code></pre>");
+      return "\u0000B" + (blocks.length - 1) + "\u0000";
+    });
+
+    // Inline code -> placeholders (protects * and _ inside code).
+    const codes = [];
+    s = s.replace(/`([^`\n]+)`/g, function (_, c) {
+      codes.push(c);
+      return "\u0000C" + (codes.length - 1) + "\u0000";
+    });
+
     s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    s = s.replace(/\n/g, "<br>");
+    s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    s = s.replace(/_([^_\n]+)_/g, "<em>$1</em>");
+
+    // Bullet and numbered lists, line by line. Line breaks are emitted here
+    // so list markup and <pre> blocks never get stray <br> injected.
+    const lines = s.split("\n");
+    const out = [];
+    let inList = null;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const last = i === lines.length - 1;
+
+      let m = line.match(/^\s*[-*]\s+/);
+      if (m) {
+        if (inList !== "ul") { if (inList) out.push("</ol>"); out.push("<ul>"); inList = "ul"; }
+        out.push("<li>" + line.replace(/^\s*[-*]\s+/, "") + "</li>");
+        continue;
+      }
+      m = line.match(/^\s*\d+\.\s+/);
+      if (m) {
+        if (inList !== "ol") { if (inList) out.push("</ul>"); out.push("<ol>"); inList = "ol"; }
+        out.push("<li>" + line.replace(/^\s*\d+\.\s+/, "") + "</li>");
+        continue;
+      }
+      if (inList) { out.push(inList === "ul" ? "</ul>" : "</ol>"); inList = null; }
+      out.push(line + (last ? "" : "<br>"));
+    }
+    if (inList) out.push(inList === "ul" ? "</ul>" : "</ol>");
+
+    s = out.join("");
+    s = s.replace(/\u0000C(\d+)\u0000/g, function (_, i) { return "<code>" + codes[+i] + "</code>"; });
+    s = s.replace(/\u0000B(\d+)\u0000/g, function (_, i) { return blocks[+i]; });
     return s;
   }
 

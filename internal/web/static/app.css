@@ -42,7 +42,28 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-#app { min-height: 100%; display: flex; flex-direction: column; }
+#app {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
 
 button, input, textarea, select {
   font: inherit;
@@ -596,6 +617,49 @@ label.field .lbl {
   border-bottom-left-radius: 4px;
 }
 
+.msg .bubble code {
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--line);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.msg.user .bubble code {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.msg .bubble pre {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.msg .bubble pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.msg.user .bubble pre {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.msg .bubble ul,
+.msg .bubble ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+
+.msg .bubble li { margin: 2px 0; }
+
 .msg .meta {
   display: block;
   font-family: var(--mono);
@@ -711,6 +775,7 @@ label.field .lbl {
 #logs {
   position: sticky;
   bottom: 0;
+  flex-shrink: 0;
   z-index: 30;
   background: #20201e;
   color: #d6d5d0;
