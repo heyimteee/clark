@@ -1,0 +1,1010 @@
+(function () {
+  "use strict";
+
+  const SESSION_KEY = "clark.session";
+  const TOAST_MS = 2400;
+
+  let token = sessionStorage.getItem(SESSION_KEY) || null;
+  let state = null;
+  let mode = "bento";
+  let chatWs = null;
+  let logsWs = null;
+  let logsOpen = false;
+  let logsPaused = false;
+  let logsPinned = false;
+  let historyScope = "web";
+  let historyVip = "";
+  let historyAll = false;
+  let historyLoading = false;
+  let micArmed = false;
+  let recording = false;
+  let mediaRecorder = null;
+  let audioCtx = null;
+  let wakeRecognition = null;
+  let bubbleOpen = false;
+  let chatBusy = false;
+  let pendingBubble = null;
+
+  const $ = function (sel, root) {
+    return (root || document).querySelector(sel);
+  };
+  const el = function (html) {
+    const t = document.createElement("template");
+    t.innerHTML = html.trim();
+    return t.content.firstElementChild;
+  };
+  const esc = function (s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  };
+
+  /* ---------------- api ---------------- */
+
+  async function api(path, opts) {
+    opts = opts || {};
+    const headers = Object.assign({}, opts.headers || {});
+    if (token) headers["Authorization"] = "Bearer " + token;
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
+    if (res.status === 401) {
+      logout();
+      throw new Error("session expired");
+    }
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* empty body */ }
+    if (!res.ok) {
+      throw new Error((data && data.error) || ("request failed (" + res.status + ")"));
+    }
+    if (data && data.state) state = data.state;
+    return data;
+  }
+
+  function captureState() {
+    if (!state) return;
+    const elStatus = $("#cfg-status");
+    const elThinking = $("#cfg-thinking");
+    const elLimit = $("#cfg-limit");
+    const elCtx = $("#cfg-ctx");
+    if (elStatus) elStatus.checked = state.enabled;
+    if (elThinking) elThinking.checked = state.thinking;
+    if (elLimit) elLimit.value = state.historyLimit;
+    if (elCtx && document.activeElement !== elCtx) elCtx.value = state.context;
+  }
+
+  function renderState() {
+    captureState();
+    renderVoiceMeta();
+    renderVips();
+    renderAccess();
+    renderChatMeta();
+  }
+
+  /* ---------------- toast ---------------- */
+
+  function toast(msg) {
+    let t = $("#toast");
+    if (!t) {
+      t = el('<div id="toast"></div>');
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function () { t.classList.remove("show"); }, TOAST_MS);
+  }
+
+  /* ---------------- login ---------------- */
+
+  function showLogin() {
+    $("#app").innerHTML = "";
+    const v = el(
+      '<div id="login">' +
+        '<div class="wordmark">clark</div>' +
+        '<p class="tagline">voice console for the house</p>' +
+        '<div class="card">' +
+        '<label class="field"><span class="lbl">access key</span>' +
+        '<input id="login-key" class="input" type="password" placeholder="&#183;&#183;&#183;&#183;&#183;&#183;&#183;&#183;" autocomplete="current-password" autofocus></label>' +
+        '<div class="form-row"><button id="login-btn" class="btn primary" style="flex:1">unlock</button></div>' +
+        '<p class="err hidden"></p>' +
+        "</div>" +
+        "</div>"
+    );
+    $("#app").appendChild(v);
+
+    const key = $("#login-key");
+    const btn = $("#login-btn");
+    const err = $(".err", v);
+
+    async function attempt() {
+      if (!key.value) return;
+      btn.disabled = true;
+      err.classList.add("hidden");
+      try {
+        const r = await fetch("/web/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: key.value }),
+        });
+        const data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.token) {
+          throw new Error(data.error || "wrong key");
+        }
+        token = data.token;
+        sessionStorage.setItem(SESSION_KEY, token);
+        boot();
+      } catch (e) {
+        err.textContent = e.message;
+        err.classList.remove("hidden");
+        btn.disabled = false;
+        key.select();
+      }
+    }
+    btn.addEventListener("click", attempt);
+    key.addEventListener("keydown", function (e) { if (e.key === "Enter") attempt(); });
+  }
+
+  function logout() {
+    token = null;
+    sessionStorage.removeItem(SESSION_KEY);
+    if (chatWs) { chatWs.close(); chatWs = null; }
+    if (logsWs) { logsWs.close(); logsWs = null; }
+    showLogin();
+  }
+
+  /* ---------------- boot ---------------- */
+
+  async function boot() {
+    $("#app").innerHTML = "";
+    const shell = el(
+      '<div id="shell" class="hidden">' +
+        '<header id="header"><div class="container">' +
+          '<div class="brand"><span class="wordmark">clark</span><span class="env-tag">v4 console</span></div>' +
+          '<div class="spacer"></div>' +
+          '<div id="live" title="live link"><span class="dot"></span>live</div>' +
+          '<div class="mode-switch">' +
+            '<button id="mode-bento" class="active">bento</button>' +
+            '<button id="mode-chat">chat</button>' +
+          "</div>" +
+          '<button id="btn-bubble" class="btn" title="voice bubble">voice</button>' +
+          '<button id="btn-logout" class="btn">lock</button>' +
+        "</div></header>" +
+        '<main class="container" id="main">' +
+          '<section id="bento">' +
+            '<div class="card tile-config"><h2>Config</h2><p class="sub">runtime settings</p>' +
+              '<div class="toggle-row"><div><div class="t-lbl">clark awake</div><div class="t-desc">responds to messages</div></div>' +
+                '<label class="switch"><input type="checkbox" id="cfg-status"><span class="track"></span><span class="knob"></span></label></div>' +
+              '<div class="toggle-row"><div><div class="t-lbl">thinking</div><div class="t-desc">show reasoning steps</div></div>' +
+                '<label class="switch"><input type="checkbox" id="cfg-thinking"><span class="track"></span><span class="knob"></span></label></div>' +
+              '<div class="toggle-row"><div><div class="t-lbl">history limit</div><div class="t-desc">turns remembered per chat</div></div>' +
+                '<input id="cfg-limit" class="input" type="number" min="1" max="30" style="width:70px"></div>' +
+              '<form id="config-form">' +
+                '<label class="field"><span class="lbl">context</span>' +
+                '<textarea id="cfg-ctx" class="input" rows="3"></textarea></label>' +
+                '<div class="ctx-save-row"><button class="btn" type="submit">save context</button></div>' +
+              "</form>" +
+            "</div>" +
+            '<div class="card tile-voice"><h2>Voice</h2><p class="sub">speech seam</p>' +
+              '<div class="voice-meta">' +
+                '<div class="row"><span class="k">stt</span><span class="v" id="voice-stt"></span></div>' +
+                '<div class="row"><span class="k">tts</span><span class="v" id="voice-tts"></span></div>' +
+                '<div class="row"><span class="k">voice</span><span class="v" id="voice-voice"></span></div>' +
+              "</div>" +
+              '<div class="voice-actions" id="voice-actions">' +
+                '<button class="btn" id="btn-mic" title="click to talk">mic</button>' +
+                '<button class="btn" id="btn-wake" title="wake word">wake</button>' +
+                '<button class="btn" id="btn-testtts">test</button>' +
+              "</div>" +
+              '<div id="voice-status">voice disabled on server</div>' +
+            "</div>" +
+            '<div class="card tile-access"><h2>Access</h2><p class="sub">tools per contact</p>' +
+              '<select id="vip-picker" class="input"></select>' +
+              '<div id="access-list"></div>' +
+            "</div>" +
+            '<div class="card tile-vips"><h2>VIPs</h2><p class="sub">people who reach clark</p>' +
+              '<div class="vip-tools">' +
+                '<div class="vip-form">' +
+                  '<label class="field"><span class="lbl">number</span><input id="vip-num" class="input" placeholder="628123456789"></label>' +
+                  '<label class="field"><span class="lbl">name</span><input id="vip-name" class="input" placeholder="Name"></label>' +
+                  '<label class="field"><span class="lbl">relation</span><input id="vip-rel" class="input" placeholder="Friend"></label>' +
+                  '<button class="btn primary" id="btn-vip-add">add</button>' +
+                "</div>" +
+                '<div class="bulk-form">' +
+                  '<label class="field"><span class="lbl">bulk add &mdash; number,name,relation per line</span>' +
+                  '<textarea id="vip-bulk" class="input" placeholder="628123456789,Name,Friend"></textarea></label>' +
+                  '<button class="btn" id="btn-vip-bulk">add all</button>' +
+                "</div>" +
+              "</div>" +
+              '<table id="vip-table"><thead>' +
+                '<tr><th>number</th><th>name</th><th>relation</th><th>enabled</th><th>access</th><th></th></tr>' +
+              "</thead><tbody></tbody></table>" +
+            "</div>" +
+            '<div class="card tile-history"><h2>History</h2><p class="sub">recent turns</p>' +
+              '<div class="scope-tabs">' +
+                '<button data-scope="global">all</button>' +
+                '<button data-scope="vip">per vip</button>' +
+                '<button data-scope="web" class="active">web</button>' +
+              "</div>" +
+              '<div id="hist-meta">' +
+                '<select id="hist-vip" class="input hidden"></select>' +
+                '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-soft)">' +
+                '<input type="checkbox" id="hist-all"> show more</label>' +
+                '<div class="spacer"></div>' +
+                '<button class="btn mini" id="hist-refresh">refresh</button>' +
+              "</div>" +
+              '<div class="hist-list" id="hist-list"></div>' +
+            "</div>" +
+          "</section>" +
+          '<section id="chat" class="hidden">' +
+            '<div id="chat-scroll"><div id="chat-list"></div></div>' +
+            '<div id="chat-input-bar">' +
+              '<textarea id="chat-input" rows="1" placeholder="message clark…"></textarea>' +
+              '<button id="chat-send" class="btn primary">send</button>' +
+            "</div>" +
+          "</section>" +
+        "</main>" +
+        '<section id="logs">' +
+          '<div id="logs-head">' +
+            '<span class="title">live log</span>' +
+            '<span class="hint" id="logs-hint">streaming…</span>' +
+            '<div class="spacer"></div>' +
+            '<span class="hint" id="logs-pin">pin</span>' +
+          "</div>" +
+          '<div id="logs-body" class="hidden"></div>' +
+        "</section>" +
+      "</div>"
+    );
+    $("#app").appendChild(shell);
+    $("#shell").classList.remove("hidden");
+
+    bindHeader();
+    bindBento();
+    bindChat();
+    bindLogs();
+
+    try {
+      await api("/web/api/state");
+      renderState();
+      connectChat();
+      connectLogs();
+      refreshHistory();
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
+  /* ---------------- header ---------------- */
+
+  function bindHeader() {
+    $("#btn-logout").addEventListener("click", logout);
+    $("#mode-bento").addEventListener("click", function () { setMode("bento"); });
+    $("#mode-chat").addEventListener("click", function () { setMode("chat"); });
+    $("#btn-bubble").addEventListener("click", toggleBubble);
+  }
+
+  function setMode(m) {
+    mode = m;
+    $("#mode-bento").classList.toggle("active", m === "bento");
+    $("#mode-chat").classList.toggle("active", m === "chat");
+    $("#bento").classList.toggle("hidden", m !== "bento");
+    $("#chat").classList.toggle("hidden", m !== "chat");
+    if (m === "chat") $("#chat-input").focus();
+  }
+
+  function markLive(live) {
+    const l = $("#live");
+    l.classList.toggle("live", live);
+    l.innerHTML = '<span class="dot"></span>' + (live ? "live" : "offline");
+  }
+
+  /* ---------------- bento handlers ---------------- */
+
+  function bindBento() {
+    const cfgStatus = $("#cfg-status");
+    const cfgThinking = $("#cfg-thinking");
+    const cfgLimit = $("#cfg-limit");
+    const cfgForm = $("#config-form");
+
+    cfgStatus.addEventListener("change", function () {
+      mutate("/web/api/status", { enabled: cfgStatus.checked });
+    });
+    cfgThinking.addEventListener("change", function () {
+      mutate("/web/api/thinking", { enabled: cfgThinking.checked });
+    });
+    cfgLimit.addEventListener("change", function () {
+      const n = parseInt(cfgLimit.value, 10);
+      if (!n || n < 1 || n > 30) { toast("limit must be 1\u201330"); captureState(); return; }
+      mutate("/web/api/history-limit", { limit: n });
+    });
+    cfgForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      mutate("/web/api/context", { context: $("#cfg-ctx").value });
+    });
+
+    $("#btn-vip-add").addEventListener("click", addVIP);
+    $("#btn-vip-bulk").addEventListener("click", addVIPBulk);
+    $("#vip-picker").addEventListener("change", renderAccess);
+    $("#btn-testtts").addEventListener("click", testTTS);
+    $("#btn-mic").addEventListener("click", toggleMic);
+    $("#btn-wake").addEventListener("click", toggleWake);
+
+    const tabs = document.querySelectorAll(".scope-tabs button");
+    tabs.forEach(function (b) {
+      b.addEventListener("click", function () {
+        tabs.forEach(function (t) { t.classList.toggle("active", t === b); });
+        historyScope = b.dataset.scope;
+        historyVip = "";
+        historyAll = false;
+        $("#hist-all").checked = false;
+        $("#hist-vip").classList.toggle("hidden", historyScope !== "vip");
+        $("#hist-vip").value = "";
+        refreshHistory();
+      });
+    });
+    $("#hist-vip").addEventListener("change", function () {
+      historyVip = $("#hist-vip").value;
+      historyAll = false;
+      $("#hist-all").checked = false;
+      refreshHistory();
+    });
+    $("#hist-all").addEventListener("change", function () {
+      historyAll = this.checked;
+      refreshHistory();
+    });
+    $("#hist-refresh").addEventListener("click", refreshHistory);
+
+    $("#vip-table tbody").addEventListener("click", function (e) {
+      const btn = e.target.closest("button[data-vip-action]");
+      if (!btn) return;
+      const jid = btn.dataset.vip;
+      const act = btn.dataset.vipAction;
+      if (act === "del") {
+        mutate("/web/api/vip/delete", { jid: jid }, "deleted " + jid);
+      } else if (act === "on") {
+        mutate("/web/api/vip/status", { jid: jid, enabled: true });
+      } else if (act === "off") {
+        mutate("/web/api/vip/status", { jid: jid, enabled: false });
+      }
+    });
+  }
+
+  async function mutate(path, body, note) {
+    try {
+      const d = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (d && d.error) { toast(d.error); return; }
+      if (d && d.state) {
+        state = d.state;
+        captureState();
+        renderVips();
+        renderAccess();
+      }
+      if (note) toast(note);
+    } catch (e) {
+      toast(e.message);
+      captureState();
+    }
+  }
+
+  async function addVIP() {
+    const num = $("#vip-num").value.trim();
+    const name = $("#vip-name").value.trim();
+    const rel = $("#vip-rel").value.trim();
+    if (!num) { toast("number required"); return; }
+    await mutate("/web/api/vip/add", { input: [num, name, rel].filter(Boolean).join(",") }, "vip added");
+    $("#vip-num").value = $("#vip-name").value = $("#vip-rel").value = "";
+  }
+
+  async function addVIPBulk() {
+    const entries = $("#vip-bulk").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+    if (!entries.length) { toast("paste lines first"); return; }
+    await mutate("/web/api/vip/add-bulk", { entries: entries }, entries.length + " vip\u2019s added");
+    $("#vip-bulk").value = "";
+  }
+
+  /* ---------------- render: voice ---------------- */
+
+  function renderVoiceMeta() {
+    const v = state || {};
+    $("#voice-stt").textContent = v.sttModel || "\u2014";
+    $("#voice-tts").textContent = v.ttsEngine || "\u2014";
+    $("#voice-voice").textContent = v.ttsVoice || "\u2014";
+    const avail = !!v.ttsEngine;
+    const st = $("#voice-status");
+    if (avail) {
+      st.textContent = "voice ready \u00b7 wake word \u201cclark\u201d";
+    } else {
+      st.textContent = "voice disabled on server";
+    }
+    $("#btn-testtts").style.visibility = avail ? "" : "hidden";
+  }
+
+  function renderVips() {
+    const tbody = $("#vip-table tbody");
+    const vips = (state && state.vips) || [];
+    if (!vips.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">no vip\u2019s yet \u2014 add one above</td></tr>';
+    } else {
+      tbody.innerHTML = vips.map(function (v) {
+        const chips = (v.access || []).map(function (t) {
+          return '<span class="chip on">' + esc(t) + "</span>";
+        }).join("");
+        const toggle = v.enabled
+          ? '<button class="btn mini" data-vip="' + esc(v.jid) + '" data-vip-action="off">off</button>'
+          : '<button class="btn mini" data-vip="' + esc(v.jid) + '" data-vip-action="on">on</button>';
+        return "<tr>" +
+          '<td class="jid">' + esc(v.jid) + "</td>" +
+          '<td class="name">' + esc(v.name || "\u2014") + "</td>" +
+          '<td class="relation">' + esc(v.relation || "\u2014") + "</td>" +
+          '<td>' + toggle + "</td>" +
+          '<td>' + chips + "</td>" +
+          '<td><div class="row-actions"><button class="btn mini" data-vip="' + esc(v.jid) + '" data-vip-action="del">delete</button></div></td>' +
+          "</tr>";
+      }).join("");
+    }
+
+    const picker = $("#vip-picker");
+    const cur = picker.value;
+    picker.innerHTML = vips.map(function (v) {
+      return '<option value="' + esc(v.jid) + '">' + esc(v.name || v.jid) + "</option>";
+    }).join("") || '<option value="">no vips</option>';
+    if (vips.some(function (v) { return v.jid === cur; })) picker.value = cur;
+    refreshVipPicker();
+    renderAccess();
+  }
+
+  function renderAccess() {
+    const picker = $("#vip-picker");
+    const jid = picker.value;
+    const vips = (state && state.vips) || [];
+    const vip = vips.find(function (v) { return v.jid === jid; });
+    const tools = (state && state.tools) || [];
+    const list = $("#access-list");
+
+    if (!vip) {
+      list.innerHTML = '<div class="a-row" style="color:var(--ink-faint)">pick a vip</div>';
+      return;
+    }
+    const grants = vip.access || [];
+    list.innerHTML = tools.map(function (t) {
+      const on = grants.indexOf(t) !== -1;
+      return '<div class="a-row"><span class="a-name">' + esc(t) + "</span>" +
+        '<label class="switch"><input type="checkbox" data-tool="' + esc(t) + '" data-jid="' + esc(jid) + '"' + (on ? " checked" : "") + ">" +
+        '<span class="track"></span><span class="knob"></span></label></div>';
+    }).join("") || '<div class="a-row" style="color:var(--ink-faint)">no tools</div>';
+
+    list.querySelectorAll("input[data-tool]").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        mutate("/web/api/access", { jid: cb.dataset.jid, tool: cb.dataset.tool, enabled: cb.checked });
+      });
+    });
+  }
+
+  function renderChatMeta() {
+    const v = state || {};
+    $("#chat-list").innerHTML = "";
+    const who = v.name || "clark";
+    const seed = el(
+      '<div class="msg clark"><div class="bubble">' +
+        "Hi, I\u2019m " + esc(who) + ". Ask me anything \u2014 I have " + esc((v.tools || []).length) + " tools and a long memory." +
+        '<span class="meta">' + esc(v.model || "") + "</span>" +
+        "</div></div>"
+    );
+    $("#chat-list").appendChild(seed);
+  }
+
+  /* ---------------- history ---------------- */
+
+  async function refreshHistory() {
+    if (historyLoading) return;
+    historyLoading = true;
+    try {
+      const params = "?scope=" + encodeURIComponent(historyScope);
+      let q = params;
+      if (historyScope === "vip") {
+        if (historyVip) q += "&jid=" + encodeURIComponent(historyVip);
+        else { $("#hist-list").innerHTML = '<div id="hist-empty">pick a vip above</div>'; return; }
+      }
+      if (historyAll) q += "&limit=200";
+      const d = await api("/web/api/history" + q);
+      const entries = (d && d.entries) || [];
+      const list = $("#hist-list");
+      if (!entries.length) {
+        list.innerHTML = '<div id="hist-empty">no history yet</div>';
+        return;
+      }
+      list.innerHTML = entries.map(function (e) {
+        const who = e.role === "user" ? "you" : "clark";
+        const t = e.time || "";
+        return '<div class="hist-row">' +
+          '<span class="hist-time">' + esc(t) + "</span>" +
+          '<span class="hist-who ' + (e.role === "user" ? "you" : "ck") + '">' + who + "</span>" +
+          '<span class="hist-text">' + esc(e.text) + "</span>" +
+          "</div>";
+      }).join("");
+    } catch (e) {
+      if (e.message !== "session expired") toast(e.message);
+    } finally {
+      historyLoading = false;
+    }
+  }
+
+  function refreshVipPicker() {
+    const vips = (state && state.vips) || [];
+    const sel = $("#hist-vip");
+    const cur = sel.value;
+    sel.innerHTML = vips.map(function (v) {
+      return '<option value="' + esc(v.jid) + '">' + esc(v.name || v.jid) + "</option>";
+    }).join("");
+    if (vips.some(function (v) { return v.jid === cur; })) sel.value = cur;
+  }
+
+  /* ---------------- chat (ws) ---------------- */
+
+  function connectChat() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(proto + "//" + location.host + "/web/api/chat");
+    chatWs = ws;
+    ws.onopen = function () {
+      sendFrame("auth", { token: token });
+      markLive(true);
+    };
+    ws.onclose = function () {
+      markLive(false);
+      if (ws === chatWs) setTimeout(connectChat, 3000);
+    };
+    ws.onerror = function () { ws.close(); };
+    ws.onmessage = function (ev) {
+      let f;
+      try { f = JSON.parse(ev.data); } catch (e) { return; }
+      if (f.type === "ack") {
+        setTyping(false);
+      } else if (f.type === "reply") {
+        chatBusy = false;
+        setTyping(false);
+        appendChat("clark", f.text || "");
+        if (pendingBubble) {
+          speakBubble(pendingBubble);
+          pendingBubble = null;
+        }
+      } else if (f.type === "error") {
+        chatBusy = false;
+        setTyping(false);
+        appendChat("clark", f.message || "something went wrong");
+        if (pendingBubble) {
+          speakBubble(pendingBubble);
+          pendingBubble = null;
+        }
+      } else if (f.type === "pong") {
+        /* keepalive ok */
+      }
+    };
+  }
+
+  function sendFrame(type, payload, ws) {
+    ws = ws || chatWs;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const f = Object.assign({ type: type }, payload);
+    ws.send(JSON.stringify(f));
+    return true;
+  }
+
+  function appendChat(who, text) {
+    const li = el(
+      '<div class="msg ' + who + '"><div class="bubble">' + renderMarkup(text) +
+        '<span class="meta">' + who + " \u00b7 " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "</span>" +
+        "</div></div>"
+    );
+    const list = $("#chat-list");
+    list.appendChild(li);
+    const scroll = $("#chat-scroll");
+    scroll.scrollTop = scroll.scrollHeight;
+  }
+
+  function setTyping(on) {
+    const existing = $("#chat-list .typing");
+    if (on && !existing) {
+      const li = el('<div class="msg clark typing"><div class="bubble">thinking…</div></div>');
+      $("#chat-list").appendChild(li);
+      const scroll = $("#chat-scroll");
+      scroll.scrollTop = scroll.scrollHeight;
+    } else if (!on && existing) {
+      existing.remove();
+    }
+  }
+
+  function renderMarkup(text) {
+    let s = esc(text);
+    s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\n/g, "<br>");
+    return s;
+  }
+
+  function bindChat() {
+    const input = $("#chat-input");
+    const send = $("#chat-send");
+
+    async function submit() {
+      const text = input.value.trim();
+      if (!text || chatBusy) return;
+      if (!chatWs || chatWs.readyState !== WebSocket.OPEN) {
+        toast("chat link offline");
+        return;
+      }
+      chatBusy = true;
+      input.value = "";
+      input.style.height = "auto";
+      appendChat("user", text);
+      setTyping(true);
+      if (!sendFrame("chat", { text: text })) {
+        chatBusy = false;
+        setTyping(false);
+        toast("could not send");
+      }
+    }
+    send.addEventListener("click", submit);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submit();
+      }
+    });
+    input.addEventListener("input", function () {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 140) + "px";
+    });
+  }
+
+  /* ---------------- logs (ws) ---------------- */
+
+  function connectLogs() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(proto + "//" + location.host + "/web/api/logs");
+    logsWs = ws;
+    const body = $("#logs-body");
+    ws.onopen = function () {
+      sendFrame("auth", { token: token }, ws);
+      const h = $("#logs-hint");
+      if (h) h.textContent = "streaming\u2026";
+    };
+    ws.onclose = function () {
+      const h = $("#logs-hint");
+      if (h) h.textContent = "offline \u2014 retrying";
+      if (ws === logsWs) setTimeout(connectLogs, 3000);
+    };
+    ws.onmessage = function (ev) {
+      let f;
+      try { f = JSON.parse(ev.data); } catch (e) { return; }
+      if (f.type === "replay") {
+        body.innerHTML = "";
+        (f.lines || []).forEach(function (l) { appendLog(l); });
+        if (!logsOpen) body.classList.add("hidden");
+      } else if (f.type === "log") {
+        appendLog(f.line);
+      }
+    };
+  }
+
+  function appendLog(raw) {
+    const line = esc(raw || "");
+    const cls = logClass(raw);
+    const body = $("#logs-body");
+    const div = el('<div class="line ' + cls + '">' + line + "</div>");
+    body.appendChild(div);
+    while (body.childNodes.length > 400) body.removeChild(body.firstChild);
+    if (!logsPaused) body.scrollTop = body.scrollHeight;
+  }
+
+  function logClass(raw) {
+    const s = String(raw || "").toLowerCase();
+    if (/\b(error|fail|panic|fatal)\b/.test(s)) return "err";
+    if (/\b(warn|slow|retry)\b/.test(s)) return "warn";
+    if (/\b(ok|green|pass|ready)\b/.test(s)) return "ok";
+    if (/\b(info|connected|link|start)\b/.test(s)) return "info";
+    return "";
+  }
+
+  function bindLogs() {
+    const head = $("#logs-head");
+    const body = $("#logs-body");
+    const pin = $("#logs-pin");
+
+    head.addEventListener("click", function (e) {
+      if (e.target.closest("#logs-pin")) return;
+      logsOpen = !logsOpen;
+      body.classList.toggle("hidden", !logsOpen);
+      if (logsOpen) body.scrollTop = body.scrollHeight;
+    });
+    pin.addEventListener("click", function () {
+      logsPinned = !logsPinned;
+      pin.style.textDecoration = logsPinned ? "underline" : "";
+      if (logsPinned) body.classList.add("paused");
+      else body.classList.remove("paused");
+    });
+    body.addEventListener("mouseenter", function () {
+      if (!logsPinned) { logsPaused = true; body.classList.add("paused"); }
+    });
+    body.addEventListener("mouseleave", function () {
+      if (!logsPinned) { logsPaused = false; body.classList.remove("paused"); }
+    });
+  }
+
+  /* ---------------- voice ---------------- */
+
+  function toggleBubble() {
+    bubbleOpen = !bubbleOpen;
+    if (bubbleOpen) openBubble();
+    else $("#voice-bubble") && $("#voice-bubble").remove();
+  }
+
+  function openBubble() {
+    let b = $("#voice-bubble");
+    if (b) return;
+    b = el(
+      '<div id="voice-bubble">' +
+        '<div class="vb-head"><span class="vb-title">voice</span>' +
+        '<button class="close" id="vb-close" title="close">\u2715</button></div>' +
+        '<div id="vb-status">tap mic, then talk</div>' +
+        '<div id="vb-wave"></div>' +
+        '<div id="vb-transcript"></div>' +
+        '<div id="vb-actions">' +
+          '<button class="btn" id="vb-mic">mic</button>' +
+          '<button class="btn" id="vb-speak" disabled>speak reply</button>' +
+        "</div>" +
+      "</div>"
+    );
+    document.body.appendChild(b);
+    $("#vb-close").addEventListener("click", toggleBubble);
+    $("#vb-mic").addEventListener("click", toggleMic);
+    $("#vb-speak").addEventListener("click", function () { speakReply(); });
+
+    for (let i = 0; i < 16; i++) {
+      $("#vb-wave").appendChild(el('<span class="bar"></span>'));
+    }
+  }
+
+  async function testTTS() {
+    const status = $("#voice-status");
+    if (status) status.textContent = "speaking\u2026";
+    try {
+      const d = await api("/web/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "Hello, I\u2019m clark. Voice is working." }),
+      });
+      if (!d || !d.audio) throw new Error("no audio");
+      const a = new Audio("data:audio/wav;base64," + d.audio);
+      a.onended = function () { if (status) status.textContent = "ready"; };
+      a.onerror = function () { if (status) status.textContent = "playback failed"; };
+      a.play();
+    } catch (e) {
+      if (status) status.textContent = e.message;
+    }
+  }
+
+  async function toggleMic() {
+    if (recording) { stopRecording(); return; }
+    if (!micArmed) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micArmed = true;
+        $("#voice-actions").classList.add("mic-armed");
+        const status = $("#voice-status");
+        if (status) status.textContent = "mic ready \u2014 click again to record";
+        window.__clarkStream = stream;
+      } catch (e) {
+        toast("mic unavailable: " + e.message);
+      }
+    } else {
+      startRecording();
+    }
+  }
+
+  function startRecording() {
+    const stream = window.__clarkStream;
+    if (!stream) { toggleMic(); return; }
+    if (typeof MediaRecorder === "undefined") { toast("recording unsupported"); return; }
+    recording = true;
+    $("#voice-actions").classList.add("recording");
+    const status = $("#voice-status");
+    if (status) status.textContent = "recording\u2026 click mic to stop";
+    const bubble = $("#vb-transcript");
+    if (bubble) bubble.textContent = "listening\u2026";
+
+    chunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+    mediaRecorder.onstop = onRecordingStop;
+    mediaRecorder.start();
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  }
+
+  async function onRecordingStop() {
+    recording = false;
+    $("#voice-actions").classList.remove("recording");
+    const status = $("#voice-status");
+    if (status) status.textContent = "transcribing\u2026";
+
+    try {
+      const blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      const wav = await blobToWav(blob);
+      const b64 = await bufferToBase64(wav);
+      const d = await api("/web/api/stt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio: b64 }),
+      });
+      const text = (d && d.text || "").trim();
+      if (!text) {
+        if (status) status.textContent = "nothing heard \u2014 try again";
+        return;
+      }
+      if (bubbleOpen) {
+        const tr = $("#vb-transcript");
+        if (tr) tr.textContent = text;
+      }
+      if (status) status.textContent = "heard you \u2014 sending";
+      await sendVoiceText(text);
+    } catch (e) {
+      if (status) status.textContent = "transcription failed";
+    }
+  }
+
+  async function sendVoiceText(text) {
+    if (!chatWs || chatWs.readyState !== WebSocket.OPEN) { toast("chat link offline"); return; }
+    chatBusy = true;
+    setTyping(true);
+    if (bubbleOpen) pendingBubble = true;
+    sendFrame("chat", { text: text });
+  }
+
+  function speakBubble(_unused) {
+    speakReply();
+  }
+
+  async function speakReply() {
+    const last = $("#chat-list .msg.clark:not(.typing) .bubble");
+    if (!last) return;
+    const text = last.textContent.replace(/\s*\u00b7.*$/, "").trim();
+    if (!text) return;
+    const btn = $("#vb-speak");
+    if (btn) btn.disabled = true;
+    try {
+      const d = await api("/web/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      });
+      if (d && d.audio) {
+        const a = new Audio("data:audio/wav;base64," + d.audio);
+        a.onended = function () { if (btn) btn.disabled = false; };
+        a.onerror = function () { if (btn) btn.disabled = false; };
+        a.play();
+      }
+    } catch (e) {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function toggleWake() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const status = $("#voice-status");
+    if (!SR) {
+      if (status) status.textContent = "wake word unsupported in this browser";
+      return;
+    }
+    if (wakeRecognition) {
+      wakeRecognition.stop();
+      wakeRecognition = null;
+      if (status) status.textContent = "wake word off";
+      return;
+    }
+    const r = new SR();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = "en-US";
+    r.onresult = function (ev) {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const t = ev.results[i][0].transcript.toLowerCase();
+        if (t.indexOf("clark") !== -1) {
+          if (status) status.textContent = "wake \u201ccalled clark\u201d \u2014 recording";
+          if (!recording && micArmed) startRecording();
+          else if (!recording) {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+              .then(function (stream) {
+                micArmed = true;
+                window.__clarkStream = stream;
+                startRecording();
+              }).catch(function () {});
+          }
+        }
+      }
+    };
+    r.onerror = function () {};
+    r.onend = function () {
+      if (wakeRecognition) { try { r.start(); } catch (e) {} }
+    };
+    r.start();
+    wakeRecognition = r;
+    if (status) status.textContent = "wake word on \u2014 say \u201cclark\u201d";
+  }
+
+  function blobToWav(blob) {
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+      reader.onload = function () {
+        const arrayBuffer = reader.result;
+        if (blob.type.indexOf("audio/webm") === -1 && blob.type.indexOf("audio/ogg") === -1) {
+          resolve(arrayBuffer);
+          return;
+        }
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx.decodeAudioData(arrayBuffer).then(function (audio) {
+          const ch = audio.numberOfChannels;
+          const len = audio.length;
+          const out = new ArrayBuffer(44 + len * 2);
+          const v = new DataView(out);
+          writeString(v, 0, "RIFF");
+          v.setUint32(4, 36 + len * 2, true);
+          writeString(v, 8, "WAVE");
+          writeString(v, 12, "fmt ");
+          v.setUint32(16, 16, true);
+          v.setUint16(20, 1, true);
+          v.setUint16(22, 1, true);
+          v.setUint32(24, audio.sampleRate, true);
+          v.setUint32(28, audio.sampleRate * 2, true);
+          v.setUint16(32, 2, true);
+          v.setUint16(34, 16, true);
+          writeString(v, 36, "data");
+          v.setUint32(40, len * 2, true);
+          const data = audio.getChannelData(0);
+          let off = 44;
+          for (let i = 0; i < len; i++) {
+            const s = Math.max(-1, Math.min(1, data[i]));
+            v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+            off += 2;
+          }
+          resolve(out);
+        }).catch(reject);
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(blob);
+    });
+  }
+
+  function writeString(v, off, s) {
+    for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i));
+  }
+
+  function bufferToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+  }
+
+  /* ---------------- init ---------------- */
+
+  setInterval(function () {
+    if (chatWs && chatWs.readyState === WebSocket.OPEN) sendFrame("ping", {});
+  }, 25000);
+
+  window.addEventListener("beforeunload", function () {
+    if (recording && mediaRecorder) { try { mediaRecorder.stop(); } catch (e) {} }
+    if (chatWs) chatWs.close();
+    if (logsWs) logsWs.close();
+  });
+
+  if (token) {
+    boot();
+  } else {
+    showLogin();
+  }
+})();

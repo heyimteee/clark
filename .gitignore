@@ -36,3 +36,8 @@ utils/
 
 # Docker volume (persisted SQLite + WhatsApp session data)
 data/
+
+# Feature plans kept out of the repo during v4 development; unignored after
+# the v4 release so they stay versioned.
+V4_PLAN.md
+V5_PLAN.md

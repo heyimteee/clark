@@ -41,7 +41,7 @@ func Run(ctx context.Context, opts Options) error {
 	msgr := NewMessenger(opts.Out, opts.SelfHandle)
 	handler := gateway.NewHandler("IMESSAGE", msgr, opts.Butler, opts.Notifier, opts.BypassPhrase)
 	if opts.Tools != nil && opts.NameToHandle != nil {
-		registerSendMessageTool(opts.Tools, msgr, opts.NameToHandle)
+		RegisterSendMessageTool(opts.Tools, msgr, opts.NameToHandle)
 	}
 
 	httpServer := &http.Server{

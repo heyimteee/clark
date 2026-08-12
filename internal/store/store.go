@@ -70,6 +70,7 @@ type HistoryStore interface {
 	Messages(jid string) ([]Message, error)
 	RecentMessages(jid string, limit int) ([]Message, error)
 	AllRecentMessages(limit int) ([]HistoryEntry, error)
+	ClearHistory(jid string) error
 }
 
 // Store is the SQLite-backed implementation of Settings, VIPStore and HistoryStore.

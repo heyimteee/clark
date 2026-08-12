@@ -146,3 +146,15 @@ func (s *Store) AllRecentMessages(limit int) ([]HistoryEntry, error) {
 	}
 	return newest, nil
 }
+
+// ClearHistory wipes every stored message for one conversation. The web
+// console uses it for its own per-session reset; it never touches other jids.
+func (s *Store) ClearHistory(jid string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM chat_history WHERE jid = ?`, jid); err != nil {
+		return fmt.Errorf("fail to clear history for %s: %w", jid, err)
+	}
+	return nil
+}

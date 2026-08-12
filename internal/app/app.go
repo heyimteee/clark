@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -19,6 +20,8 @@ import (
 	"github.com/heyimteee/clark/internal/ollama"
 	"github.com/heyimteee/clark/internal/store"
 	"github.com/heyimteee/clark/internal/tools"
+	"github.com/heyimteee/clark/internal/voice"
+	"github.com/heyimteee/clark/internal/web"
 	"github.com/heyimteee/clark/internal/websearch"
 	"github.com/heyimteee/clark/internal/whatsapp"
 )
@@ -102,8 +105,9 @@ func (a *App) Init() error {
 	return a.ast.Init()
 }
 
-// Run starts the WhatsApp listener and, when enabled, the iMessage bridge
-// server. Both block until ctx is done; a transport error stops the other.
+// Run starts the WhatsApp listener and, when enabled, the web console (with
+// the iMessage bridge mounted inside it) or the standalone iMessage bridge
+// server. All block until ctx is done; a transport error stops the others.
 func (a *App) Run() error {
 	available, err := a.ast.IsInitialized()
 	if err != nil {
@@ -135,7 +139,27 @@ func (a *App) Run() error {
 		})
 	}()
 
-	if a.cfg.IMessageEnabled {
+	if a.cfg.WebEnabled {
+		var bridge http.Handler
+		if a.cfg.IMessageEnabled {
+			msgr := imessage.NewMessenger(a.st, a.cfg.IMessageSelfHandle)
+			handler := gateway.NewHandler("IMESSAGE", msgr, a.ast, a.notifier(), a.cfg.BypassPhrase)
+			imessage.RegisterSendMessageTool(a.ast.Tools(), msgr, a.ast.LookupIMessage)
+			bridge = imessage.NewServer(a.cfg.IMessageBridgeToken, a.cfg.IMessageSelfHandle, a.st, handler).Routes()
+			logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "Bridge routes mounted inside web console", "addr", a.cfg.IMessageListenAddr)
+		}
+		engine := buildVoiceEngine(a.cfg)
+		errCh <- web.Run(ctx, web.Options{
+			ListenAddr: a.cfg.IMessageListenAddr,
+			WebToken:   a.cfg.WebToken,
+			Butler:     a.ast,
+			Store:      a.st,
+			Voice:      engine,
+			Bridge:     bridge,
+			STTModel:   a.cfg.STTModel,
+			TTSEngine:  a.cfg.TTSEngine,
+		})
+	} else if a.cfg.IMessageEnabled {
 		logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "iMessage bridge transport enabled",
 			"listen", a.cfg.IMessageListenAddr)
 		go func() {
@@ -156,6 +180,30 @@ func (a *App) Run() error {
 	err = <-errCh
 	stop()
 	return err
+}
+
+// buildVoiceEngine assembles the STT/TTS seam. STT (Ollama Whisper) is always
+// wired; TTS is only wired when the piper binary and voice exist, so a missing
+// piper degrades to "TTS unavailable" instead of a hard crash.
+func buildVoiceEngine(cfg *config.Config) *voice.Engine {
+	engine := &voice.Engine{STT: voice.NewOllamaWhisper(cfg.OllamaURL, cfg.STTModel)}
+
+	switch cfg.TTSEngine {
+	case "piper":
+		if _, err := os.Stat(cfg.PiperBin); err != nil {
+			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper binary missing; TTS disabled", "bin", cfg.PiperBin)
+			return engine
+		}
+		if _, err := os.Stat(cfg.PiperVoice); err != nil {
+			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper voice missing; TTS disabled", "voice", cfg.PiperVoice)
+			return engine
+		}
+		engine.TTS = voice.NewPiper(cfg.PiperBin, cfg.PiperVoice)
+		logging.Log("VOICE", logging.SevInfo, "TTS", "Piper ready", "bin", cfg.PiperBin, "voice", cfg.PiperVoice)
+	default:
+		logging.Log("VOICE", logging.SevWarn, "TTS", "Unknown TTS engine; disabled", "engine", cfg.TTSEngine)
+	}
+	return engine
 }
 
 // notifier picks the desktop notifier, or a silent no-op in headless

@@ -389,3 +389,41 @@ func TestVIPStoreStatusCascadeOnClearAll(t *testing.T) {
 		t.Fatalf("status survived ClearAll: %v/%v/%v, want (false,false,nil)", on, ok, err)
 	}
 }
+
+func TestClearHistoryScopedToJID(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	if err := st.SaveMessage("web", "user", "one"); err != nil {
+		t.Fatalf("SaveMessage web: %v", err)
+	}
+	if err := st.SaveMessage("web", "assistant", "two"); err != nil {
+		t.Fatalf("SaveMessage web: %v", err)
+	}
+	if err := st.SaveMessage("other", "user", "kept"); err != nil {
+		t.Fatalf("SaveMessage other: %v", err)
+	}
+
+	if err := st.ClearHistory("web"); err != nil {
+		t.Fatalf("ClearHistory: %v", err)
+	}
+
+	web, err := st.Messages("web")
+	if err != nil {
+		t.Fatalf("Messages(web): %v", err)
+	}
+	if len(web) != 0 {
+		t.Errorf("web history after clear = %d messages, want 0", len(web))
+	}
+
+	other, err := st.Messages("other")
+	if err != nil {
+		t.Fatalf("Messages(other): %v", err)
+	}
+	if len(other) != 1 || other[0].Content != "kept" {
+		t.Errorf("other history = %+v, want the untouched 'kept' message", other)
+	}
+}

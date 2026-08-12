@@ -18,7 +18,7 @@ func TestRegisterSendMessageTool(t *testing.T) {
 		}
 		return "", false
 	}
-	registerSendMessageTool(reg, msgr, nameToHandle)
+	RegisterSendMessageTool(reg, msgr, nameToHandle)
 
 	tool, ok := regHas(reg, "send_imessage")
 	if !ok {

@@ -264,6 +264,27 @@ func (s *Service) AddVIP(input string) error {
 	return s.vip.Add(input)
 }
 
+// AddVIPBulk parses and persists several entries at once, all-or-nothing. It
+// reuses the v3.1 bulk semantics by numbering each entry for the shared parser.
+func (s *Service) AddVIPBulk(entries []string) error {
+	var sb strings.Builder
+	n := 0
+	for _, e := range entries {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		n++
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		fmt.Fprintf(&sb, "%d. %s", n, strings.TrimSpace(e))
+	}
+	if sb.Len() == 0 {
+		return fmt.Errorf("no VIP entries to add")
+	}
+	return s.vip.Add(sb.String())
+}
+
 // DeleteVIP removes a VIP by number.
 func (s *Service) DeleteVIP(input string) error {
 	return s.vip.Delete(input)
@@ -416,6 +437,20 @@ func (s *Service) SetHistoryLimit(n int) error {
 // Reply produces an answer for a VIP's message, running any tool calls the
 // model requests. isSelf marks the Master chatting in his own chat.
 func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, error) {
+	return s.reply(ctx, senderJID, userMsg, isSelf, true)
+}
+
+// ReplyLLM runs the full model pipeline and skips the deterministic fast
+// path, so the web console's chat always gets a genuine AI reply with every
+// tool available. Used by the Master's web session only.
+func (s *Service) ReplyLLM(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, error) {
+	return s.reply(ctx, senderJID, userMsg, isSelf, false)
+}
+
+// reply implements both entry points. allowFastPath decides whether
+// deterministic commands (views and Master-only mutations) are answered
+// hardcoded; the web session sets it false so the model always runs.
+func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, allowFastPath bool) (string, error) {
 	if senderJID == "" {
 		return "", fmt.Errorf("empty sender JID")
 	}
@@ -465,11 +500,14 @@ func (s *Service) Reply(ctx context.Context, senderJID, userMsg string, isSelf b
 
 	// Fast path: deterministic commands (views, and Master-only mutations of
 	// status, context, the inner circle, and tool access) are answered with
-	// hardcoded messages instead of a model round-trip.
-	if reply, handled, err := s.fastPath(senderJID, userMsg, isSelf); err != nil {
-		return "", err
-	} else if handled {
-		return s.saveReply(senderJID, reply)
+	// hardcoded messages instead of a model round-trip. The web session
+	// bypasses it so every console turn is a genuine AI reply.
+	if allowFastPath {
+		if reply, handled, err := s.fastPath(senderJID, userMsg, isSelf); err != nil {
+			return "", err
+		} else if handled {
+			return s.saveReply(senderJID, reply)
+		}
 	}
 
 	available := s.toolsForSender(senderJID, isSelf)

@@ -7,9 +7,9 @@ import (
 	"github.com/heyimteee/clark/internal/tools"
 )
 
-// registerSendMessageTool wires the send_imessage capability, which lets the
+// RegisterSendMessageTool wires the send_imessage capability, which lets the
 // Master have clark deliver an iMessage to a VIP by name or number.
-func registerSendMessageTool(reg *tools.Registry, msgr *Messenger, nameToHandle func(string) (string, bool)) {
+func RegisterSendMessageTool(reg *tools.Registry, msgr *Messenger, nameToHandle func(string) (string, bool)) {
 	reg.RegisterFunc(
 		"send_imessage",
 		"Send an iMessage to a VIP on the Master's behalf. Only the Master may use this.",

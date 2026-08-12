@@ -11,10 +11,94 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
+
+// Plain-log subscriber fan-out. The web console streams plain (uncolored)
+// lines over a WebSocket; sinks are buffered and never block the logger.
+var (
+	sinkMu  sync.RWMutex
+	sinks   []chan string
+	sinkBuf = 512 // drop-oldest on overflow
+
+	ringMu  sync.RWMutex
+	ring    []string // most recent at the end
+	ringCap = 200    // lines kept for replay on console connect
+)
+
+// Subscribe registers a consumer of plain log lines and returns the channel
+// plus an unsubscribe func. The channel is buffered and non-blocking: if a
+// consumer falls behind, the oldest buffered line is dropped.
+func Subscribe() (<-chan string, func()) {
+	ch := make(chan string, sinkBuf)
+
+	sinkMu.Lock()
+	sinks = append(sinks, ch)
+	sinkMu.Unlock()
+
+	var once sync.Once
+	unsub := func() {
+		once.Do(func() {
+			sinkMu.Lock()
+			for i, s := range sinks {
+				if s == ch {
+					sinks = append(sinks[:i], sinks[i+1:]...)
+					break
+				}
+			}
+			sinkMu.Unlock()
+			close(ch)
+		})
+	}
+	return ch, unsub
+}
+
+// notifySinks broadcasts a plain log line to every subscriber, dropping the
+// oldest line from a full buffer rather than ever blocking the logger.
+func notifySinks(line string) {
+	ringMu.Lock()
+	if len(ring) == ringCap {
+		copy(ring, ring[1:])
+		ring[ringCap-1] = line
+	} else {
+		ring = append(ring, line)
+	}
+	ringMu.Unlock()
+
+	sinkMu.RLock()
+	defer sinkMu.RUnlock()
+	for _, ch := range sinks {
+		select {
+		case ch <- line:
+		default:
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- line:
+			default:
+			}
+		}
+	}
+}
+
+// Recent returns the most recent limit plain log lines in chronological
+// order, for replaying onto a newly connected log stream. A non-positive
+// limit returns everything the ring still holds.
+func Recent(limit int) []string {
+	ringMu.RLock()
+	defer ringMu.RUnlock()
+	if limit <= 0 || limit > len(ring) {
+		limit = len(ring)
+	}
+	out := make([]string, limit)
+	copy(out, ring[len(ring)-limit:])
+	return out
+}
 
 // Severity mirrors the syslog severity scale (0=most severe, 7=debug).
 type Severity int
@@ -142,6 +226,7 @@ func (h *colorHandler) Handle(_ context.Context, r slog.Record) error {
 	if len(fields) > 0 {
 		line += " (" + strings.Join(fields, " ") + ")"
 	}
+	notifySinks(line)
 
 	if h.noColor {
 		fmt.Fprintln(h.w, line)

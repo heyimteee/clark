@@ -32,6 +32,15 @@ type Config struct {
 	IMessageListenAddr  string // IMESSAGE_LISTEN_ADDR   default ":8090"
 	IMessageBridgeToken string // IMESSAGE_BRIDGE_TOKEN  shared secret for the bridge
 	IMessageSelfHandle  string // IMESSAGE_SELF_HANDLE   Master's own "+6281111111111"
+
+	// Web console transport. Serves the bento dashboard + chat on :8090.
+	WebEnabled bool   // WEB_ENABLED   "1"/"true"/"on" to serve the console
+	WebToken   string // WEB_TOKEN     required when WEB_ENABLED
+	STTModel   string // STT_MODEL     Ollama model for transcription (default whisper-turbo)
+	TTSEngine  string // TTS_ENGINE    "piper" now, "bark" later
+	TTSVoice   string // TTS_VOICE     Piper voice id (default en_US-amy-medium)
+	PiperBin   string // PIPER_BIN     piper executable (default /opt/piper/piper)
+	PiperVoice string // PIPER_VOICE   piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
 }
 
 // Person is a named person with an optional relation to the Master.
@@ -69,6 +78,37 @@ func Load() (*Config, error) {
 		listenAddr = ":8090"
 	}
 
+	webEnabled := envOn(os.Getenv("WEB_ENABLED"))
+	webToken := os.Getenv("WEB_TOKEN")
+	if webEnabled && webToken == "" {
+		return nil, fmt.Errorf("WEB_ENABLED=1 requires WEB_TOKEN set in your .env. Generate one with: openssl rand -hex 32")
+	}
+
+	sttModel := os.Getenv("STT_MODEL")
+	if sttModel == "" {
+		sttModel = "whisper-turbo"
+	}
+
+	ttsEngine := os.Getenv("TTS_ENGINE")
+	if ttsEngine == "" {
+		ttsEngine = "piper"
+	}
+
+	ttsVoice := os.Getenv("TTS_VOICE")
+	if ttsVoice == "" {
+		ttsVoice = "en_US-amy-medium"
+	}
+
+	piperBin := os.Getenv("PIPER_BIN")
+	if piperBin == "" {
+		piperBin = "/opt/piper/piper"
+	}
+
+	piperVoice := os.Getenv("PIPER_VOICE")
+	if piperVoice == "" {
+		piperVoice = "/opt/piper/voices/" + ttsVoice + ".onnx"
+	}
+
 	return &Config{
 		OllamaURL:    ollamaURL,
 		OllamaModel:  model,
@@ -86,6 +126,14 @@ func Load() (*Config, error) {
 		IMessageListenAddr:  listenAddr,
 		IMessageBridgeToken: os.Getenv("IMESSAGE_BRIDGE_TOKEN"),
 		IMessageSelfHandle:  os.Getenv("IMESSAGE_SELF_HANDLE"),
+
+		WebEnabled: webEnabled,
+		WebToken:   webToken,
+		STTModel:   sttModel,
+		TTSEngine:  ttsEngine,
+		TTSVoice:   ttsVoice,
+		PiperBin:   piperBin,
+		PiperVoice: piperVoice,
 	}, nil
 }
 

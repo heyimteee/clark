@@ -23,6 +23,13 @@ services:
       - IMESSAGE_LISTEN_ADDR=:8090
       - IMESSAGE_BRIDGE_TOKEN=${IMESSAGE_BRIDGE_TOKEN:-}
       - IMESSAGE_SELF_HANDLE=${IMESSAGE_SELF_HANDLE:-}
+      # Web console (bento dashboard + chat). WEB_TOKEN is mandatory when
+      # enabled: the server refuses to start without it (port 443 is public).
+      - WEB_ENABLED=${WEB_ENABLED:-1}
+      - WEB_TOKEN=${WEB_TOKEN:?set WEB_TOKEN in your .env}
+      - STT_MODEL=${STT_MODEL:-whisper-turbo}
+      - TTS_ENGINE=${TTS_ENGINE:-piper}
+      - TTS_VOICE=${TTS_VOICE:-en_US-amy-medium}
       # Headless container: no desktop notifications.
       - CLARK_NO_NOTIFY=1
       - TZ=${TZ:-Asia/Jakarta}
