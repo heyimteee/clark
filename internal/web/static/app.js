@@ -210,7 +210,7 @@
             "</div>" +
             '<div class="card tile-vips"><h2>VIPs</h2><p class="sub">people who reach clark</p>' +
               '<div style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-3) 0 var(--space-4)">' +
-                '<div class="scope-tabs" id="vip-sort">' +
+                '<div class="sort-tabs" id="vip-sort">' +
                   '<button data-sort="default" class="active">default</button>' +
                   '<button data-sort="az">A→Z</button>' +
                 '</div>' +

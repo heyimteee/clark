@@ -525,6 +525,26 @@ label.field .lbl {
   border-color: var(--accent);
 }
 
+.sort-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.sort-tabs button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.sort-tabs button.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
 #hist-meta {
   display: flex;
   align-items: center;
