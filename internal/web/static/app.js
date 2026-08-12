@@ -16,6 +16,7 @@
   let historyVip = "";
   let historyAll = false;
   let historyLoading = false;
+  let historySort = "newest";
   let voiceOn = false;
   let recording = false;
   let mediaRecorder = null;
@@ -236,6 +237,11 @@
                 '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-soft)">' +
                 '<input type="checkbox" id="hist-all"> show more</label>' +
                 '<div class="spacer"></div>' +
+                '<div class="scope-tabs" id="hist-sort">' +
+                  '<button data-sort="newest" class="active">newest</button>' +
+                  '<button data-sort="oldest">oldest</button>' +
+                  '<button data-sort="az">A→Z</button>' +
+                '</div>' +
                 '<button class="btn mini" id="hist-refresh">refresh</button>' +
               "</div>" +
               '<div class="hist-list" id="hist-list"></div>' +
@@ -243,6 +249,14 @@
           "</section>" +
           '<section id="chat" class="hidden">' +
             '<div id="chat-scroll"><div id="chat-list"></div></div>' +
+            '<div id="quick-msgs">' +
+              '<button class="chip" data-msg="What is your status?">status</button>' +
+              '<button class="chip" data-msg="Turn on thinking mode">thinking</button>' +
+              '<button class="chip" data-msg="Set my context: Available">context</button>' +
+              '<button class="chip" data-msg="Google the latest news today">search</button>' +
+              '<button class="chip" data-msg="Show me all the VIPs">vip list</button>' +
+              '<button class="chip" data-msg="Send a WhatsApp message to myself saying testing">send msg</button>' +
+            '</div>' +
             '<div id="chat-input-bar">' +
               '<textarea id="chat-input" rows="1" placeholder="message clark…"></textarea>' +
               '<button id="chat-send" class="btn primary">send</button>' +
@@ -356,6 +370,15 @@
       refreshHistory();
     });
     $("#hist-refresh").addEventListener("click", refreshHistory);
+
+    document.querySelectorAll("#hist-sort button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        document.querySelectorAll("#hist-sort button").forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        historySort = btn.dataset.sort;
+        refreshHistory();
+      });
+    });
 
     $("#vip-table tbody").addEventListener("click", function (e) {
       const btn = e.target.closest("button[data-vip-action]");
@@ -515,6 +538,8 @@
       if (historyAll) q += "&limit=200";
       const d = await api("/web/api/history" + q);
       const entries = (d && d.entries) || [];
+      if (historySort === "newest") entries.reverse();
+      if (historySort === "az") entries.sort(function (a, b) { return (a.content || "").localeCompare(b.content || ""); });
       const list = $("#hist-list");
       if (!entries.length) {
         list.innerHTML = '<div id="hist-empty">no history yet</div>';
@@ -670,6 +695,22 @@
   function bindChat() {
     const input = $("#chat-input");
     const send = $("#chat-send");
+
+    document.querySelectorAll("#quick-msgs .chip").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        input.value = chip.dataset.msg;
+        input.style.height = "auto";
+        input.style.height = Math.min(input.scrollHeight, 140) + "px";
+        input.focus();
+      });
+    });
+
+    function updateQuickMsgs() {
+      var q = $("#quick-msgs");
+      if (q) q.style.display = input.value.trim() ? "none" : "";
+    }
+    input.addEventListener("input", updateQuickMsgs);
+    updateQuickMsgs();
 
     async function submit() {
       const text = input.value.trim();

@@ -15,26 +15,52 @@ const (
 	contextUpdatedHeader = "*Context Updated*"
 
 	vipAddedHeader    = "*Inner Circle Updated*"
-	vipDeletedReply   = "*Inner Circle Updated*\n\nThe entry has been struck from the ledger, Master."
-	clearContextReply = "*Context Cleared*\n\nMaster's context has been emptied."
-	clearVIPsReply    = "*Inner Circle Cleared*\n\nThe ledger is empty, Master. Every entry has been struck."
+	vipDeletedReply   = "*Inner Circle Updated*\n\nThe entry has been struck from the ledger, Sir."
+	clearContextReply = "*Context Cleared*\n\nMaster's context has been emptied, Sir."
+	clearVIPsReply    = "*Inner Circle Cleared*\n\nThe ledger is empty, Sir. Every entry has been struck, Sir."
 	commandErrorTmpl  = "*Command Not Performed*\n\n_%s_"
 )
 
 func (s *Service) statusOnReply() string {
-	return "*Status Updated*\n\n" + s.name + " is now *On* and at your service, Master."
+	return "*Status Updated*\n\n" + s.name + " is now *On* and at your service, Sir."
 }
 
 func (s *Service) statusOffReply() string {
-	return "*Status Updated*\n\n" + s.name + " is now *Off*, Master. He will still answer you here."
+	return "*Status Updated*\n\n" + s.name + " is now *Off*, Sir. He will still answer you here."
 }
 
 func (s *Service) perVIPStatusOnReply(recipient string) string {
-	return "*Status Updated*\n\n_" + recipient + "_ may now reach me personally, Master."
+	return "*Status Updated*\n\n_" + recipient + "_ may now reach me personally, Sir."
 }
 
 func (s *Service) perVIPStatusOffReply(recipient string) string {
-	return "*Status Updated*\n\n_" + recipient + "_ has been personally silenced, Master."
+	return "*Status Updated*\n\n_" + recipient + "_ has been personally silenced, Sir."
+}
+
+// prehandleCommand handles deterministic commands that the LLM does not
+// know about (thinking mode, history-limit). It runs even in the web
+// session where the full fast-path is bypassed.
+func (s *Service) prehandleCommand(userMsg string) (string, bool, error) {
+	switch {
+	case isThinkingCommand(userMsg):
+		on, toggle, _ := parseThinkingCommand(userMsg)
+		if toggle {
+			if err := s.ToggleThinking(); err != nil {
+				return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+			}
+		} else if err := s.SetThinking(on); err != nil {
+			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+		}
+		return thinkingReply(s.Thinking()), true, nil
+
+	case isHistoryLimitCommand(userMsg):
+		limit, _ := parseHistoryLimitCommand(userMsg)
+		if err := s.SetHistoryLimit(limit); err != nil {
+			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
+		}
+		return historyLimitReply(limit), true, nil
+	}
+	return "", false, nil
 }
 
 // fastPath handles deterministic commands synchronously: hardcoded views and,
@@ -222,7 +248,7 @@ func contextUpdatedReply(text string) string {
 func vipAddedReply(payload string) string {
 	if entries, ok := parseBulkVIP(payload); ok && len(entries) > 1 {
 		var b strings.Builder
-		fmt.Fprintf(&b, "%s\n\n_%d_ members have been welcomed into the inner circle, Master.", vipAddedHeader, len(entries))
+		fmt.Fprintf(&b, "%s\n\n_%d_ members have been welcomed into the inner circle, Sir.", vipAddedHeader, len(entries))
 		for _, e := range entries {
 			name := e
 			if parts := strings.SplitN(e, ",", 3); len(parts) == 3 {
@@ -242,7 +268,7 @@ func vipAddedReply(payload string) string {
 		relation := strings.TrimSpace(parts[2])
 		return vipAddedHeader + "\n\n_" + name + "_ has been welcomed as *" + relation + "*.\n\nNumber: `" + number + "`"
 	}
-	return vipAddedHeader + "\n\nThe entry has been welcomed into the inner circle, Master."
+	return vipAddedHeader + "\n\nThe entry has been welcomed into the inner circle, Sir."
 }
 
 // numberedPrefixRe strips a leading list marker ("1. ", "2) ") from a number
@@ -258,13 +284,13 @@ func accessReply(recipient, tool string, enabled bool) string {
 
 func thinkingReply(on bool) string {
 	if on {
-		return "*Thinking Mode Updated*\n\nReasoning is now *On*, Master. I shall ponder before I speak."
+		return "*Thinking Mode Updated*\n\nReasoning is now *On*, Sir. I shall ponder before I speak."
 	}
-	return "*Thinking Mode Updated*\n\nReasoning is now *Off*, Master. I shall answer at once."
+	return "*Thinking Mode Updated*\n\nReasoning is now *Off*, Sir. I shall answer at once."
 }
 
 func historyLimitReply(limit int) string {
-	return fmt.Sprintf("*History Limit Updated*\n\nI now review the %d most recent messages on every turn, Master.", limit)
+	return fmt.Sprintf("*History Limit Updated*\n\nI now review the %d most recent messages on every turn, Sir.", limit)
 }
 
 var historyLimitRes = regexp.MustCompile(`(?i)(?:set|change|update|make)\s+(?:my|clark(?:'s)?|the)?\s*history\s+limit\s+(?:to\s+)?(\d+)`)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -48,6 +49,11 @@ func (s *Server) toolList() []map[string]any {
 			"parameters":  t.Definition.Parameters,
 		})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		a, _ := out[i]["name"].(string)
+		b, _ := out[j]["name"].(string)
+		return a < b
+	})
 	return out
 }
 

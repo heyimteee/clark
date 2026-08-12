@@ -382,6 +382,7 @@ label.field .lbl {
   display: flex;
   gap: 8px;
   margin-top: var(--space-3);
+  justify-content: center;
   flex-wrap: wrap;
 }
 
@@ -389,6 +390,7 @@ label.field .lbl {
   margin-top: var(--space-3);
   min-height: 20px;
   font-size: 12px;
+  text-align: center;
   color: var(--ink-soft);
 }
 
@@ -680,6 +682,31 @@ label.field .lbl {
 
 .msg.clark.typing .bubble { color: var(--ink-faint); }
 
+#quick-msgs {
+  width: min(760px, 100%);
+  margin: var(--space-3) auto 0;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+#quick-msgs .chip {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+#quick-msgs .chip:hover {
+  background: var(--bg);
+  border-color: var(--ink-faint);
+  color: var(--ink);
+}
+
 #chat-input-bar {
   width: min(760px, 100%);
   margin: var(--space-4) auto 0;
@@ -745,10 +772,10 @@ label.field .lbl {
 }
 
 #logs-body .line { white-space: pre-wrap; word-break: break-word; }
-#logs-body .warn { color: #d9a93b; }
-#logs-body .err { color: #e06a63; }
-#logs-body .info { color: #79a8d0; }
-#logs-body .ok { color: #8fbd93; }
+#logs-body .warn { color: #f0c040; }
+#logs-body .err { color: #f06050; }
+#logs-body .info { color: #5b9ee0; }
+#logs-body .ok { color: #5fd17c; }
 #logs-body .faint { color: #6f6e6a; }
 
 #logs-body.paused { opacity: 0.55; }

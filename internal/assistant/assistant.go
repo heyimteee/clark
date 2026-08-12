@@ -502,9 +502,17 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	// Fast path: deterministic commands (views, and Master-only mutations of
 	// status, context, the inner circle, and tool access) are answered with
 	// hardcoded messages instead of a model round-trip. The web session
-	// bypasses it so every console turn is a genuine AI reply.
+	// bypasses the full fast-path so every console turn is a genuine AI reply,
+	// but deterministic commands (thinking, history-limit) must still be
+	// handled because the LLM doesn't know about them.
 	if allowFastPath {
 		if reply, handled, err := s.fastPath(senderJID, userMsg, isSelf); err != nil {
+			return "", err
+		} else if handled {
+			return s.saveReply(senderJID, reply)
+		}
+	} else {
+		if reply, handled, err := s.prehandleCommand(userMsg); err != nil {
 			return "", err
 		} else if handled {
 			return s.saveReply(senderJID, reply)
