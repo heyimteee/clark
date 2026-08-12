@@ -149,15 +149,25 @@ func (a *App) Run() error {
 			logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "Bridge routes mounted inside web console", "addr", a.cfg.IMessageListenAddr)
 		}
 		engine := buildVoiceEngine(a.cfg)
+		// Pre-warm the piper daemon so the model is resident before the first
+		// voice request (affirmations are pre-rendered and instant regardless).
+		if piper, ok := engine.TTS.(*voice.PiperTTS); ok {
+			if err := piper.Start(ctx); err != nil {
+				logging.Log("VOICE", logging.SevWarn, "TTS", "Piper daemon pre-warm failed; will retry on demand", "error", err.Error())
+			} else {
+				logging.Log("VOICE", logging.SevInfo, "TTS", "Piper daemon pre-warmed", "voice", a.cfg.TTSVoice)
+			}
+		}
 		errCh <- web.Run(ctx, web.Options{
-			ListenAddr: a.cfg.IMessageListenAddr,
-			WebToken:   a.cfg.WebToken,
-			Butler:     a.ast,
-			Store:      a.st,
-			Voice:      engine,
-			Bridge:     bridge,
-			STTModel:   a.cfg.STTModel,
-			TTSEngine:  a.cfg.TTSEngine,
+			ListenAddr:     a.cfg.IMessageListenAddr,
+			WebToken:       a.cfg.WebToken,
+			Butler:         a.ast,
+			Store:          a.st,
+			Voice:          engine,
+			Bridge:         bridge,
+			STTModel:       a.cfg.STTModel,
+			TTSEngine:      a.cfg.TTSEngine,
+			AffirmationDir: a.cfg.AffirmationDir,
 		})
 	} else if a.cfg.IMessageEnabled {
 		logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "iMessage bridge transport enabled",
@@ -214,16 +224,16 @@ func buildSTTEngine(cfg *config.Config) voice.STT {
 func buildTTSEngine(cfg *config.Config) voice.TTS {
 	switch cfg.TTSEngine {
 	case "piper":
-		if _, err := os.Stat(cfg.PiperBin); err != nil {
-			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper binary missing; TTS disabled", "bin", cfg.PiperBin)
+		if _, err := os.Stat(cfg.PiperDaemon); err != nil {
+			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper daemon missing; TTS disabled", "script", cfg.PiperDaemon)
 			return nil
 		}
 		if _, err := os.Stat(cfg.PiperVoice); err != nil {
 			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper voice missing; TTS disabled", "voice", cfg.PiperVoice)
 			return nil
 		}
-		logging.Log("VOICE", logging.SevInfo, "TTS", "Piper ready", "bin", cfg.PiperBin, "voice", cfg.PiperVoice)
-		return voice.NewPiper(cfg.PiperBin, cfg.PiperVoice)
+		logging.Log("VOICE", logging.SevInfo, "TTS", "Piper ready", "daemon", cfg.PiperDaemon, "voice", cfg.PiperVoice)
+		return voice.NewPiper(cfg.PiperDaemon, cfg.PiperVoice)
 	default:
 		logging.Log("VOICE", logging.SevWarn, "TTS", "Unknown TTS engine; disabled", "engine", cfg.TTSEngine)
 		return nil

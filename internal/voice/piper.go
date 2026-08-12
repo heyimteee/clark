@@ -4,71 +4,160 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
-// piperSampleRate is the fixed output rate of piper medium voices.
-const piperSampleRate = 22050
+// maxTTSBytes caps a single synthesized clip (generous; ~5 min at 22.05 kHz).
+const maxTTSBytes = 20 << 20
 
-// execCommand is overridable so tests can stub the piper binary.
+// execCommand is overridable so tests can stub the piper process.
 var execCommand = exec.CommandContext
 
-// PiperTTS synthesizes speech with the piper CLI, wrapping its raw PCM output
-// in a WAV header. Process-per-call: piper loads in ~0.1-0.3 s on the i5, and
-// v5 will move to a long-lived daemon for streaming.
+// PiperTTS synthesizes speech with a long-lived piper process (the v5 daemon
+// idea pulled into v4). The model is loaded once when the daemon starts and
+// stays resident, so every call after the first is a stdin/stdout round-trip
+// instead of a fresh process + model load. The daemon speaks a tiny framed
+// protocol: [u32 length][bytes] text in, [u32 length][WAV bytes] out.
 type PiperTTS struct {
 	binPath   string
 	voicePath string
+
+	mu sync.Mutex
+	d  *piperDaemon
 }
 
-// NewPiper returns a TTS engine that runs the piper binary at binPath with
+// piperDaemon is the live python process and its pipes.
+type piperDaemon struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+}
+
+// NewPiper returns a TTS engine that runs the daemon script at binPath with
 // the voice model at voicePath.
 func NewPiper(binPath, voicePath string) *PiperTTS {
 	return &PiperTTS{binPath: binPath, voicePath: voicePath}
 }
 
-// Synthesize renders text to 16-bit PCM mono WAV bytes at 22.05 kHz.
+// Start launches the daemon now (pre-warm) instead of lazily on first call.
+// Safe to call multiple times; a running daemon is left alone.
+func (p *PiperTTS) Start(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.startLocked(ctx)
+}
+
+func (p *PiperTTS) startLocked(ctx context.Context) error {
+	if p.d != nil {
+		return nil
+	}
+	cmd := execCommand(ctx, "python3", p.binPath, p.voicePath)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("piper daemon start: %w", err)
+	}
+	p.d = &piperDaemon{cmd: cmd, stdin: stdin, stdout: stdout}
+	return nil
+}
+
+// Synthesize renders text to WAV bytes via the resident daemon.
 func (p *PiperTTS) Synthesize(ctx context.Context, text string) ([]byte, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, fmt.Errorf("empty text")
 	}
 
-	cmd := execCommand(ctx, p.binPath, "--model", p.voicePath, "--output-raw")
-	cmd.Stdin = strings.NewReader(text)
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	raw, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("piper failed: %w", err)
+	if p.d == nil {
+		if err := p.startLocked(ctx); err != nil {
+			return nil, err
+		}
 	}
-	return buildWAV(raw, piperSampleRate), nil
+
+	if _, err := p.d.stdin.Write(frameBytes(text)); err != nil {
+		p.d = nil
+		return nil, fmt.Errorf("piper daemon write: %w", err)
+	}
+
+	out, err := p.readFrame(ctx)
+	if err != nil {
+		p.d = nil
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("piper returned empty audio")
+	}
+	return out, nil
+}
+
+// readFrame reads one [u32 length][WAV bytes] frame from the daemon with a
+// bounded wait. A wedged daemon is killed so the read goroutine unblocks.
+func (p *PiperTTS) readFrame(ctx context.Context) ([]byte, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		head := make([]byte, 4)
+		if _, err := io.ReadFull(p.d.stdout, head); err != nil {
+			ch <- result{nil, fmt.Errorf("piper daemon read: %w", err)}
+			return
+		}
+		n := binary.LittleEndian.Uint32(head)
+		if n == 0 || n > maxTTSBytes {
+			ch <- result{nil, fmt.Errorf("piper returned invalid size %d", n)}
+			return
+		}
+		data := make([]byte, n)
+		if _, err := io.ReadFull(p.d.stdout, data); err != nil {
+			ch <- result{nil, fmt.Errorf("piper daemon read: %w", err)}
+			return
+		}
+		ch <- result{data: data}
+	}()
+
+	select {
+	case r := <-ch:
+		return r.data, r.err
+	case <-time.After(30 * time.Second):
+		if p.d != nil {
+			_ = p.d.cmd.Process.Kill()
+		}
+		return nil, fmt.Errorf("piper daemon timed out")
+	case <-ctx.Done():
+		if p.d != nil {
+			_ = p.d.cmd.Process.Kill()
+		}
+		return nil, ctx.Err()
+	}
+}
+
+// frameBytes length-prefixes the UTF-8 text for the daemon.
+func frameBytes(text string) []byte {
+	data := []byte(text)
+	frame := make([]byte, 4+len(data))
+	binary.LittleEndian.PutUint32(frame, uint32(len(data)))
+	copy(frame[4:], data)
+	return frame
 }
 
 // Voice returns the voice id without the .onnx extension for display.
 func (p *PiperTTS) Voice() string {
 	name := filepath.Base(p.voicePath)
 	return strings.TrimSuffix(name, ".onnx")
-}
-
-// buildWAV wraps raw PCM samples in a standard 44-byte RIFF/WAVE header.
-func buildWAV(pcm []byte, sampleRate int) []byte {
-	wav := make([]byte, 44+len(pcm))
-
-	copy(wav[0:4], "RIFF")
-	binary.LittleEndian.PutUint32(wav[4:8], uint32(36+len(pcm)))
-	copy(wav[8:12], "WAVE")
-	copy(wav[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(wav[16:20], 16) // fmt chunk size
-	binary.LittleEndian.PutUint16(wav[20:22], 1)  // audio format: PCM
-	binary.LittleEndian.PutUint16(wav[22:24], 1)  // channels: mono
-	binary.LittleEndian.PutUint32(wav[24:28], uint32(sampleRate))
-	binary.LittleEndian.PutUint32(wav[28:32], uint32(sampleRate*2)) // byte rate
-	binary.LittleEndian.PutUint16(wav[32:34], 2)                    // block align
-	binary.LittleEndian.PutUint16(wav[34:36], 16)                   // bits per sample
-	copy(wav[36:40], "data")
-	binary.LittleEndian.PutUint32(wav[40:44], uint32(len(pcm)))
-
-	copy(wav[44:], pcm)
-	return wav
 }

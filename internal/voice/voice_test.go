@@ -3,7 +3,9 @@ package voice
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -94,16 +96,53 @@ func TestWhisperTranscribeErrors(t *testing.T) {
 // execCommand is stubbed by the tests below.
 var execMu sync.Mutex
 
-// TestPiperHelperProcess writes deterministic raw PCM to stdout. It is not a
-// real test; it is the spawned subprocess for the exec seam tests.
+// testWAV builds a valid 22.05 kHz mono WAV around the given PCM, matching the
+// WAV the piper python daemon writes.
+func testWAV(pcm []byte) []byte {
+	wav := make([]byte, 44+len(pcm))
+	copy(wav[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(36+len(pcm)))
+	copy(wav[8:12], "WAVE")
+	copy(wav[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(wav[16:20], 16)
+	binary.LittleEndian.PutUint16(wav[20:22], 1)
+	binary.LittleEndian.PutUint16(wav[22:24], 1)
+	binary.LittleEndian.PutUint32(wav[24:28], 22050)
+	binary.LittleEndian.PutUint32(wav[28:32], 22050*2)
+	binary.LittleEndian.PutUint16(wav[32:34], 2)
+	binary.LittleEndian.PutUint16(wav[34:36], 16)
+	copy(wav[36:40], "data")
+	binary.LittleEndian.PutUint32(wav[40:44], uint32(len(pcm)))
+	copy(wav[44:], pcm)
+	return wav
+}
+
+// TestPiperHelperProcess implements the daemon frame protocol: it loops reading
+// length-prefixed requests and answering each with a length-prefixed WAV, so it
+// behaves like a resident process. Not a real test; it is the spawned
+// subprocess for the exec seam tests.
 func TestPiperHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_PIPER_HELPER") != "1" {
 		return
 	}
-	if _, err := os.Stdout.Write(make([]byte, 100)); err != nil {
-		os.Exit(1)
+	for {
+		head := make([]byte, 4)
+		if _, err := io.ReadFull(os.Stdin, head); err != nil {
+			os.Exit(0)
+		}
+		n := binary.LittleEndian.Uint32(head)
+		buf := make([]byte, n)
+		if _, err := io.ReadFull(os.Stdin, buf); err != nil {
+			os.Exit(0)
+		}
+		payload := testWAV(make([]byte, 100))
+		out := make([]byte, 4+len(payload))
+		binary.LittleEndian.PutUint32(out, uint32(len(payload)))
+		copy(out[4:], payload)
+		if _, err := os.Stdout.Write(out); err != nil {
+			os.Exit(1)
+		}
 	}
-	os.Exit(0)
 }
 
 func piperHelperCommand(_ context.Context, _ string, _ ...string) *exec.Cmd {
@@ -112,15 +151,15 @@ func piperHelperCommand(_ context.Context, _ string, _ ...string) *exec.Cmd {
 	return cmd
 }
 
-// TestPiperSynthesizeWAVHeader verifies the RIFF/WAVE header wrapping the raw
-// PCM produced by the piper binary.
+// TestPiperSynthesizeWAVHeader verifies the WAV returned by the daemon survives
+// the framed round-trip intact.
 func TestPiperSynthesizeWAVHeader(t *testing.T) {
 	execMu.Lock()
 	execCommand = piperHelperCommand
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-lessac-medium.onnx")
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
 	wav, err := p.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
@@ -153,9 +192,6 @@ func TestPiperSynthesizeWAVHeader(t *testing.T) {
 	if u16(wav[34:36]) != 16 {
 		t.Errorf("bitsPerSample = %d, want 16", u16(wav[34:36]))
 	}
-	if u16(wav[32:34]) != 2 {
-		t.Errorf("blockAlign = %d, want 2", u16(wav[32:34]))
-	}
 	if u32(wav[40:44]) != 100 {
 		t.Errorf("dataSize = %d, want 100 (raw PCM length)", u32(wav[40:44]))
 	}
@@ -164,7 +200,7 @@ func TestPiperSynthesizeWAVHeader(t *testing.T) {
 	}
 }
 
-// TestPiperCommandArgs verifies the exact arguments passed to the binary.
+// TestPiperCommandArgs verifies the exact command the daemon runs.
 func TestPiperCommandArgs(t *testing.T) {
 	execMu.Lock()
 	var gotName string
@@ -179,21 +215,48 @@ func TestPiperCommandArgs(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-lessac-medium.onnx")
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
 	if _, err := p.Synthesize(context.Background(), "hi"); err != nil {
 		t.Fatalf("Synthesize: %v", err)
 	}
 
-	if gotName != "/opt/piper/piper" {
-		t.Errorf("binary = %q, want /opt/piper/piper", gotName)
+	if gotName != "python3" {
+		t.Errorf("interpreter = %q, want python3", gotName)
 	}
-	want := []string{"--model", "/opt/piper/voices/en_US-lessac-medium.onnx", "--output-raw"}
+	want := []string{"/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx"}
 	if strings.Join(gotArgs, " ") != strings.Join(want, " ") {
 		t.Errorf("args = %v, want %v", gotArgs, want)
 	}
 }
 
-// TestPiperSynthesizeErrors propagates binary failures.
+// TestPiperStartPreWarms ensures the daemon is spawned exactly once and stays
+// resident across calls.
+func TestPiperStartPreWarms(t *testing.T) {
+	execMu.Lock()
+	var calls int
+	execCommand = func(_ context.Context, _ string, _ ...string) *exec.Cmd {
+		calls++
+		return piperHelperCommand(nil, "", "")
+	}
+	execMu.Unlock()
+	defer func() { execCommand = exec.CommandContext }()
+
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := p.Synthesize(context.Background(), "hi"); err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if _, err := p.Synthesize(context.Background(), "again"); err != nil {
+		t.Fatalf("second Synthesize: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("daemon spawned %d times, want 1 (resident)", calls)
+	}
+}
+
+// TestPiperSynthesizeErrors propagates daemon failures.
 func TestPiperSynthesizeErrors(t *testing.T) {
 	execMu.Lock()
 	execCommand = func(_ context.Context, _ string, _ ...string) *exec.Cmd {
@@ -202,7 +265,7 @@ func TestPiperSynthesizeErrors(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/piper", "/opt/piper/voices/en_US-lessac-medium.onnx")
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
 	if _, err := p.Synthesize(context.Background(), "hi"); err == nil {
 		t.Error("Synthesize succeeded despite piper exiting 1")
 	}
@@ -214,9 +277,9 @@ func TestPiperSynthesizeErrors(t *testing.T) {
 
 // TestPiperVoiceName strips the .onnx extension for the UI.
 func TestPiperVoiceName(t *testing.T) {
-	p := NewPiper("/bin/piper", filepath.Join("voices", "en_US-lessac-medium.onnx"))
-	if got := p.Voice(); got != "en_US-lessac-medium" {
-		t.Errorf("Voice() = %q, want en_US-lessac-medium", got)
+	p := NewPiper("/bin/piper", filepath.Join("voices", "en_US-ryan-high.onnx"))
+	if got := p.Voice(); got != "en_US-ryan-high" {
+		t.Errorf("Voice() = %q, want en_US-ryan-high", got)
 	}
 }
 

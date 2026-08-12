@@ -59,6 +59,9 @@ func (h *Handler) Handle(msg Message) {
 		return
 	}
 
+	logging.Log(h.component, logging.SevInfo, "RECEIVED", "Message received",
+		"from", msg.Sender, "self", msg.IsSelf, "group", msg.IsGroup)
+
 	if msg.Text == "" {
 		logging.Log(h.component, logging.SevWarn, "MESSAGE", "Message discarded", "reason", "no text content")
 		return
@@ -104,11 +107,11 @@ func (h *Handler) Handle(msg Message) {
 // --- background dispatcher -------------------------------------------------
 
 const (
-	ackMaster      = "_One moment, Master..._"
+	ackMaster      = "_One moment, Sir..._"
 	apologyMessage = "_My apologies, but I am experiencing technical difficulties._ Please try again later."
 	// rateLimitMasterMessage is delivered to the Master's own chat when the
 	// model throttles the request; clark switches himself off at the same time.
-	rateLimitMasterMessage = "🚨 Attention Master!\n\nI have been silenced: the model is rate-limiting my requests. I have turned myself *Off* to stay reliable. Say _wake up buddy_ when you need me again."
+	rateLimitMasterMessage = "🚨 Attention Sir!\n\nI have been silenced: the model is rate-limiting my requests. I have turned myself *Off* to stay reliable. Say _wake up buddy_ when you need me again."
 )
 
 // inbound is one message awaiting a slow, model-backed reply.
@@ -212,6 +215,6 @@ func (h *Handler) alert(ctx context.Context, chat, relation string) {
 	if err := h.notifier.Notify("Attention Sir!", relation+" needs you!"); err != nil {
 		logging.Log("CLARK", logging.SevWarn, "NOTIFY", "Notification failed", "error", err)
 	}
-	h.msgr.SendSelf(ctx, "🚨 Attention Master!\n"+relation+" needs you!")
+	h.msgr.SendSelf(ctx, "🚨 Attention Sir!\n"+relation+" needs you!")
 	h.msgr.Send(ctx, chat, "_One moment._ I've alerted the Master.")
 }

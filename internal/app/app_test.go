@@ -16,10 +16,10 @@ func voiceFixture(t *testing.T) *config.Config {
 
 	script := filepath.Join(dir, "run.py")
 	modelDir := filepath.Join(dir, "model")
-	piperBin := filepath.Join(dir, "piper")
-	piperVoice := filepath.Join(dir, "en_US-lessac-medium.onnx")
+	piperDaemon := filepath.Join(dir, "daemon.py")
+	piperVoice := filepath.Join(dir, "en_US-ryan-high.onnx")
 
-	for _, p := range []string{script, piperBin, piperVoice} {
+	for _, p := range []string{script, piperDaemon, piperVoice} {
 		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
 			t.Fatalf("write %s: %v", p, err)
 		}
@@ -35,7 +35,7 @@ func voiceFixture(t *testing.T) *config.Config {
 		WhisperScript:   script,
 		WhisperModelDir: modelDir,
 		TTSEngine:       "piper",
-		PiperBin:        piperBin,
+		PiperDaemon:     piperDaemon,
 		PiperVoice:      piperVoice,
 	}
 }
@@ -47,16 +47,16 @@ func TestBuildVoiceEngineFasterWhisperAndPiperReady(t *testing.T) {
 		t.Error("STT = nil, want faster-whisper wired when runner and model exist")
 	}
 	if engine.TTS == nil {
-		t.Error("TTS = nil, want piper wired when binary and voice exist")
+		t.Error("TTS = nil, want piper wired when daemon and voice exist")
 	}
-	if engine.TTS.Voice() != "en_US-lessac-medium" {
-		t.Errorf("TTS voice = %q, want en_US-lessac-medium", engine.TTS.Voice())
+	if engine.TTS.Voice() != "en_US-ryan-high" {
+		t.Errorf("TTS voice = %q, want en_US-ryan-high", engine.TTS.Voice())
 	}
 }
 
 func TestBuildVoiceEngineDegradesWhenPiperMissing(t *testing.T) {
 	cfg := voiceFixture(t)
-	cfg.PiperBin = "/nonexistent/piper"
+	cfg.PiperDaemon = "/nonexistent/daemon.py"
 	cfg.PiperVoice = "/nonexistent/voice.onnx"
 
 	engine := buildVoiceEngine(cfg)
@@ -65,7 +65,7 @@ func TestBuildVoiceEngineDegradesWhenPiperMissing(t *testing.T) {
 		t.Error("STT = nil, want STT to survive a missing piper")
 	}
 	if engine.TTS != nil {
-		t.Error("TTS = non-nil, want nil when piper binary is missing")
+		t.Error("TTS = non-nil, want nil when piper daemon is missing")
 	}
 }
 

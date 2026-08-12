@@ -40,10 +40,11 @@ type Config struct {
 	STTModel        string // STT_MODEL     Ollama model for transcription (default whisper-turbo; STT_ENGINE=ollama only)
 	WhisperScript   string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
 	WhisperModelDir string // WHISPER_MODEL_DIR faster-whisper model dir (default /opt/whisper/model)
-	TTSEngine       string // TTS_ENGINE    "piper" now, "bark" later
-	TTSVoice        string // TTS_VOICE     Piper voice id (default en_US-lessac-medium)
-	PiperBin        string // PIPER_BIN     piper executable (default /opt/piper/piper)
-	PiperVoice      string // PIPER_VOICE   piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
+	TTSEngine       string // TTS_ENGINE      "piper" now, "bark" later
+	TTSVoice        string // TTS_VOICE       Piper voice id (default en_US-ryan-high, male)
+	PiperDaemon     string // PIPER_DAEMON    long-lived piper runner (default /opt/piper/daemon.py)
+	PiperVoice      string // PIPER_VOICE     piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
+	AffirmationDir  string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
 }
 
 // Person is a named person with an optional relation to the Master.
@@ -114,17 +115,22 @@ func Load() (*Config, error) {
 
 	ttsVoice := os.Getenv("TTS_VOICE")
 	if ttsVoice == "" {
-		ttsVoice = "en_US-lessac-medium"
+		ttsVoice = "en_US-ryan-high"
 	}
 
-	piperBin := os.Getenv("PIPER_BIN")
-	if piperBin == "" {
-		piperBin = "/opt/piper/piper"
+	piperDaemon := os.Getenv("PIPER_DAEMON")
+	if piperDaemon == "" {
+		piperDaemon = "/opt/piper/daemon.py"
 	}
 
 	piperVoice := os.Getenv("PIPER_VOICE")
 	if piperVoice == "" {
 		piperVoice = "/opt/piper/voices/" + ttsVoice + ".onnx"
+	}
+
+	affirmationDir := os.Getenv("AFFIRMATIONS_DIR")
+	if affirmationDir == "" {
+		affirmationDir = "/opt/affirmations"
 	}
 
 	return &Config{
@@ -153,8 +159,9 @@ func Load() (*Config, error) {
 		WhisperModelDir: whisperModelDir,
 		TTSEngine:       ttsEngine,
 		TTSVoice:        ttsVoice,
-		PiperBin:        piperBin,
+		PiperDaemon:     piperDaemon,
 		PiperVoice:      piperVoice,
+		AffirmationDir:  affirmationDir,
 	}, nil
 }
 

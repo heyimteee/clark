@@ -4,6 +4,7 @@ package assistant
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -49,11 +50,11 @@ var defaultVIPGrants = []string{"web_search", "view_history"}
 
 // iterationLimitMessage is returned when a genuine tool chain exhausts its
 // iteration budget while tools were still running.
-const iterationLimitMessage = "I have reached the limit of tool calls for this iteration, Master. Say _continue_ and I shall resume at once."
+const iterationLimitMessage = "I have reached the limit of tool calls for this iteration, Sir. Say _continue_ and I shall resume at once."
 
 // couldNotActMessage is returned when the model repeatedly refuses to perform a
 // demanded action; the request must be repeated rather than resumed.
-const couldNotActMessage = "I beg your pardon, Master, but I could not perform that action just now. Kindly _repeat your request_ and I shall try again at once."
+const couldNotActMessage = "I beg your pardon, Sir, but I could not perform that action just now. Kindly _repeat your request_ and I shall try again at once."
 
 // tooSlowMessage is returned when a turn exceeds maxTurnDuration.
 func (s *Service) tooSlowMessage() string {
@@ -67,7 +68,7 @@ const nudgeMessage = "You have not actually performed the requested action. Word
 // Current-task directives selected per turn so the model greets only on a
 // genuine first message and never recites status mid-conversation.
 const (
-	masterFirstTurnTask = "The Master has arrived. Greet him warmly and await his command. Answer him directly — never announce your own status or availability to the Master himself."
+	masterFirstTurnTask = "The Master has arrived. Greet him warmly as 'Sir' and await his command. Answer him directly — never announce your own status or availability to the Master himself."
 	followUpTask        = "Continue the ongoing conversation naturally. Answer exactly what the person just said, relevantly and conversationally — never recite greetings, status, or protocol boilerplate when a direct answer is due."
 )
 
@@ -423,7 +424,7 @@ func (s *Service) HistoryLimit() int { return s.historyLimit }
 // SetHistoryLimit configures the per-turn history window and persists it.
 func (s *Service) SetHistoryLimit(n int) error {
 	if n < 1 {
-		return fmt.Errorf("the history limit must be at least 1, Master")
+		return fmt.Errorf("the history limit must be at least 1, Sir")
 	}
 	if err := s.settings.Set("history_limit", strconv.Itoa(n)); err != nil {
 		return err
@@ -689,6 +690,7 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 
 		messages = append(messages, ollama.Message{Role: "assistant", Content: result.Content, ToolCalls: result.ToolCalls})
 		for _, tc := range result.ToolCalls {
+			logging.Log("TOOLS", logging.SevInfo, "TRIGGER", "Tool invoked", "tool", tc.Function.Name, "args", compactArgs(tc.Function.Arguments))
 			out, err := s.tools.Execute(loopCtx, tc.Function.Name, tc.Function.Arguments)
 			if err != nil {
 				out = "Error: " + err.Error()
@@ -1106,4 +1108,16 @@ func toOllamaTools(ts []tools.Tool) []ollama.Tool {
 		})
 	}
 	return out
+}
+
+// compactArgs renders a tool's JSON arguments for the log line, truncated.
+func compactArgs(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	s := string(args)
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
 }

@@ -571,6 +571,7 @@
         setTyping(false);
         appendChat("clark", f.text || "");
         if (voiceOn && f.text) speakTTS(f.text);
+        refreshAfterTurn();
       } else if (f.type === "error") {
         chatBusy = false;
         setTyping(false);
@@ -742,11 +743,21 @@
   }
 
   function logClass(raw) {
-    const s = String(raw || "").toLowerCase();
-    if (/\b(error|fail|panic|fatal)\b/.test(s)) return "err";
-    if (/\b(warn|slow|retry)\b/.test(s)) return "warn";
-    if (/\b(ok|green|pass|ready)\b/.test(s)) return "ok";
-    if (/\b(info|connected|link|start)\b/.test(s)) return "info";
+    const s = String(raw || "");
+    // Plain line format: "TIMESTAMP LEVEL COMPONENT EVENT: message" — colour by
+    // the severity word so streams are readable instead of uniformly blue.
+    const m = s.match(/^\s*\S+\s+(\S+)\s+/);
+    const level = (m && m[1]) || "";
+    if (/^(ERROR|FATAL|PANIC)/i.test(level)) return "err";
+    if (/^WARN/i.test(level)) return "warn";
+    if (/^DEBUG/i.test(level)) return "faint";
+    if (/^NOTICE/i.test(level)) return "info";
+    if (/^INFO/i.test(level)) return "ok";
+    // Fallback for lines without the standard shape.
+    const low = s.toLowerCase();
+    if (/\b(error|fail|panic|fatal)\b/.test(low)) return "err";
+    if (/\b(warn|slow|retry)\b/.test(low)) return "warn";
+    if (/\b(connected|ready|success)\b/.test(low)) return "ok";
     return "";
   }
 
@@ -899,12 +910,22 @@
     if (recording || wakeHeld) return;
     stopWake();
     wakeHeld = true;
-    const phrase = AFFIRMATIONS[Math.floor(Math.random() * AFFIRMATIONS.length)];
+    const idx = Math.floor(Math.random() * AFFIRMATIONS.length);
     const status = $("#voice-status");
-    if (status) status.textContent = "\u201c" + phrase + "\u201d";
-    speakTTS(phrase).then(function () {
+    if (status) status.textContent = "\u201c" + AFFIRMATIONS[idx] + "\u201d";
+    // Pre-rendered clip — no server round-trip, plays instantly.
+    playClip((idx < 10 ? "0" + idx : idx) + ".wav").then(function () {
       startRecording();
       wakeHeld = false;
+    });
+  }
+
+  function playClip(file) {
+    return new Promise(function (resolve) {
+      const a = new Audio("/web/affirmations/" + file);
+      a.onended = resolve;
+      a.onerror = resolve;
+      a.play();
     });
   }
 
@@ -972,7 +993,8 @@
   async function onRecordingStop() {
     recording = false;
     const status = $("#voice-status");
-    if (status) status.textContent = "transcribing\u2026";
+    if (status) status.textContent = "Processing, Sir\u2026";
+    playClip("processing.wav");
     try {
       const mime = mediaRecorder ? mediaRecorder.mimeType : "audio/webm";
       const blob = new Blob(chunks, { type: mime || "audio/webm" });
@@ -1062,11 +1084,43 @@
     return btoa(bin);
   }
 
+  /* ---------------- real-time sync ---------------- */
+
+  // refreshAfterTurn pushes a fresh snapshot + history after a chat reply, so
+  // a status change made through chat (voice or text) shows up immediately.
+  function refreshAfterTurn() {
+    pollState();
+    if (mode === "bento") refreshHistory();
+  }
+
+  // pollState re-renders the bento from the live state so changes made outside
+  // this tab (WhatsApp, iMessage, voice) appear without a manual refresh.
+  function pollState() {
+    api("/web/api/state").then(function (d) {
+      if (!d || !d.state) return;
+      state = d.state;
+      captureState();
+      renderVips();
+      renderAccess();
+      renderVoiceMeta();
+    }).catch(function (e) {
+      if (e.message === "session expired") return;
+    });
+  }
+
   /* ---------------- init ---------------- */
 
   setInterval(function () {
     if (chatWs && chatWs.readyState === WebSocket.OPEN) sendFrame("ping", {});
   }, 25000);
+
+  setInterval(function () {
+    if (token) pollState();
+  }, 5000);
+
+  setInterval(function () {
+    if (mode === "bento" && token) refreshHistory();
+  }, 15000);
 
   window.addEventListener("beforeunload", function () {
     stopWake();

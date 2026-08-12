@@ -28,27 +28,29 @@ const (
 
 // Options wires the web console to the services it drives.
 type Options struct {
-	ListenAddr string
-	WebToken   string
-	Butler     *assistant.Service
-	Store      *store.Store
-	Bridge     http.Handler
-	Voice      *voice.Engine
-	STTModel   string
-	TTSEngine  string
-	SessionTTL time.Duration
+	ListenAddr     string
+	WebToken       string
+	Butler         *assistant.Service
+	Store          *store.Store
+	Bridge         http.Handler
+	Voice          *voice.Engine
+	STTModel       string
+	TTSEngine      string
+	AffirmationDir string
+	SessionTTL     time.Duration
 }
 
 // Server owns the HTTP handlers, sessions, and the voice engine.
 type Server struct {
-	mux       *http.ServeMux
-	webToken  string
-	butler    *assistant.Service
-	store     *store.Store
-	voice     *voice.Engine
-	sttModel  string
-	ttsEngine string
-	listen    string
+	mux          *http.ServeMux
+	webToken     string
+	butler       *assistant.Service
+	store        *store.Store
+	voice        *voice.Engine
+	sttModel     string
+	ttsEngine    string
+	affirmations string
+	listen       string
 
 	sessions *sessionManager
 }
@@ -60,15 +62,16 @@ func New(opts Options) *Server {
 		ttl = defaultSessionTTL
 	}
 	s := &Server{
-		mux:       http.NewServeMux(),
-		webToken:  opts.WebToken,
-		butler:    opts.Butler,
-		store:     opts.Store,
-		voice:     opts.Voice,
-		sttModel:  opts.STTModel,
-		ttsEngine: opts.TTSEngine,
-		listen:    opts.ListenAddr,
-		sessions:  newSessionManager(ttl),
+		mux:          http.NewServeMux(),
+		webToken:     opts.WebToken,
+		butler:       opts.Butler,
+		store:        opts.Store,
+		voice:        opts.Voice,
+		sttModel:     opts.STTModel,
+		ttsEngine:    opts.TTSEngine,
+		affirmations: opts.AffirmationDir,
+		listen:       opts.ListenAddr,
+		sessions:     newSessionManager(ttl),
 	}
 
 	s.mux.HandleFunc("POST /web/api/login", s.handleLogin)
@@ -98,6 +101,11 @@ func New(opts Options) *Server {
 
 	s.mux.HandleFunc("/web/api/", s.handleAPI404)
 	s.mux.Handle("/web/static/", http.StripPrefix("/web/static/", http.FileServer(http.FS(staticSubFS))))
+	if s.affirmations != "" {
+		// Pre-rendered voice clips (wake-word affirmations, "Processing, Sir.").
+		// Served like static assets: tiny, non-sensitive, cacheable.
+		s.mux.Handle("GET /web/affirmations/", http.StripPrefix("/web/affirmations/", http.FileServer(http.Dir(s.affirmations))))
+	}
 	s.mux.HandleFunc("/web/", s.handleSPA)
 
 	if opts.Bridge != nil {
