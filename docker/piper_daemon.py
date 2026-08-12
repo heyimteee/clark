@@ -48,7 +48,7 @@ def main():
 
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wav_file:
-            voice.synthesize(text, wav_file)
+            voice.synthesize_wav(text, wav_file)
         wav = buf.getvalue()
 
         stdout.write(struct.pack("<I", len(wav)) + wav)
