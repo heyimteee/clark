@@ -313,6 +313,60 @@ needed if your reverse proxy uses a certificate Clark doesn't trust), and
   the iMessage service, then acks. A failed delivery is never re-served (no
   double-sends); stale picked messages show up in the host logs.
 
+## Web console (v4)
+
+A single-page dashboard served from the same `:8090` listener — no build step,
+vanilla JS embedded via `go:embed`. Two full-screen modes:
+
+- **Bento** — every setting as a live tile: Config (status, thinking, history
+  limit, context), Voice (engines, test, mic/wake), VIPs (add/bulk/status/
+  access/delete), Access (per-VIP tool toggles), History (Global / Per-VIP /
+  Web).
+- **Chat** — full-screen conversation with Clark over WebSocket. Every message
+  gets a genuine AI reply with all tool calls (no fast-path); the `web`
+  conversation is kept separate from per-VIP history.
+
+Plus real-time logs streamed to a collapsible console, and a voice seam:
+STT = faster-whisper (tiny, baked into the image) and TTS = piper, both behind
+swappable interfaces. Wake word "Clark" arms the browser listener; click-to-talk
+falls back to a manual recording.
+
+### Setup
+
+Add `WEB_TOKEN` to your `.env` (generate with `openssl rand -hex 32`). With
+`WEB_ENABLED=1` the server **refuses to start** if the token is missing — the
+console is reachable over the public HTTPS proxy, so this is mandatory, not
+optional.
+
+```sh
+WEB_ENABLED=1
+WEB_TOKEN=<openssl rand -hex 32>
+STT_ENGINE=faster-whisper   # or "ollama" to use an Ollama whisper model
+TTS_ENGINE=piper
+TTS_VOICE=en_US-amy-medium
+```
+
+The Docker image bakes in the piper voice and the faster-whisper model at build
+time, so the container never phones home at runtime. Voice degrades gracefully:
+if an engine's binary/model is missing, the console shows it as unavailable
+instead of crashing.
+
+### API surface
+
+- `POST /web/api/login` with `{"key":"<WEB_TOKEN>"}` → session token (12 h,
+  sliding). Everything else needs `Authorization: Bearer <session>`.
+- `GET /web/api/state` → full bento snapshot; mutations (`status`, `thinking`,
+  `history-limit`, `context`, `vip/*`, `access`, `history/clear`, `send`) return
+  a fresh snapshot each time.
+- `GET /web/api/history?scope=global|vip|web&jid=&limit=` → chronological turns.
+- `POST /web/api/stt` (base64 WAV → text), `POST /web/api/tts` and
+  `POST /web/api/speech` (base64 / raw WAV), `GET /web/api/voice`.
+- `GET /web/api/chat` and `GET /web/api/logs` WebSockets (auth = first frame).
+
+The iMessage bridge API (`/inbound`, `/outbound`, `/ack`) is mounted inside the
+same listener, so the existing macOS bridge keeps working unchanged when the web
+console is enabled.
+
 ## Tools
 
 Clark can call tools while composing a reply. Each tool is described to the model,
