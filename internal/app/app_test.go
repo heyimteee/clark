@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/heyimteee/clark/internal/config"
+	"github.com/heyimteee/clark/internal/voice"
 )
 
 // voiceFixture writes fake whisper runner/model and piper bin/voice files and
@@ -171,5 +172,33 @@ func TestBuildVoiceEngineDegradesWhenKokoroMissing(t *testing.T) {
 	}
 	if engine.TTS != nil {
 		t.Error("TTS = non-nil, want nil when kokoro model is missing")
+	}
+}
+
+func TestBuildTTSEngineKokoroRemoteUsesFailover(t *testing.T) {
+	cfg := kokoroFixture(t)
+	cfg.TTSEngine = "kokoro-remote"
+	cfg.TTSRemoteURL = "http://100.64.0.1:8790"
+	cfg.TTSRemoteToken = "mac-secret"
+
+	engine := buildTTSEngine(cfg)
+
+	if _, ok := engine.(*voice.FailoverTTS); !ok {
+		t.Fatalf("TTS engine = %T, want *voice.FailoverTTS (remote → local)", engine)
+	}
+	if engine.Voice() != "am_michael" {
+		t.Errorf("TTS voice = %q, want am_michael", engine.Voice())
+	}
+}
+
+func TestBuildTTSEngineKokoroRemoteFallsBackToLocalWhenNoURL(t *testing.T) {
+	cfg := kokoroFixture(t)
+	cfg.TTSEngine = "kokoro-remote"
+	cfg.TTSRemoteURL = ""
+
+	engine := buildTTSEngine(cfg)
+
+	if _, ok := engine.(*voice.KokoroTTS); !ok {
+		t.Fatalf("TTS engine = %T, want *voice.KokoroTTS (local fallback)", engine)
 	}
 }

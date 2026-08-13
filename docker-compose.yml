@@ -28,13 +28,16 @@ services:
       - WEB_ENABLED=${WEB_ENABLED:-1}
       - WEB_TOKEN=${WEB_TOKEN:?set WEB_TOKEN in your .env}
       # Speech seam. STT runs faster-whisper (baked into the image); STT_ENGINE=ollama
-      # uses the Ollama whisper model instead. TTS runs Kokoro (default, am_michael)
-      # or piper (TTS_ENGINE=piper), both baked into the image.
+      # uses the Ollama whisper model instead. TTS runs Kokoro on the Master's
+      # Mac (TTS_REMOTE_URL, near-instant on Apple Silicon) with the local
+      # Kokoro daemon as fallback; set TTS_ENGINE=kokoro or =piper to change.
       - STT_ENGINE=${STT_ENGINE:-faster-whisper}
       - STT_MODEL=${STT_MODEL:-whisper-turbo}
-      - TTS_ENGINE=${TTS_ENGINE:-kokoro}
+      - TTS_ENGINE=${TTS_ENGINE:-kokoro-remote}
       - TTS_VOICE=${TTS_VOICE:-en_US-ryan-high}
       - KOKORO_VOICE=${KOKORO_VOICE:-am_michael}
+      - TTS_REMOTE_URL=${TTS_REMOTE_URL:-}
+      - TTS_REMOTE_TOKEN=${TTS_REMOTE_TOKEN:-}
       # Headless container: no desktop notifications.
       - CLARK_NO_NOTIFY=1
       - TZ=${TZ:-Asia/Jakarta}

@@ -313,6 +313,35 @@ needed if your reverse proxy uses a certificate Clark doesn't trust), and
   the iMessage service, then acks. A failed delivery is never re-served (no
   double-sends); stale picked messages show up in the host logs.
 
+### Kokoro TTS server (optional, Mac)
+
+Clark can offload text-to-speech synthesis to a Mac (near-instant on Apple
+Silicon via onnxruntime CoreML) instead of the server's CPU. The Mac runs a
+tiny HTTP server and clark calls it over Tailscale.
+
+```sh
+# On the Mac (from this repo):
+./scripts/install-kokoro-tts.sh <shared-token>
+```
+
+This mirrors `install-bridge.sh`: it creates a Python venv, installs
+`kokoro-onnx`, downloads the model + voices, and installs a launchd agent
+(`com.clark.kokoro-tts`) that starts at login and auto-restarts on crash
+(`KeepAlive`). Logs: `/usr/local/var/log/kokoro-tts.log`.
+
+Then set these on the server's `.env` and redeploy:
+
+```sh
+TTS_ENGINE=kokoro-remote
+TTS_REMOTE_URL=http://100.94.240.11:8790   # the Mac's Tailscale IP:8790
+TTS_REMOTE_TOKEN=<same shared token>
+```
+
+- If the Mac is asleep/unreachable, clark automatically falls back to the
+  local Kokoro daemon in the image.
+- `TTS_ENGINE=kokoro` forces local-only synthesis; `TTS_ENGINE=piper` uses
+  Piper. `KOKORO_VOICE=am_michael` selects the voice.
+
 ## Web console (v4)
 
 A single-page dashboard served from the same `:8090` listener — no build step,

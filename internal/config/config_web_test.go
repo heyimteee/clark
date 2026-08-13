@@ -20,6 +20,8 @@ func loadFromEnv(t *testing.T, env map[string]string) (*Config, error) {
 	_ = os.Unsetenv("WHISPER_MODEL_DIR")
 	_ = os.Unsetenv("TTS_ENGINE")
 	_ = os.Unsetenv("TTS_VOICE")
+	_ = os.Unsetenv("TTS_REMOTE_URL")
+	_ = os.Unsetenv("TTS_REMOTE_TOKEN")
 	_ = os.Unsetenv("PIPER_DAEMON")
 	_ = os.Unsetenv("PIPER_VOICE")
 	_ = os.Unsetenv("KOKORO_DAEMON")
@@ -62,8 +64,11 @@ func TestLoadWebDisabledDefaults(t *testing.T) {
 	if cfg.WhisperModelDir != "/opt/whisper/model" {
 		t.Errorf("WhisperModelDir = %q, want /opt/whisper/model", cfg.WhisperModelDir)
 	}
-	if cfg.TTSEngine != "kokoro" {
-		t.Errorf("TTSEngine = %q, want kokoro", cfg.TTSEngine)
+	if cfg.TTSEngine != "kokoro-remote" {
+		t.Errorf("TTSEngine = %q, want kokoro-remote", cfg.TTSEngine)
+	}
+	if cfg.TTSRemoteURL != "" || cfg.TTSRemoteToken != "" {
+		t.Errorf("TTS remote defaults = %q/%q, want empty", cfg.TTSRemoteURL, cfg.TTSRemoteToken)
 	}
 	if cfg.TTSVoice != "en_US-ryan-high" {
 		t.Errorf("TTSVoice = %q, want en_US-ryan-high", cfg.TTSVoice)
@@ -112,6 +117,8 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 		"WHISPER_MODEL_DIR": "/custom/model",
 		"TTS_ENGINE":        "bark",
 		"TTS_VOICE":         "v2/en_US-speaker_1",
+		"TTS_REMOTE_URL":    "http://100.64.0.1:8790",
+		"TTS_REMOTE_TOKEN":  "mac-secret",
 		"PIPER_DAEMON":      "/custom/daemon.py",
 		"PIPER_VOICE":       "/custom/voices/ryan.onnx",
 		"KOKORO_DAEMON":     "/custom/kokoro_daemon.py",
@@ -143,6 +150,12 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 	}
 	if cfg.TTSEngine != "bark" {
 		t.Errorf("TTSEngine = %q, want bark", cfg.TTSEngine)
+	}
+	if cfg.TTSRemoteURL != "http://100.64.0.1:8790" {
+		t.Errorf("TTSRemoteURL = %q, want http://100.64.0.1:8790", cfg.TTSRemoteURL)
+	}
+	if cfg.TTSRemoteToken != "mac-secret" {
+		t.Errorf("TTSRemoteToken = %q, want mac-secret", cfg.TTSRemoteToken)
 	}
 	if cfg.TTSVoice != "v2/en_US-speaker_1" {
 		t.Errorf("TTSVoice = %q, want v2/en_US-speaker_1", cfg.TTSVoice)
