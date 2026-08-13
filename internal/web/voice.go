@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/heyimteee/clark/internal/logging"
@@ -46,7 +47,7 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	logging.Log("WEB", logging.SevInfo, "TTS", "Synthesizing", "chars", len(body.Text))
-	wav, err := s.voice.TTS.Synthesize(ctx, body.Text)
+	wav, err := s.voice.TTS.Synthesize(ctx, stripForSpeech(body.Text))
 	if err != nil {
 		logging.Log("WEB", logging.SevWarn, "TTS", "Synthesis failed", "error", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "synthesis failed"})
@@ -78,7 +79,7 @@ func (s *Server) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	wav, err := s.voice.TTS.Synthesize(ctx, body.Text)
+	wav, err := s.voice.TTS.Synthesize(ctx, stripForSpeech(body.Text))
 	if err != nil {
 		logging.Log("WEB", logging.SevWarn, "TTS", "Synthesis failed", "error", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "synthesis failed"})
@@ -136,4 +137,34 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 	}
 	logging.Log("WEB", logging.SevInfo, "STT", "Transcription OK", "chars", len(text))
 	writeJSON(w, http.StatusOK, map[string]any{"text": text})
+}
+
+// stripForSpeech removes markdown formatting so TTS only receives clean plain
+// text. Mirrors the same patterns used by the iMessage messenger so Piper
+// never reads aloud "asterisk Available asterisk".
+func stripForSpeech(s string) string {
+	for _, re := range speechStripRe {
+		s = re.ReplaceAllString(s, "$1")
+	}
+	return s
+}
+
+// speechStripRe strips block and inline markdown in a deterministic order.
+// Only paired delimiters between word characters are unwrapped so literals
+// like "2*3" or "a * b" pass through untouched.
+var speechStripRe = []*regexp.Regexp{
+	// "# Title" → "Title"
+	regexp.MustCompile(`(?m)^#{1,6}\s+(.*)$`),
+	// "> quote" → "quote"
+	regexp.MustCompile(`(?m)^>\s?(.*)$`),
+	// "``code``" → "code"
+	regexp.MustCompile("``([^`]+)``"),
+	// "`code`" → "code"
+	regexp.MustCompile("`([^`]+)`"),
+	// "*bold*" → "bold"
+	regexp.MustCompile(`\*([^*\n]+)\*`),
+	// "_italic_" → "italic"
+	regexp.MustCompile(`_([^_\n]+)_`),
+	// "~strike~" → "strike"
+	regexp.MustCompile(`~([^~\n]+)~`),
 }

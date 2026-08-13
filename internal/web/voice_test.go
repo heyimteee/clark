@@ -207,3 +207,29 @@ func TestVoiceEndpointsRequireAuth(t *testing.T) {
 		t.Errorf("stt no auth = %d, want 401", resp.StatusCode)
 	}
 }
+
+func TestStripForSpeech(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"bold", "Hello *World*", "Hello World"},
+		{"italic", "Hello _World_", "Hello World"},
+		{"strikethrough", "Hello ~World~", "Hello World"},
+		{"code", "Hello `World`", "Hello World"},
+		{"double code", "Hello ``World``", "Hello World"},
+		{"heading", "# Title", "Title"},
+		{"quote", "> quoted text", "quoted text"},
+		{"nested", "Say *bold* and _italic_", "Say bold and italic"},
+		{"no false positives", "2*3 = 6", "2*3 = 6"},
+		{"empty", "", ""},
+		{"clean", "No formatting here", "No formatting here"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripForSpeech(tt.in)
+			if got != tt.want {
+				t.Errorf("stripForSpeech(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
