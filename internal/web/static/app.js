@@ -30,6 +30,11 @@
   let wakeRecognition = null;
   let wakeHeld = false;
   let chatBusy = false;
+  // Speech playback: speechGen increments on every speakTTS() so stale chains
+  // (a reply superseded by a newer one, or voice-off) are dropped; speechSource
+  // is the actively playing BufferSource so it can be cut off mid-word.
+  let speechGen = 0;
+  let speechSource = null;
 
   const $ = function (sel, root) {
     return (root || document).querySelector(sel);
@@ -1026,6 +1031,7 @@
   function disarmVoice() {
     voiceOn = false;
     wakeHeld = false;
+    stopSpeech();
     stopWake();
     stopRecording();
     if (micStream) {
@@ -1125,9 +1131,24 @@
       var src = audioCtx.createBufferSource();
       src.buffer = buffer;
       src.connect(audioCtx.destination);
-      src.onended = resolve;
+      speechSource = src;
+      src.onended = function () {
+        speechSource = null;
+        resolve();
+      };
       src.start();
     });
+  }
+
+  // stopSpeech cuts off any in-flight reply immediately: bumps the generation
+  // (so queued, not-yet-played chunks are dropped) and stops the active source
+  // mid-word (barge-in / voice toggle off).
+  function stopSpeech() {
+    speechGen++;
+    if (speechSource) {
+      try { speechSource.stop(); } catch (e) {}
+      speechSource = null;
+    }
   }
 
   // splitSentences splits on sentence-ending punctuation while ignoring
@@ -1166,33 +1187,32 @@
     return out;
   }
 
-  // concatenateBuffers merges decoded sentence buffers into one AudioBuffer in
-  // index order, so playback is strictly sequential with no overlap.
-  function concatenateBuffers(buffers) {
-    var ok = buffers.filter(Boolean);
-    if (!ok.length) return null;
-    var total = 0;
-    for (var i = 0; i < ok.length; i++) total += ok[i].length;
-    var merged = audioCtx.createBuffer(1, total, audioCtx.sampleRate);
-    var target = merged.getChannelData(0);
-    var off = 0;
-    for (var i = 0; i < ok.length; i++) {
-      var ch = ok[i].getChannelData(0);
-      for (var j = 0; j < ch.length; j++) target[off++] = ch[j];
-    }
-    return merged;
-  }
-
   // speakTTS dispatches every sentence to /tts concurrently (the server daemon
-  // serializes synthesis), then plays them merged in index order as one clip —
-  // no mixed/overlapping sentences, natural pauses at each ".".
+  // serializes synthesis), but plays them back as an indexed FIFO queue: chunk
+  // i only plays after chunks 0..i-1 have finished, so early-arriving chunks
+  // wait in line and later chunks never overtake or overlap earlier ones. A
+  // failed chunk (null buffer) is skipped without blocking the next.
   function speakTTS(text) {
     if (!text) return;
     ensureAudioCtx();
+    stopSpeech();            // cut off any in-flight reply immediately
+    var gen = speechGen;     // generation after the stop bump
     var chunks = splitSentences(text);
-    return Promise.all(chunks.map(fetchTTSBuffer)).then(function (buffers) {
-      return playBuffer(concatenateBuffers(buffers));
+    if (!chunks.length) return;
+    // All fetches start immediately and resolve in arbitrary order.
+    var avail = chunks.map(fetchTTSBuffer);
+    // FIFO: await chunk i (if not ready yet), play it to completion, then i+1.
+    var chain = Promise.resolve();
+    avail.forEach(function (p) {
+      chain = chain.then(function () {
+        if (gen !== speechGen) return null; // superseded/stopped: drop the rest
+        return p.then(function (buf) {
+          if (gen !== speechGen) return null;
+          return buf ? playBuffer(buf) : null;
+        });
+      });
     });
+    return chain;
   }
 
   function startRecording() {
