@@ -99,6 +99,7 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "speech to text is not available"})
 		return
 	}
+	logging.Log("WEB", logging.SevInfo, "STT", "STT request received", "content_length", r.ContentLength)
 	var body struct {
 		Audio string `json:"audio"`
 	}

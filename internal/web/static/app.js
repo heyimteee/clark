@@ -617,6 +617,9 @@
   /* ---------------- chat (ws) ---------------- */
 
   function connectChat() {
+    if (chatWs && (chatWs.readyState === WebSocket.OPEN || chatWs.readyState === WebSocket.CONNECTING)) {
+      try { chatWs.close(); } catch (e) {}
+    }
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(proto + "//" + location.host + "/web/api/chat");
     chatWs = ws;
@@ -871,6 +874,11 @@
   /* ---------------- logs (ws) ---------------- */
 
   function connectLogs() {
+    // Never open a second live socket over an existing one — overlapping
+    // connections double every log line in the strip.
+    if (logsWs && (logsWs.readyState === WebSocket.OPEN || logsWs.readyState === WebSocket.CONNECTING)) {
+      try { logsWs.close(); } catch (e) {}
+    }
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(proto + "//" + location.host + "/web/api/logs");
     logsWs = ws;
@@ -1190,7 +1198,7 @@
       sendVoiceText(text);
       if (voiceOn) startWake();
     } catch (e) {
-      if (status) status.textContent = "transcription failed";
+      if (status) status.textContent = "transcription failed: " + (e && e.message ? e.message : e);
       if (voiceOn) startWake();
     }
   }

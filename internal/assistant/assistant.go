@@ -746,8 +746,10 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 		return false, ""
 	}
 
-	// A reply that merely claims a message was sent or delivered.
-	if hasTool("send_message") && hasAny(reply,
+	// A reply that merely claims a message was sent or delivered. The claim is
+	// satisfied by either the WhatsApp send_message or the iMessage
+	// send_imessage tool — whichever transport the model actually used.
+	if (hasTool("send_message") || hasTool("send_imessage")) && hasAny(reply,
 		"shall send", "will send", "am sending", "is sending", "sending the",
 		"sending it", "sending that", "has been sent", "have sent", "had sent",
 		"sent to", "sent it", "sent the", "sent via", "sent a message",
@@ -841,7 +843,7 @@ func manageHint(userMsg string) string {
 func hintSatisfied(hint string, ran map[string]bool) bool {
 	switch hint {
 	case "send_message":
-		return ran["send_message"]
+		return ran["send_message"] || ran["send_imessage"]
 	case "web_search":
 		return ran["web_search"]
 	case "set_status":
