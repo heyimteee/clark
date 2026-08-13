@@ -15,6 +15,11 @@ import (
 const (
 	maxAudioBytes   = 25 << 20 // 25 MB body cap for STT uploads (§6.5)
 	maxTTSTextChars = 4000
+	// ttsSynthTimeout bounds a single synthesis call. Kokoro on the i5 runs
+	// ~1.2-1.5x real-time, so a long reply (up to 4000 chars, ~5 min of
+	// speech) needs a generous ceiling; 30s was killing long replies with
+	// "context deadline exceeded".
+	ttsSynthTimeout = 3 * time.Minute
 )
 
 // handleVoiceStatus reports the voice seam as the flat §6.5 shape.
@@ -45,7 +50,7 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "text is too long"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), ttsSynthTimeout)
 	defer cancel()
 	logging.Log("WEB", logging.SevInfo, "TTS", "Synthesizing", "chars", len(body.Text))
 	wav, err := s.voice.TTS.Synthesize(ctx, stripForSpeech(body.Text))
@@ -78,7 +83,7 @@ func (s *Server) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "text is too long"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), ttsSynthTimeout)
 	defer cancel()
 	wav, err := s.voice.TTS.Synthesize(ctx, stripForSpeech(body.Text))
 	if err != nil {

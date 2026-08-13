@@ -126,7 +126,7 @@ func (p *KokoroTTS) readFrame(ctx context.Context) ([]byte, error) {
 	select {
 	case r := <-ch:
 		return r.data, r.err
-	case <-time.After(30 * time.Second):
+	case <-time.After(daemonReadTimeout):
 		if p.d != nil {
 			_ = p.d.cmd.Process.Kill()
 		}

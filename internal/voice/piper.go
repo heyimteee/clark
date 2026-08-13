@@ -15,6 +15,13 @@ import (
 // maxTTSBytes caps a single synthesized clip (generous; ~5 min at 22.05 kHz).
 const maxTTSBytes = 20 << 20
 
+// daemonReadTimeout bounds waiting for a synthesis frame from a resident TTS
+// daemon. It must comfortably exceed the web handler's synthesis timeout so a
+// long clip is never killed mid-flight (Kokoro on the i5 is ~1.2-1.5x
+// real-time). A genuinely wedged daemon still dies when the caller's ctx
+// expires.
+const daemonReadTimeout = 3 * time.Minute
+
 // execCommand is overridable so tests can stub the piper process.
 var execCommand = exec.CommandContext
 
@@ -134,7 +141,7 @@ func (p *PiperTTS) readFrame(ctx context.Context) ([]byte, error) {
 	select {
 	case r := <-ch:
 		return r.data, r.err
-	case <-time.After(30 * time.Second):
+	case <-time.After(daemonReadTimeout):
 		if p.d != nil {
 			_ = p.d.cmd.Process.Kill()
 		}

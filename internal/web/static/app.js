@@ -1105,7 +1105,27 @@
     });
   }
 
-  function speakTTS(text) {
+  function chunkText(text, maxLen) {
+    const chunks = [];
+    let rest = text;
+    while (rest.length > maxLen) {
+      let cut = -1;
+      for (let i = maxLen; i > 0 && i > maxLen - 80; i--) {
+        if (rest[i] === "." || rest[i] === "!" || rest[i] === "?") {
+          cut = i + 1;
+          break;
+        }
+      }
+      if (cut <= 0) cut = maxLen;
+      while (rest[cut] === " ") cut++;
+      chunks.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+    if (rest.length) chunks.push(rest);
+    return chunks;
+  }
+
+  function speakChunk(text) {
     ensureAudioCtx();
     return api("/web/api/tts", {
       method: "POST",
@@ -1126,6 +1146,18 @@
           });
         });
     }).catch(function () {});
+  }
+
+  // speakTTS chunks the reply so the first sentence plays almost immediately
+  // instead of waiting for the whole reply to synthesize (Kokoro on the i5 is
+  // ~1.2-1.5x real-time, so a long reply would otherwise mean a long silent
+  // wait). Chunks are synthesized and played back-to-back.
+  function speakTTS(text) {
+    if (!text) return;
+    const chunks = chunkText(text, 220);
+    return chunks.reduce(function (chain, chunk) {
+      return chain.then(function () { return speakChunk(chunk); });
+    }, Promise.resolve());
   }
 
   function startRecording() {
