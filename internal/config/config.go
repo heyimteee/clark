@@ -40,13 +40,13 @@ type Config struct {
 	STTModel        string // STT_MODEL     Ollama model for transcription (default whisper-turbo; STT_ENGINE=ollama only)
 	WhisperScript   string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
 	WhisperModelDir string // WHISPER_MODEL_DIR faster-whisper model dir (default /opt/whisper/model)
-	TTSEngine       string // TTS_ENGINE      "kokoro-remote" (default) or "kokoro"
+	TTSEngine       string // TTS_ENGINE      "kokoro-remote" (default) or "piper"
+	TTSVoice        string // TTS_VOICE       Piper voice id (default en_US-ryan-high, male)
 	TTSRemoteURL    string // TTS_REMOTE_URL  remote Kokoro server (Mac), e.g. http://100.x.x.x:8790
 	TTSRemoteToken  string // TTS_REMOTE_TOKEN shared secret for the remote Kokoro server
-	KokoroDaemon    string // KOKORO_DAEMON   long-lived kokoro runner (default /opt/kokoro/daemon.py)
-	KokoroModel     string // KOKORO_MODEL    kokoro ONNX model (default /opt/kokoro/model/kokoro-v1.0.int8.onnx)
-	KokoroVoices    string // KOKORO_VOICES   kokoro voice vectors (default /opt/kokoro/model/voices-v1.0.bin)
-	KokoroVoice     string // KOKORO_VOICE    kokoro voice id (default am_michael)
+	PiperDaemon     string // PIPER_DAEMON    long-lived piper runner (default /opt/piper/daemon.py)
+	PiperVoice      string // PIPER_VOICE     piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
+	KokoroVoice     string // KOKORO_VOICE    remote Kokoro voice id (default am_michael)
 	AffirmationDir  string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
 }
 
@@ -119,19 +119,19 @@ func Load() (*Config, error) {
 	ttsRemoteURL := os.Getenv("TTS_REMOTE_URL")
 	ttsRemoteToken := os.Getenv("TTS_REMOTE_TOKEN")
 
-	kokoroDaemon := os.Getenv("KOKORO_DAEMON")
-	if kokoroDaemon == "" {
-		kokoroDaemon = "/opt/kokoro/daemon.py"
+	ttsVoice := os.Getenv("TTS_VOICE")
+	if ttsVoice == "" {
+		ttsVoice = "en_US-ryan-high"
 	}
 
-	kokoroModel := os.Getenv("KOKORO_MODEL")
-	if kokoroModel == "" {
-		kokoroModel = "/opt/kokoro/model/kokoro-v1.0.int8.onnx"
+	piperDaemon := os.Getenv("PIPER_DAEMON")
+	if piperDaemon == "" {
+		piperDaemon = "/opt/piper/daemon.py"
 	}
 
-	kokoroVoices := os.Getenv("KOKORO_VOICES")
-	if kokoroVoices == "" {
-		kokoroVoices = "/opt/kokoro/model/voices-v1.0.bin"
+	piperVoice := os.Getenv("PIPER_VOICE")
+	if piperVoice == "" {
+		piperVoice = "/opt/piper/voices/" + ttsVoice + ".onnx"
 	}
 
 	kokoroVoice := os.Getenv("KOKORO_VOICE")
@@ -169,11 +169,11 @@ func Load() (*Config, error) {
 		WhisperScript:   whisperScript,
 		WhisperModelDir: whisperModelDir,
 		TTSEngine:       ttsEngine,
+		TTSVoice:        ttsVoice,
 		TTSRemoteURL:    ttsRemoteURL,
 		TTSRemoteToken:  ttsRemoteToken,
-		KokoroDaemon:    kokoroDaemon,
-		KokoroModel:     kokoroModel,
-		KokoroVoices:    kokoroVoices,
+		PiperDaemon:     piperDaemon,
+		PiperVoice:      piperVoice,
 		KokoroVoice:     kokoroVoice,
 		AffirmationDir:  affirmationDir,
 	}, nil

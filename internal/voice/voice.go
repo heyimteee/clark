@@ -15,7 +15,8 @@ type STT interface {
 
 // TTS synthesizes speech from text.
 type TTS interface {
-	// Synthesize returns 16-bit PCM mono WAV bytes (Kokoro = 24 kHz).
+	// Synthesize returns 16-bit PCM mono WAV bytes (Kokoro = 24 kHz,
+	// Piper = 22.05 kHz).
 	Synthesize(ctx context.Context, text string) ([]byte, error)
 	// Voice returns the active voice id (for the UI).
 	Voice() string

@@ -149,8 +149,8 @@ func (a *App) Run() error {
 			logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "Bridge routes mounted inside web console", "addr", a.cfg.IMessageListenAddr)
 		}
 		engine := buildVoiceEngine(a.cfg)
-		// Pre-warm any resident TTS daemon (local kokoro, or the failover's
-		// local backup) so the model is loaded before first use.
+		// Pre-warm any resident TTS daemon (piper, or the failover's piper
+		// backup) so the model is loaded before first use.
 		if w, ok := engine.TTS.(interface{ Start(context.Context) error }); ok {
 			if err := w.Start(ctx); err != nil {
 				logging.Log("VOICE", logging.SevWarn, "TTS", "TTS daemon pre-warm failed; will retry on demand", "error", err.Error())
@@ -193,7 +193,7 @@ func (a *App) Run() error {
 }
 
 // buildVoiceEngine assembles the STT/TTS seam. Engines are only wired when
-// their prerequisites exist, so a missing whisper model or kokoro daemon
+// their prerequisites exist, so a missing whisper model or piper daemon
 // degrades to "voice unavailable" instead of a hard crash.
 func buildVoiceEngine(cfg *config.Config) *voice.Engine {
 	return &voice.Engine{STT: buildSTTEngine(cfg), TTS: buildTTSEngine(cfg)}
@@ -224,40 +224,36 @@ func buildSTTEngine(cfg *config.Config) voice.STT {
 func buildTTSEngine(cfg *config.Config) voice.TTS {
 	switch cfg.TTSEngine {
 	case "kokoro-remote":
-		// Remote Kokoro on the Mac, with the local Kokoro daemon as fallback so
-		// TTS never dies when the Mac is asleep or unreachable.
-		local := buildLocalKokoro(cfg)
+		// Remote Kokoro on the Mac (MLX), with the server-side piper daemon as
+		// fallback so TTS still works when the Mac is asleep or unreachable.
+		fallback := buildPiper(cfg)
 		if cfg.TTSRemoteURL == "" {
-			return local
+			return fallback
 		}
 		remote := voice.NewKokoroRemote(cfg.TTSRemoteURL, cfg.TTSRemoteToken, cfg.KokoroVoice)
-		if local == nil {
+		if fallback == nil {
 			return remote
 		}
-		return voice.NewFailoverTTS(remote, local)
-	case "kokoro":
-		return buildLocalKokoro(cfg)
+		return voice.NewFailoverTTS(remote, fallback)
+	case "piper":
+		return buildPiper(cfg)
 	default:
 		logging.Log("VOICE", logging.SevWarn, "TTS", "Unknown TTS engine; disabled", "engine", cfg.TTSEngine)
 		return nil
 	}
 }
 
-func buildLocalKokoro(cfg *config.Config) voice.TTS {
-	if _, err := os.Stat(cfg.KokoroDaemon); err != nil {
-		logging.Log("VOICE", logging.SevWarn, "TTS", "Kokoro daemon missing; TTS disabled", "script", cfg.KokoroDaemon)
+func buildPiper(cfg *config.Config) voice.TTS {
+	if _, err := os.Stat(cfg.PiperDaemon); err != nil {
+		logging.Log("VOICE", logging.SevWarn, "TTS", "Piper daemon missing; TTS disabled", "script", cfg.PiperDaemon)
 		return nil
 	}
-	if _, err := os.Stat(cfg.KokoroModel); err != nil {
-		logging.Log("VOICE", logging.SevWarn, "TTS", "Kokoro model missing; TTS disabled", "model", cfg.KokoroModel)
+	if _, err := os.Stat(cfg.PiperVoice); err != nil {
+		logging.Log("VOICE", logging.SevWarn, "TTS", "Piper voice missing; TTS disabled", "voice", cfg.PiperVoice)
 		return nil
 	}
-	if _, err := os.Stat(cfg.KokoroVoices); err != nil {
-		logging.Log("VOICE", logging.SevWarn, "TTS", "Kokoro voices missing; TTS disabled", "voices", cfg.KokoroVoices)
-		return nil
-	}
-	logging.Log("VOICE", logging.SevInfo, "TTS", "Kokoro ready", "daemon", cfg.KokoroDaemon, "voice", cfg.KokoroVoice)
-	return voice.NewKokoro(cfg.KokoroDaemon, cfg.KokoroModel, cfg.KokoroVoices, cfg.KokoroVoice)
+	logging.Log("VOICE", logging.SevInfo, "TTS", "Piper ready", "daemon", cfg.PiperDaemon, "voice", cfg.PiperVoice)
+	return voice.NewPiper(cfg.PiperDaemon, cfg.PiperVoice)
 }
 
 // notifier picks the desktop notifier, or a silent no-op in headless

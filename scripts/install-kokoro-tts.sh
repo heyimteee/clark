@@ -10,7 +10,7 @@
 #   KOKORO_TOKEN  shared secret, must equal TTS_REMOTE_TOKEN on the server.
 #
 # Creates:
-#   ~/.clark/kokoro/venv                    python venv + mlx-audio + kokoro-onnx
+#   ~/.clark/kokoro/venv                    python venv + mlx-audio
 #   ~/.clark/kokoro/mlx-model               mlx-community/Kokoro-82M-8bit (MLX)
 #   ~/.clark/kokoro/server                  a copy of the server
 #   ~/Library/LaunchAgents/com.clark.kokoro-tts.plist

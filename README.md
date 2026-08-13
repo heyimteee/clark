@@ -338,10 +338,26 @@ TTS_REMOTE_URL=http://100.94.240.11:8790   # the Mac's Tailscale IP:8790
 TTS_REMOTE_TOKEN=<same shared token>
 ```
 
-- If the Mac is asleep/unreachable, clark automatically falls back to the
-  local Kokoro daemon in the image.
-- `TTS_ENGINE=kokoro` forces local-only synthesis. `KOKORO_VOICE=am_michael`
-  selects the voice.
+- If the Mac is asleep or unreachable (e.g. lid closed on battery), clark
+  automatically falls back to the server-side Piper daemon (en_US-ryan-high).
+- `TTS_ENGINE=piper` forces server-side synthesis only. `KOKORO_VOICE=am_michael`
+  selects the remote Mac voice; `TTS_VOICE=en_US-ryan-high` selects the Piper
+  fallback voice.
+
+### Keeping the Mac awake (lid closed)
+
+clark's Mac daemons (iMessage bridge + remote Kokoro TTS) are supervised by
+launchd. To keep them alive with the lid closed, install the keep-awake agent:
+
+```sh
+./scripts/install-caffeinate.sh
+```
+
+This runs `caffeinate -s -i` (PreventSystemSleep) as its own launchd agent.
+**Note:** `caffeinate -s` only holds on AC power — on battery the Mac still
+sleeps when the lid closes, and clark then speaks via the Piper fallback above.
+For a lid-close override that also works on battery, run once as admin:
+`sudo pmset -a disablesleep 1`.
 
 ## Web console (v4)
 
@@ -372,14 +388,15 @@ optional.
 WEB_ENABLED=1
 WEB_TOKEN=<openssl rand -hex 32>
 STT_ENGINE=faster-whisper   # or "ollama" to use an Ollama whisper model
-TTS_ENGINE=kokoro-remote    # or "kokoro" for local-only
-KOKORO_VOICE=am_michael
+TTS_ENGINE=kokoro-remote    # or "piper" for server-side only
+KOKORO_VOICE=am_michael     # remote Mac (MLX) voice
+TTS_VOICE=en_US-ryan-high   # Piper fallback voice
 ```
 
-The Docker image bakes in the Kokoro TTS model and the faster-whisper STT model
-at build time, so the container never phones home at runtime. Voice degrades
-gracefully: if an engine's binary/model is missing, the console shows it as
-unavailable instead of crashing.
+The Docker image bakes in the Piper fallback voice and the faster-whisper STT
+model at build time, so the container never phones home at runtime. Voice
+degrades gracefully: if an engine's binary/model is missing, the console shows
+it as unavailable instead of crashing.
 
 ### API surface
 
