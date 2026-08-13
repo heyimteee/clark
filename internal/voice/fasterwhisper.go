@@ -8,9 +8,8 @@ import (
 )
 
 // FasterWhisper transcribes audio with the faster-whisper python package, run
-// through a small runner script. It mirrors PiperTTS's process-per-call model:
-// the model is baked into the image at build time, so each call loads from
-// disk and never phones home. v5 can move to a long-lived daemon.
+// through a small runner script. The model is baked into the image at build
+// time, so each call loads from disk and never phones home.
 type FasterWhisper struct {
 	scriptPath string
 	modelDir   string

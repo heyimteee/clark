@@ -83,7 +83,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *assistant.Service, *stubLLM
 		Butler:     ast,
 		Store:      st,
 		STTModel:   "whisper-turbo",
-		TTSEngine:  "piper",
+		TTSEngine:  "kokoro-remote",
 		Voice:      &voice.Engine{},
 	})
 	ts := newServerFor(t, srv)
@@ -122,7 +122,7 @@ func (f *fakeTTS) Synthesize(_ context.Context, _ string) ([]byte, error) {
 	return f.wav, nil
 }
 
-func (f *fakeTTS) Voice() string { return "en_US-ryan-high" }
+func (f *fakeTTS) Voice() string { return "am_michael" }
 
 func bearer(r *http.Request, token string) *http.Request {
 	r.Header.Set("Authorization", "Bearer "+token)

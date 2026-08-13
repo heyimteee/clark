@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs clark's Kokoro TTS server on macOS as a launchd agent, mirroring
 # install-bridge.sh. The server runs on the Mac so TTS synthesis happens on
-# Apple Silicon (CoreML) instead of the i5 box; clark calls it over Tailscale.
+# Apple Silicon via Apple's MLX framework (native Metal GPU/ANE) instead of the
+# i5 box; clark calls it over Tailscale.
 #
 # Usage:
 #   ./scripts/install-kokoro-tts.sh [KOKORO_TOKEN]
@@ -9,8 +10,9 @@
 #   KOKORO_TOKEN  shared secret, must equal TTS_REMOTE_TOKEN on the server.
 #
 # Creates:
-#   ~/.clark/kokoro/venv                    python venv + kokoro-onnx
-#   ~/.clark/kokoro/{model,voices,server}   model files + a copy of the server
+#   ~/.clark/kokoro/venv                    python venv + mlx-audio + kokoro-onnx
+#   ~/.clark/kokoro/mlx-model               mlx-community/Kokoro-82M-8bit (MLX)
+#   ~/.clark/kokoro/server                  a copy of the server
 #   ~/Library/LaunchAgents/com.clark.kokoro-tts.plist
 # Logs: /usr/local/var/log/kokoro-tts.log
 set -euo pipefail
@@ -22,19 +24,19 @@ if [[ -z "$TOKEN" ]]; then
 fi
 
 DIR="$HOME/.clark/kokoro"
+MODEL_DIR="$DIR/mlx-model"
 PLIST="$HOME/Library/LaunchAgents/com.clark.kokoro-tts.plist"
 LOG_DIR=/usr/local/var/log
 PORT=8790
 VOICE=am_michael
-MODEL_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx"
-VOICES_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
+HF_MODEL="mlx-community/Kokoro-82M-8bit"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_SRC="$SCRIPT_DIR/../tools/kokoro_mac_server.py"
 
-# Pick a python in kokoro-onnx's supported range (>=3.10, <3.14). Prefer 3.12:
-# kokoro-onnx's spacy->thinc->blis chain has macOS arm64 wheels for 3.12 but
-# not always for 3.13 (Cython build fails there).
+# Pick a python in mlx-audio's supported range (>=3.10, <3.14). Prefer 3.12:
+# the spacy->thinc->blis chain has macOS arm64 wheels for 3.12 but not always
+# for 3.13 (Cython build fails there).
 find_python() {
 	for c in python3.12 python3.11 python3.13; do
 		if command -v "$c" >/dev/null 2>&1; then echo "$c"; return 0; fi
@@ -59,13 +61,20 @@ echo "==> Creating venv at $DIR/venv"
 mkdir -p "$DIR"
 $PY -m venv "$DIR/venv"
 "$DIR/venv/bin/pip" install --upgrade pip >/dev/null
-"$DIR/venv/bin/pip" install kokoro-onnx "misaki[en]" onnxruntime
+"$DIR/venv/bin/pip" install mlx-audio "misaki[en]"
 echo "==> Installing espeak-ng (best effort, for OOD fallback)"
 command -v brew >/dev/null 2>&1 && (brew list espeak-ng >/dev/null 2>&1 || brew install espeak-ng >/dev/null 2>&1 || true) || true
 
-echo "==> Downloading Kokoro model + voices"
-curl -fsSL -o "$DIR/kokoro-v1.0.int8.onnx" "$MODEL_URL"
-curl -fsSL -o "$DIR/voices-v1.0.bin" "$VOICES_URL"
+echo "==> Downloading Kokoro MLX model ($HF_MODEL, 8-bit)"
+"$DIR/venv/bin/python" - "$MODEL_DIR" "$HF_MODEL" <<'PYEOF'
+import sys
+from huggingface_hub import snapshot_download
+snapshot_download(
+    sys.argv[2],
+    local_dir=sys.argv[1],
+    allow_patterns=["*.safetensors", "*.json", "voices/*"],
+)
+PYEOF
 
 echo "==> Copying server script (stable path, independent of the repo)"
 cp "$SERVER_SRC" "$DIR/kokoro_mac_server.py"
@@ -93,9 +102,7 @@ cat > "$PLIST" <<PLIST
 		<string>--port</string>
 		<string>$PORT</string>
 		<string>--model</string>
-		<string>$DIR/kokoro-v1.0.int8.onnx</string>
-		<string>--voices</string>
-		<string>$DIR/voices-v1.0.bin</string>
+		<string>$MODEL_DIR</string>
 		<string>--voice</string>
 		<string>$VOICE</string>
 		<string>--token</string>

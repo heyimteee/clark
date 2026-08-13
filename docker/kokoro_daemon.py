@@ -3,7 +3,7 @@
 
 The ONNX model and voice vectors load once and stay resident, so every
 request after startup is a fast stdin/stdout round-trip. Framing matches the
-piper daemon exactly:
+shared TTS daemon protocol:
 
   request:  [u32 little-endian length][UTF-8 text bytes]
   response: [u32 little-endian length][WAV bytes]  (16-bit mono, 24 kHz)

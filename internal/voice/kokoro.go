@@ -13,7 +13,7 @@ import (
 // KokoroTTS synthesizes speech with a long-lived Kokoro process (ONNX via
 // onnxruntime, no torch). The model and voices load once when the daemon
 // starts, so every call after the first is a fast stdin/stdout round-trip.
-// The daemon speaks the same framed protocol as PiperTTS:
+// The daemon speaks the same framed protocol as the TTS daemon:
 //
 //	[u32 length][bytes] text in, [u32 length][WAV bytes] out.
 type KokoroTTS struct {
@@ -23,7 +23,7 @@ type KokoroTTS struct {
 	voice      string
 
 	mu sync.Mutex
-	d  *piperDaemon // same framed pipe machinery as piper
+	d  *ttsDaemon
 }
 
 // NewKokoro returns a TTS engine that runs the daemon script at daemonPath
@@ -61,7 +61,7 @@ func (p *KokoroTTS) startLocked(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("kokoro daemon start: %w", err)
 	}
-	p.d = &piperDaemon{cmd: cmd, stdin: stdin, stdout: stdout}
+	p.d = &ttsDaemon{cmd: cmd, stdin: stdin, stdout: stdout}
 	return nil
 }
 

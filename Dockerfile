@@ -12,31 +12,14 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -linkmode external -extldflags -static" -o /out/clark .
 
-# ---- piper stage ----
-# TTS voice model (en_US-ryan-high, ~120 MB, unmistakably male) + its config,
-# baked in so the container never phones home at runtime.
-FROM debian:bookworm-slim AS piper-download
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /opt/piper/voices \
-    && curl -fsSL -o /opt/piper/voices/en_US-ryan-high.onnx \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx \
-    && curl -fsSL -o /opt/piper/voices/en_US-ryan-high.onnx.json \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx.json
-
 # ---- runtime stage ----
-# bookworm-slim (glibc) because piper's binaries are glibc-linked and fail on
-# alpine/musl. `pip install piper-tts` bundles the ONNX runtime and espeak-ng
-# phonemization; faster-whisper provides STT on the CPU (int8). Whisper tiny
-# (~75 MB) is baked in at build so the container never phones home at runtime.
+# bookworm-slim (glibc) for the faster-whisper STT and Kokoro TTS Python
+# stack. espeak-ng is kept for misaki's out-of-dictionary phonemization.
 FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip espeak-ng curl \
-    && pip3 install --no-cache-dir --break-system-packages piper-tts faster-whisper kokoro-onnx misaki[en] \
+    && pip3 install --no-cache-dir --break-system-packages faster-whisper kokoro-onnx misaki[en] \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the faster-whisper small model (downloaded from HF at build time):
@@ -52,9 +35,7 @@ RUN mkdir -p /opt/kokoro/model \
         https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
 
 COPY --from=build /out/clark /usr/local/bin/clark
-COPY --from=piper-download /opt/piper /opt/piper
 COPY docker/whisper_run.py /opt/whisper/run.py
-COPY docker/piper_daemon.py /opt/piper/daemon.py
 COPY docker/kokoro_daemon.py /opt/kokoro/daemon.py
 COPY docker/gen_affirmations.py /opt/kokoro/gen_affirmations.py
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -75,8 +56,6 @@ RUN python3 /opt/affirmations/gen_idle.py /opt/affirmations/idle.wav \
     && rm /opt/affirmations/gen_idle.py
 
 ENV CLARK_DB=/data/clark.db
-ENV PIPER_DAEMON=/opt/piper/daemon.py
-ENV PIPER_VOICE=/opt/piper/voices/en_US-ryan-high.onnx
 ENV KOKORO_DAEMON=/opt/kokoro/daemon.py
 ENV KOKORO_MODEL=/opt/kokoro/model/kokoro-v1.0.int8.onnx
 ENV KOKORO_VOICES=/opt/kokoro/model/voices-v1.0.bin

@@ -149,8 +149,8 @@ func (a *App) Run() error {
 			logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "Bridge routes mounted inside web console", "addr", a.cfg.IMessageListenAddr)
 		}
 		engine := buildVoiceEngine(a.cfg)
-		// Pre-warm any resident TTS daemon (local kokoro, piper, or the
-		// failover's local backup) so the model is loaded before first use.
+		// Pre-warm any resident TTS daemon (local kokoro, or the failover's
+		// local backup) so the model is loaded before first use.
 		if w, ok := engine.TTS.(interface{ Start(context.Context) error }); ok {
 			if err := w.Start(ctx); err != nil {
 				logging.Log("VOICE", logging.SevWarn, "TTS", "TTS daemon pre-warm failed; will retry on demand", "error", err.Error())
@@ -193,8 +193,8 @@ func (a *App) Run() error {
 }
 
 // buildVoiceEngine assembles the STT/TTS seam. Engines are only wired when
-// their prerequisites exist, so a missing whisper model or piper degrades to
-// "voice unavailable" instead of a hard crash.
+// their prerequisites exist, so a missing whisper model or kokoro daemon
+// degrades to "voice unavailable" instead of a hard crash.
 func buildVoiceEngine(cfg *config.Config) *voice.Engine {
 	return &voice.Engine{STT: buildSTTEngine(cfg), TTS: buildTTSEngine(cfg)}
 }
@@ -237,17 +237,6 @@ func buildTTSEngine(cfg *config.Config) voice.TTS {
 		return voice.NewFailoverTTS(remote, local)
 	case "kokoro":
 		return buildLocalKokoro(cfg)
-	case "piper":
-		if _, err := os.Stat(cfg.PiperDaemon); err != nil {
-			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper daemon missing; TTS disabled", "script", cfg.PiperDaemon)
-			return nil
-		}
-		if _, err := os.Stat(cfg.PiperVoice); err != nil {
-			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper voice missing; TTS disabled", "voice", cfg.PiperVoice)
-			return nil
-		}
-		logging.Log("VOICE", logging.SevInfo, "TTS", "Piper ready", "daemon", cfg.PiperDaemon, "voice", cfg.PiperVoice)
-		return voice.NewPiper(cfg.PiperDaemon, cfg.PiperVoice)
 	default:
 		logging.Log("VOICE", logging.SevWarn, "TTS", "Unknown TTS engine; disabled", "engine", cfg.TTSEngine)
 		return nil

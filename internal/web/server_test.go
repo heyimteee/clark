@@ -74,7 +74,7 @@ func TestSessionExpires(t *testing.T) {
 		Butler:     ast,
 		Store:      st,
 		STTModel:   "whisper-turbo",
-		TTSEngine:  "piper",
+		TTSEngine:  "kokoro-remote",
 		SessionTTL: 50 * time.Millisecond,
 		Voice:      voiceEngine(),
 	})
@@ -102,7 +102,7 @@ func TestSessionSlides(t *testing.T) {
 		Butler:     ast,
 		Store:      st,
 		STTModel:   "whisper-turbo",
-		TTSEngine:  "piper",
+		TTSEngine:  "kokoro-remote",
 		SessionTTL: time.Second,
 		Voice:      voiceEngine(),
 	})
@@ -139,7 +139,7 @@ func TestBridgeRoutesMounted(t *testing.T) {
 		Store:      st,
 		Bridge:     bridge,
 		STTModel:   "whisper-turbo",
-		TTSEngine:  "piper",
+		TTSEngine:  "kokoro-remote",
 		Voice:      voiceEngine(),
 	})
 	ts := newServerFor(t, srv)

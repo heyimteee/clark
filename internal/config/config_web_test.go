@@ -19,11 +19,8 @@ func loadFromEnv(t *testing.T, env map[string]string) (*Config, error) {
 	_ = os.Unsetenv("WHISPER_SCRIPT")
 	_ = os.Unsetenv("WHISPER_MODEL_DIR")
 	_ = os.Unsetenv("TTS_ENGINE")
-	_ = os.Unsetenv("TTS_VOICE")
 	_ = os.Unsetenv("TTS_REMOTE_URL")
 	_ = os.Unsetenv("TTS_REMOTE_TOKEN")
-	_ = os.Unsetenv("PIPER_DAEMON")
-	_ = os.Unsetenv("PIPER_VOICE")
 	_ = os.Unsetenv("KOKORO_DAEMON")
 	_ = os.Unsetenv("KOKORO_MODEL")
 	_ = os.Unsetenv("KOKORO_VOICES")
@@ -70,15 +67,6 @@ func TestLoadWebDisabledDefaults(t *testing.T) {
 	if cfg.TTSRemoteURL != "" || cfg.TTSRemoteToken != "" {
 		t.Errorf("TTS remote defaults = %q/%q, want empty", cfg.TTSRemoteURL, cfg.TTSRemoteToken)
 	}
-	if cfg.TTSVoice != "en_US-ryan-high" {
-		t.Errorf("TTSVoice = %q, want en_US-ryan-high", cfg.TTSVoice)
-	}
-	if cfg.PiperDaemon != "/opt/piper/daemon.py" {
-		t.Errorf("PiperDaemon = %q, want /opt/piper/daemon.py", cfg.PiperDaemon)
-	}
-	if cfg.PiperVoice != "/opt/piper/voices/en_US-ryan-high.onnx" {
-		t.Errorf("PiperVoice = %q, want /opt/piper/voices/en_US-ryan-high.onnx", cfg.PiperVoice)
-	}
 	if cfg.KokoroDaemon != "/opt/kokoro/daemon.py" {
 		t.Errorf("KokoroDaemon = %q, want /opt/kokoro/daemon.py", cfg.KokoroDaemon)
 	}
@@ -116,11 +104,8 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 		"WHISPER_SCRIPT":    "/custom/run.py",
 		"WHISPER_MODEL_DIR": "/custom/model",
 		"TTS_ENGINE":        "bark",
-		"TTS_VOICE":         "v2/en_US-speaker_1",
 		"TTS_REMOTE_URL":    "http://100.64.0.1:8790",
 		"TTS_REMOTE_TOKEN":  "mac-secret",
-		"PIPER_DAEMON":      "/custom/daemon.py",
-		"PIPER_VOICE":       "/custom/voices/ryan.onnx",
 		"KOKORO_DAEMON":     "/custom/kokoro_daemon.py",
 		"KOKORO_MODEL":      "/custom/kokoro.onnx",
 		"KOKORO_VOICES":     "/custom/voices.bin",
@@ -156,15 +141,6 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 	}
 	if cfg.TTSRemoteToken != "mac-secret" {
 		t.Errorf("TTSRemoteToken = %q, want mac-secret", cfg.TTSRemoteToken)
-	}
-	if cfg.TTSVoice != "v2/en_US-speaker_1" {
-		t.Errorf("TTSVoice = %q, want v2/en_US-speaker_1", cfg.TTSVoice)
-	}
-	if cfg.PiperDaemon != "/custom/daemon.py" {
-		t.Errorf("PiperDaemon = %q, want /custom/daemon.py", cfg.PiperDaemon)
-	}
-	if cfg.PiperVoice != "/custom/voices/ryan.onnx" {
-		t.Errorf("PiperVoice = %q, want /custom/voices/ryan.onnx", cfg.PiperVoice)
 	}
 	if cfg.KokoroDaemon != "/custom/kokoro_daemon.py" {
 		t.Errorf("KokoroDaemon = %q, want /custom/kokoro_daemon.py", cfg.KokoroDaemon)

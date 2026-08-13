@@ -41,7 +41,7 @@ func testVoiceServer(t *testing.T, eng *voice.Engine) (*httptest.Server, string)
 		Butler:     ast,
 		Store:      st,
 		STTModel:   "whisper-turbo",
-		TTSEngine:  "piper",
+		TTSEngine:  "kokoro-remote",
 		Voice:      eng,
 	})
 	ts := newServerFor(t, srv)
@@ -59,7 +59,7 @@ func TestVoiceStatusUnavailableWhenNil(t *testing.T) {
 	if out["available"] != false {
 		t.Errorf("voice available = %v, want false", out["available"])
 	}
-	if out["sttModel"] != "whisper-turbo" || out["ttsEngine"] != "piper" {
+	if out["sttModel"] != "whisper-turbo" || out["ttsEngine"] != "kokoro-remote" {
 		t.Errorf("voice engines = %v", out)
 	}
 }
@@ -74,7 +74,7 @@ func TestVoiceStatusAvailable(t *testing.T) {
 	if out["available"] != true {
 		t.Errorf("available = %v, want true", out["available"])
 	}
-	if out["sttModel"] != "whisper-turbo" || out["ttsEngine"] != "piper" || out["ttsVoice"] != "en_US-ryan-high" {
+	if out["sttModel"] != "whisper-turbo" || out["ttsEngine"] != "kokoro-remote" || out["ttsVoice"] != "am_michael" {
 		t.Errorf("voice status = %v", out)
 	}
 }

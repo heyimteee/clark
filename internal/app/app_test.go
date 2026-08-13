@@ -9,18 +9,19 @@ import (
 	"github.com/heyimteee/clark/internal/voice"
 )
 
-// voiceFixture writes fake whisper runner/model and piper bin/voice files and
-// returns a config pointing at them.
+// voiceFixture writes fake whisper runner/model and kokoro daemon/model/voices
+// files and returns a config pointing at them with a working TTS engine.
 func voiceFixture(t *testing.T) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 
 	script := filepath.Join(dir, "run.py")
 	modelDir := filepath.Join(dir, "model")
-	piperDaemon := filepath.Join(dir, "daemon.py")
-	piperVoice := filepath.Join(dir, "en_US-ryan-high.onnx")
+	kokoroDaemon := filepath.Join(dir, "kokoro_daemon.py")
+	kokoroModel := filepath.Join(dir, "kokoro-v1.0.int8.onnx")
+	kokoroVoices := filepath.Join(dir, "voices-v1.0.bin")
 
-	for _, p := range []string{script, piperDaemon, piperVoice} {
+	for _, p := range []string{script, kokoroDaemon, kokoroModel, kokoroVoices} {
 		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
 			t.Fatalf("write %s: %v", p, err)
 		}
@@ -35,38 +36,40 @@ func voiceFixture(t *testing.T) *config.Config {
 		STTEngine:       "faster-whisper",
 		WhisperScript:   script,
 		WhisperModelDir: modelDir,
-		TTSEngine:       "piper",
-		PiperDaemon:     piperDaemon,
-		PiperVoice:      piperVoice,
+		TTSEngine:       "kokoro",
+		KokoroDaemon:    kokoroDaemon,
+		KokoroModel:     kokoroModel,
+		KokoroVoices:    kokoroVoices,
+		KokoroVoice:     "am_michael",
 	}
 }
 
-func TestBuildVoiceEngineFasterWhisperAndPiperReady(t *testing.T) {
+func TestBuildVoiceEngineFasterWhisperAndKokoroReady(t *testing.T) {
 	engine := buildVoiceEngine(voiceFixture(t))
 
 	if engine.STT == nil {
 		t.Error("STT = nil, want faster-whisper wired when runner and model exist")
 	}
 	if engine.TTS == nil {
-		t.Error("TTS = nil, want piper wired when daemon and voice exist")
+		t.Error("TTS = nil, want kokoro wired when daemon, model, and voices exist")
 	}
-	if engine.TTS.Voice() != "en_US-ryan-high" {
-		t.Errorf("TTS voice = %q, want en_US-ryan-high", engine.TTS.Voice())
+	if engine.TTS.Voice() != "am_michael" {
+		t.Errorf("TTS voice = %q, want am_michael", engine.TTS.Voice())
 	}
 }
 
-func TestBuildVoiceEngineDegradesWhenPiperMissing(t *testing.T) {
+func TestBuildVoiceEngineDegradesWhenKokoroMissing(t *testing.T) {
 	cfg := voiceFixture(t)
-	cfg.PiperDaemon = "/nonexistent/daemon.py"
-	cfg.PiperVoice = "/nonexistent/voice.onnx"
+	cfg.KokoroModel = "/nonexistent/kokoro.onnx"
+	cfg.KokoroVoices = "/nonexistent/voices.bin"
 
 	engine := buildVoiceEngine(cfg)
 
 	if engine.STT == nil {
-		t.Error("STT = nil, want STT to survive a missing piper")
+		t.Error("STT = nil, want STT to survive a missing kokoro model")
 	}
 	if engine.TTS != nil {
-		t.Error("TTS = non-nil, want nil when piper daemon is missing")
+		t.Error("TTS = non-nil, want nil when kokoro model is missing")
 	}
 }
 
@@ -111,72 +114,8 @@ func TestBuildVoiceEngineUnknownEnginesDisabled(t *testing.T) {
 	}
 }
 
-// kokoroFixture writes fake whisper runner/model and kokoro daemon/model/voices
-// files and returns a config pointing at them with TTS_ENGINE=kokoro.
-func kokoroFixture(t *testing.T) *config.Config {
-	t.Helper()
-	dir := t.TempDir()
-
-	script := filepath.Join(dir, "run.py")
-	modelDir := filepath.Join(dir, "model")
-	kokoroDaemon := filepath.Join(dir, "kokoro_daemon.py")
-	kokoroModel := filepath.Join(dir, "kokoro-v1.0.int8.onnx")
-	kokoroVoices := filepath.Join(dir, "voices-v1.0.bin")
-
-	for _, p := range []string{script, kokoroDaemon, kokoroModel, kokoroVoices} {
-		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
-			t.Fatalf("write %s: %v", p, err)
-		}
-	}
-	if err := os.MkdirAll(modelDir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", modelDir, err)
-	}
-
-	return &config.Config{
-		OllamaURL:       "http://ollama:11434",
-		STTModel:        "whisper-turbo",
-		STTEngine:       "faster-whisper",
-		WhisperScript:   script,
-		WhisperModelDir: modelDir,
-		TTSEngine:       "kokoro",
-		KokoroDaemon:    kokoroDaemon,
-		KokoroModel:     kokoroModel,
-		KokoroVoices:    kokoroVoices,
-		KokoroVoice:     "am_michael",
-	}
-}
-
-func TestBuildVoiceEngineKokoroReady(t *testing.T) {
-	engine := buildVoiceEngine(kokoroFixture(t))
-
-	if engine.STT == nil {
-		t.Error("STT = nil, want faster-whisper wired when runner and model exist")
-	}
-	if engine.TTS == nil {
-		t.Error("TTS = nil, want kokoro wired when daemon, model, and voices exist")
-	}
-	if engine.TTS.Voice() != "am_michael" {
-		t.Errorf("TTS voice = %q, want am_michael", engine.TTS.Voice())
-	}
-}
-
-func TestBuildVoiceEngineDegradesWhenKokoroMissing(t *testing.T) {
-	cfg := kokoroFixture(t)
-	cfg.KokoroModel = "/nonexistent/kokoro.onnx"
-	cfg.KokoroVoices = "/nonexistent/voices.bin"
-
-	engine := buildVoiceEngine(cfg)
-
-	if engine.STT == nil {
-		t.Error("STT = nil, want STT to survive a missing kokoro model")
-	}
-	if engine.TTS != nil {
-		t.Error("TTS = non-nil, want nil when kokoro model is missing")
-	}
-}
-
 func TestBuildTTSEngineKokoroRemoteUsesFailover(t *testing.T) {
-	cfg := kokoroFixture(t)
+	cfg := voiceFixture(t)
 	cfg.TTSEngine = "kokoro-remote"
 	cfg.TTSRemoteURL = "http://100.64.0.1:8790"
 	cfg.TTSRemoteToken = "mac-secret"
@@ -192,7 +131,7 @@ func TestBuildTTSEngineKokoroRemoteUsesFailover(t *testing.T) {
 }
 
 func TestBuildTTSEngineKokoroRemoteFallsBackToLocalWhenNoURL(t *testing.T) {
-	cfg := kokoroFixture(t)
+	cfg := voiceFixture(t)
 	cfg.TTSEngine = "kokoro-remote"
 	cfg.TTSRemoteURL = ""
 

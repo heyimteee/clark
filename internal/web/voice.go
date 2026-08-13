@@ -152,7 +152,7 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 // stripForSpeech removes markdown formatting so TTS only receives clean plain
 // text. Mirrors the iMessage messenger's patterns but extended and run twice:
 // double-asterisk bold must be stripped before single-asterisk emphasis, and a
-// second pass mops up any leftovers (e.g. "*a * b*") so Piper never reads aloud
+// second pass mops up any leftovers (e.g. "*a * b*") so TTS never reads aloud
 // "asterisk Available asterisk".
 func stripForSpeech(s string) string {
 	for pass := 0; pass < 2; pass++ {

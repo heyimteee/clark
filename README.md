@@ -325,9 +325,10 @@ tiny HTTP server and clark calls it over Tailscale.
 ```
 
 This mirrors `install-bridge.sh`: it creates a Python venv, installs
-`kokoro-onnx`, downloads the model + voices, and installs a launchd agent
-(`com.clark.kokoro-tts`) that starts at login and auto-restarts on crash
-(`KeepAlive`). Logs: `/usr/local/var/log/kokoro-tts.log`.
+`mlx-audio`, downloads the Kokoro MLX model (8-bit), and installs a launchd
+agent (`com.clark.kokoro-tts`) that starts at login and auto-restarts on crash
+(`KeepAlive`). Synthesis runs on the Mac's GPU/ANE via Apple's MLX framework,
+~5× faster than onnxruntime/CoreML. Logs: `/usr/local/var/log/kokoro-tts.log`.
 
 Then set these on the server's `.env` and redeploy:
 
@@ -339,8 +340,8 @@ TTS_REMOTE_TOKEN=<same shared token>
 
 - If the Mac is asleep/unreachable, clark automatically falls back to the
   local Kokoro daemon in the image.
-- `TTS_ENGINE=kokoro` forces local-only synthesis; `TTS_ENGINE=piper` uses
-  Piper. `KOKORO_VOICE=am_michael` selects the voice.
+- `TTS_ENGINE=kokoro` forces local-only synthesis. `KOKORO_VOICE=am_michael`
+  selects the voice.
 
 ## Web console (v4)
 
@@ -356,7 +357,7 @@ vanilla JS embedded via `go:embed`. Two full-screen modes:
   conversation is kept separate from per-VIP history.
 
 Plus real-time logs streamed to a collapsible console, and a voice seam:
-STT = faster-whisper (tiny, baked into the image) and TTS = piper, both behind
+STT = faster-whisper (baked into the image) and TTS = Kokoro, both behind
 swappable interfaces. Wake word "Clark" arms the browser listener; click-to-talk
 falls back to a manual recording.
 
@@ -371,14 +372,14 @@ optional.
 WEB_ENABLED=1
 WEB_TOKEN=<openssl rand -hex 32>
 STT_ENGINE=faster-whisper   # or "ollama" to use an Ollama whisper model
-TTS_ENGINE=piper
-TTS_VOICE=en_US-amy-medium
+TTS_ENGINE=kokoro-remote    # or "kokoro" for local-only
+KOKORO_VOICE=am_michael
 ```
 
-The Docker image bakes in the piper voice and the faster-whisper model at build
-time, so the container never phones home at runtime. Voice degrades gracefully:
-if an engine's binary/model is missing, the console shows it as unavailable
-instead of crashing.
+The Docker image bakes in the Kokoro TTS model and the faster-whisper STT model
+at build time, so the container never phones home at runtime. Voice degrades
+gracefully: if an engine's binary/model is missing, the console shows it as
+unavailable instead of crashing.
 
 ### API surface
 

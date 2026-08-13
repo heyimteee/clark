@@ -2,8 +2,9 @@
 """Kokoro TTS HTTP server for clark, meant to run on the Master's Mac.
 
 Exposes a single POST /tts endpoint that clark's server calls over Tailscale,
-so synthesis happens on Apple Silicon (CoreML preferred, CPU fallback) instead
-of the i5 box. Mirrors the daemon's framing but over HTTP/JSON.
+so synthesis happens on Apple Silicon via Apple's MLX framework (native Metal
+GPU/ANE) instead of the i5 box. Same HTTP contract as the previous
+onnxruntime/CoreML server, so clark's Go client is unchanged.
 
   POST /tts
     Header: X-Clark-Kokoro-Token: <shared token>
@@ -12,17 +13,15 @@ of the i5 box. Mirrors the daemon's framing but over HTTP/JSON.
     401:    bad/missing token
     400:    missing text / empty audio
 
-Usage: kokoro_mac_server.py [--port 8790] [--model PATH] [--voices PATH]
-                            [--voice am_michael] [--token SECRET]
+Usage: kokoro_mac_server.py [--port 8790] [--model DIR] [--voice am_michael]
+                            [--token SECRET]
 
-The model and voices files must exist; the installer pre-downloads them to
-~/.clark/kokoro/. Set ONNX_PROVIDER=CoreMLExecutionProvider (auto-detected)
-to use the Apple Neural Engine via onnxruntime.
+The model is a local directory from `huggingface_hub.snapshot_download` of
+mlx-community/Kokoro-82M-8bit (config.json + safetensors + voices/).
 """
 import argparse
 import base64
 import io
-import os
 import signal
 import sys
 import threading
@@ -95,7 +94,18 @@ _voice = "am_michael"
 
 
 def _synthesize(text, voice):
-    samples, sample_rate = _kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
+    import mlx.core as mx
+
+    # Lang code "a" = American English. generate() yields per-segment results;
+    # concatenate them into one clip so the reply plays as a single sound.
+    segments = []
+    for result in _kokoro.generate(text=text, voice=voice, speed=1.0, lang_code="a"):
+        segments.append(result.audio)
+    if not segments:
+        raise RuntimeError("model produced no audio")
+    samples = np.asarray(mx.concatenate(segments))
+    sample_rate = 24000
+
     pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -112,8 +122,7 @@ def main():
     parser = argparse.ArgumentParser(description="Kokoro TTS server for clark")
     parser.add_argument("--port", type=int, default=8790)
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--voices", required=True)
+    parser.add_argument("--model", required=True, help="local dir with config.json + safetensors + voices/")
     parser.add_argument("--voice", default="am_michael")
     parser.add_argument("--token", default=os.environ.get("KOKORO_TOKEN", ""))
     args = parser.parse_args()
@@ -121,24 +130,19 @@ def main():
     _token = args.token
     _voice = args.voice
 
-    # Prefer CoreML (Apple Neural Engine) when available; kokoro-onnx reads
-    # ONNX_PROVIDER when it builds its InferenceSession.
-    try:
-        import onnxruntime as ort
-        providers = ort.get_available_providers()
-        if "CoreMLExecutionProvider" in providers:
-            os.environ["ONNX_PROVIDER"] = "CoreMLExecutionProvider"
-            print("Using provider: CoreMLExecutionProvider", file=sys.stderr, flush=True)
-        else:
-            print("Providers: %s (CoreML unavailable, using CPU)" % providers, file=sys.stderr, flush=True)
-    except Exception as exc:
-        print("onnxruntime probe failed: %s" % exc, file=sys.stderr, flush=True)
+    from mlx_audio.tts.utils import load_model
 
-    from kokoro_onnx import Kokoro
-    _kokoro = Kokoro(args.model, args.voices)
+    # Eager load (default) materializes parameters on the main thread's default
+    # stream, so request-handler threads can safely run generate() afterwards.
+    _kokoro = load_model(args.model, lazy=False, model_type="kokoro")
+    print(
+        "Kokoro MLX ready (voice=%s, model=%s)" % (args.voice, args.model),
+        file=sys.stderr,
+        flush=True,
+    )
 
     # Release the GIL during synthesis so concurrent /tts requests can overlap
-    # (onnxruntime Run() is thread-safe; ThreadingHTTPServer + threads).
+    # (MLX eval is thread-safe; ThreadingHTTPServer + threads).
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print("Kokoro TTS listening on %s:%d (voice=%s)" % (args.host, args.port, _voice), file=sys.stderr, flush=True)
 
@@ -152,4 +156,5 @@ def main():
 
 
 if __name__ == "__main__":
+    import os
     sys.exit(main())
