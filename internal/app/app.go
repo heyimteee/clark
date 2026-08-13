@@ -149,10 +149,17 @@ func (a *App) Run() error {
 			logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "Bridge routes mounted inside web console", "addr", a.cfg.IMessageListenAddr)
 		}
 		engine := buildVoiceEngine(a.cfg)
-		// Pre-warm the piper daemon so the model is resident before the first
-		// voice request (affirmations are pre-rendered and instant regardless).
-		if piper, ok := engine.TTS.(*voice.PiperTTS); ok {
-			if err := piper.Start(ctx); err != nil {
+		// Pre-warm the active TTS daemon so the model is resident before the
+		// first voice request (affirmations are pre-rendered and instant).
+		switch tts := engine.TTS.(type) {
+		case *voice.KokoroTTS:
+			if err := tts.Start(ctx); err != nil {
+				logging.Log("VOICE", logging.SevWarn, "TTS", "Kokoro daemon pre-warm failed; will retry on demand", "error", err.Error())
+			} else {
+				logging.Log("VOICE", logging.SevInfo, "TTS", "Kokoro daemon pre-warmed", "voice", a.cfg.KokoroVoice)
+			}
+		case *voice.PiperTTS:
+			if err := tts.Start(ctx); err != nil {
 				logging.Log("VOICE", logging.SevWarn, "TTS", "Piper daemon pre-warm failed; will retry on demand", "error", err.Error())
 			} else {
 				logging.Log("VOICE", logging.SevInfo, "TTS", "Piper daemon pre-warmed", "voice", a.cfg.TTSVoice)
@@ -223,6 +230,21 @@ func buildSTTEngine(cfg *config.Config) voice.STT {
 
 func buildTTSEngine(cfg *config.Config) voice.TTS {
 	switch cfg.TTSEngine {
+	case "kokoro":
+		if _, err := os.Stat(cfg.KokoroDaemon); err != nil {
+			logging.Log("VOICE", logging.SevWarn, "TTS", "Kokoro daemon missing; TTS disabled", "script", cfg.KokoroDaemon)
+			return nil
+		}
+		if _, err := os.Stat(cfg.KokoroModel); err != nil {
+			logging.Log("VOICE", logging.SevWarn, "TTS", "Kokoro model missing; TTS disabled", "model", cfg.KokoroModel)
+			return nil
+		}
+		if _, err := os.Stat(cfg.KokoroVoices); err != nil {
+			logging.Log("VOICE", logging.SevWarn, "TTS", "Kokoro voices missing; TTS disabled", "voices", cfg.KokoroVoices)
+			return nil
+		}
+		logging.Log("VOICE", logging.SevInfo, "TTS", "Kokoro ready", "daemon", cfg.KokoroDaemon, "voice", cfg.KokoroVoice)
+		return voice.NewKokoro(cfg.KokoroDaemon, cfg.KokoroModel, cfg.KokoroVoices, cfg.KokoroVoice)
 	case "piper":
 		if _, err := os.Stat(cfg.PiperDaemon); err != nil {
 			logging.Log("VOICE", logging.SevWarn, "TTS", "Piper daemon missing; TTS disabled", "script", cfg.PiperDaemon)

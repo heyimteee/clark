@@ -22,6 +22,10 @@ func loadFromEnv(t *testing.T, env map[string]string) (*Config, error) {
 	_ = os.Unsetenv("TTS_VOICE")
 	_ = os.Unsetenv("PIPER_DAEMON")
 	_ = os.Unsetenv("PIPER_VOICE")
+	_ = os.Unsetenv("KOKORO_DAEMON")
+	_ = os.Unsetenv("KOKORO_MODEL")
+	_ = os.Unsetenv("KOKORO_VOICES")
+	_ = os.Unsetenv("KOKORO_VOICE")
 	_ = os.Unsetenv("AFFIRMATIONS_DIR")
 	_ = os.Unsetenv("CLARK_DB")
 	_ = os.Unsetenv("IMESSAGE_ENABLED")
@@ -58,8 +62,8 @@ func TestLoadWebDisabledDefaults(t *testing.T) {
 	if cfg.WhisperModelDir != "/opt/whisper/model" {
 		t.Errorf("WhisperModelDir = %q, want /opt/whisper/model", cfg.WhisperModelDir)
 	}
-	if cfg.TTSEngine != "piper" {
-		t.Errorf("TTSEngine = %q, want piper", cfg.TTSEngine)
+	if cfg.TTSEngine != "kokoro" {
+		t.Errorf("TTSEngine = %q, want kokoro", cfg.TTSEngine)
 	}
 	if cfg.TTSVoice != "en_US-ryan-high" {
 		t.Errorf("TTSVoice = %q, want en_US-ryan-high", cfg.TTSVoice)
@@ -69,6 +73,18 @@ func TestLoadWebDisabledDefaults(t *testing.T) {
 	}
 	if cfg.PiperVoice != "/opt/piper/voices/en_US-ryan-high.onnx" {
 		t.Errorf("PiperVoice = %q, want /opt/piper/voices/en_US-ryan-high.onnx", cfg.PiperVoice)
+	}
+	if cfg.KokoroDaemon != "/opt/kokoro/daemon.py" {
+		t.Errorf("KokoroDaemon = %q, want /opt/kokoro/daemon.py", cfg.KokoroDaemon)
+	}
+	if cfg.KokoroModel != "/opt/kokoro/model/kokoro-v1.0.int8.onnx" {
+		t.Errorf("KokoroModel = %q, want /opt/kokoro/model/kokoro-v1.0.int8.onnx", cfg.KokoroModel)
+	}
+	if cfg.KokoroVoices != "/opt/kokoro/model/voices-v1.0.bin" {
+		t.Errorf("KokoroVoices = %q, want /opt/kokoro/model/voices-v1.0.bin", cfg.KokoroVoices)
+	}
+	if cfg.KokoroVoice != "am_michael" {
+		t.Errorf("KokoroVoice = %q, want am_michael", cfg.KokoroVoice)
 	}
 	if cfg.AffirmationDir != "/opt/affirmations" {
 		t.Errorf("AffirmationDir = %q, want /opt/affirmations", cfg.AffirmationDir)
@@ -98,6 +114,10 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 		"TTS_VOICE":         "v2/en_US-speaker_1",
 		"PIPER_DAEMON":      "/custom/daemon.py",
 		"PIPER_VOICE":       "/custom/voices/ryan.onnx",
+		"KOKORO_DAEMON":     "/custom/kokoro_daemon.py",
+		"KOKORO_MODEL":      "/custom/kokoro.onnx",
+		"KOKORO_VOICES":     "/custom/voices.bin",
+		"KOKORO_VOICE":      "am_eric",
 		"AFFIRMATIONS_DIR":  "/custom/affirmations",
 	})
 	if err != nil {
@@ -132,6 +152,18 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 	}
 	if cfg.PiperVoice != "/custom/voices/ryan.onnx" {
 		t.Errorf("PiperVoice = %q, want /custom/voices/ryan.onnx", cfg.PiperVoice)
+	}
+	if cfg.KokoroDaemon != "/custom/kokoro_daemon.py" {
+		t.Errorf("KokoroDaemon = %q, want /custom/kokoro_daemon.py", cfg.KokoroDaemon)
+	}
+	if cfg.KokoroModel != "/custom/kokoro.onnx" {
+		t.Errorf("KokoroModel = %q, want /custom/kokoro.onnx", cfg.KokoroModel)
+	}
+	if cfg.KokoroVoices != "/custom/voices.bin" {
+		t.Errorf("KokoroVoices = %q, want /custom/voices.bin", cfg.KokoroVoices)
+	}
+	if cfg.KokoroVoice != "am_eric" {
+		t.Errorf("KokoroVoice = %q, want am_eric", cfg.KokoroVoice)
 	}
 	if cfg.AffirmationDir != "/custom/affirmations" {
 		t.Errorf("AffirmationDir = %q, want /custom/affirmations", cfg.AffirmationDir)

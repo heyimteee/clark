@@ -35,8 +35,8 @@ RUN mkdir -p /opt/piper/voices \
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip \
-    && pip3 install --no-cache-dir --break-system-packages piper-tts faster-whisper \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip espeak-ng \
+    && pip3 install --no-cache-dir --break-system-packages piper-tts faster-whisper kokoro-onnx misaki[en] \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the faster-whisper small model (downloaded from HF at build time):
@@ -44,27 +44,30 @@ RUN apt-get update \
 # still fast on the CPU. Handles long-form speech well.
 RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small', local_dir='/opt/whisper/model')"
 
+# Bake the Kokoro TTS model + all voice vectors (int8, ~88 MB) at build time.
+RUN mkdir -p /opt/kokoro/model \
+    && curl -fsSL -o /opt/kokoro/model/kokoro-v1.0.int8.onnx \
+        https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx \
+    && curl -fsSL -o /opt/kokoro/model/voices-v1.0.bin \
+        https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+
 COPY --from=build /out/clark /usr/local/bin/clark
 COPY --from=piper-download /opt/piper /opt/piper
 COPY docker/whisper_run.py /opt/whisper/run.py
 COPY docker/piper_daemon.py /opt/piper/daemon.py
+COPY docker/kokoro_daemon.py /opt/kokoro/daemon.py
+COPY docker/gen_affirmations.py /opt/kokoro/gen_affirmations.py
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Pre-render the wake-word affirmations and the "Processing, Sir." clip with the
-# final voice, so the browser plays them instantly with zero server latency.
+# default Kokoro voice (am_michael), so the browser plays them instantly with
+# zero server latency.
 RUN mkdir -p /opt/affirmations \
-    && echo "Sir."                 | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/00.wav \
-    && echo "Listening, Sir."      | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/01.wav \
-    && echo "Right here, Sir."     | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/02.wav \
-    && echo "Yes, Sir?"            | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/03.wav \
-    && echo "At your service, Sir." | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/04.wav \
-    && echo "I'm here, Sir."       | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/05.wav \
-    && echo "How can I help, Sir?" | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/06.wav \
-    && echo "Ready when you are, Sir." | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/07.wav \
-    && echo "Standing by, Sir."    | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/08.wav \
-    && echo "Go ahead, Sir."       | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/09.wav \
-    && echo "Processing, Sir."     | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/processing.wav
+    && python3 /opt/kokoro/gen_affirmations.py \
+        /opt/kokoro/model/kokoro-v1.0.int8.onnx \
+        /opt/kokoro/model/voices-v1.0.bin \
+        am_michael /opt/affirmations
 
 # Generate the ambient "AI thinking" idle tone (seamlessly loopable sine).
 COPY docker/gen_idle.py /opt/affirmations/gen_idle.py
@@ -74,6 +77,10 @@ RUN python3 /opt/affirmations/gen_idle.py /opt/affirmations/idle.wav \
 ENV CLARK_DB=/data/clark.db
 ENV PIPER_DAEMON=/opt/piper/daemon.py
 ENV PIPER_VOICE=/opt/piper/voices/en_US-ryan-high.onnx
+ENV KOKORO_DAEMON=/opt/kokoro/daemon.py
+ENV KOKORO_MODEL=/opt/kokoro/model/kokoro-v1.0.int8.onnx
+ENV KOKORO_VOICES=/opt/kokoro/model/voices-v1.0.bin
+ENV KOKORO_VOICE=am_michael
 ENV WHISPER_SCRIPT=/opt/whisper/run.py
 ENV WHISPER_MODEL_DIR=/opt/whisper/model
 ENV AFFIRMATIONS_DIR=/opt/affirmations

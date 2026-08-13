@@ -40,10 +40,14 @@ type Config struct {
 	STTModel        string // STT_MODEL     Ollama model for transcription (default whisper-turbo; STT_ENGINE=ollama only)
 	WhisperScript   string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
 	WhisperModelDir string // WHISPER_MODEL_DIR faster-whisper model dir (default /opt/whisper/model)
-	TTSEngine       string // TTS_ENGINE      "piper" now, "bark" later
+	TTSEngine       string // TTS_ENGINE      "kokoro" (default) or "piper"
 	TTSVoice        string // TTS_VOICE       Piper voice id (default en_US-ryan-high, male)
 	PiperDaemon     string // PIPER_DAEMON    long-lived piper runner (default /opt/piper/daemon.py)
 	PiperVoice      string // PIPER_VOICE     piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
+	KokoroDaemon    string // KOKORO_DAEMON   long-lived kokoro runner (default /opt/kokoro/daemon.py)
+	KokoroModel     string // KOKORO_MODEL    kokoro ONNX model (default /opt/kokoro/model/kokoro-v1.0.int8.onnx)
+	KokoroVoices    string // KOKORO_VOICES   kokoro voice vectors (default /opt/kokoro/model/voices-v1.0.bin)
+	KokoroVoice     string // KOKORO_VOICE    kokoro voice id (default am_michael)
 	AffirmationDir  string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
 }
 
@@ -110,7 +114,7 @@ func Load() (*Config, error) {
 
 	ttsEngine := os.Getenv("TTS_ENGINE")
 	if ttsEngine == "" {
-		ttsEngine = "piper"
+		ttsEngine = "kokoro"
 	}
 
 	ttsVoice := os.Getenv("TTS_VOICE")
@@ -126,6 +130,26 @@ func Load() (*Config, error) {
 	piperVoice := os.Getenv("PIPER_VOICE")
 	if piperVoice == "" {
 		piperVoice = "/opt/piper/voices/" + ttsVoice + ".onnx"
+	}
+
+	kokoroDaemon := os.Getenv("KOKORO_DAEMON")
+	if kokoroDaemon == "" {
+		kokoroDaemon = "/opt/kokoro/daemon.py"
+	}
+
+	kokoroModel := os.Getenv("KOKORO_MODEL")
+	if kokoroModel == "" {
+		kokoroModel = "/opt/kokoro/model/kokoro-v1.0.int8.onnx"
+	}
+
+	kokoroVoices := os.Getenv("KOKORO_VOICES")
+	if kokoroVoices == "" {
+		kokoroVoices = "/opt/kokoro/model/voices-v1.0.bin"
+	}
+
+	kokoroVoice := os.Getenv("KOKORO_VOICE")
+	if kokoroVoice == "" {
+		kokoroVoice = "am_michael"
 	}
 
 	affirmationDir := os.Getenv("AFFIRMATIONS_DIR")
@@ -161,6 +185,10 @@ func Load() (*Config, error) {
 		TTSVoice:        ttsVoice,
 		PiperDaemon:     piperDaemon,
 		PiperVoice:      piperVoice,
+		KokoroDaemon:    kokoroDaemon,
+		KokoroModel:     kokoroModel,
+		KokoroVoices:    kokoroVoices,
+		KokoroVoice:     kokoroVoice,
 		AffirmationDir:  affirmationDir,
 	}, nil
 }
