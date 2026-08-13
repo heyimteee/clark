@@ -61,14 +61,14 @@ func TestLoadWebDisabledDefaults(t *testing.T) {
 	if cfg.TTSEngine != "piper" {
 		t.Errorf("TTSEngine = %q, want piper", cfg.TTSEngine)
 	}
-	if cfg.TTSVoice != "en_US-joe-medium" {
-		t.Errorf("TTSVoice = %q, want en_US-joe-medium", cfg.TTSVoice)
+	if cfg.TTSVoice != "en_US-ryan-high" {
+		t.Errorf("TTSVoice = %q, want en_US-ryan-high", cfg.TTSVoice)
 	}
 	if cfg.PiperDaemon != "/opt/piper/daemon.py" {
 		t.Errorf("PiperDaemon = %q, want /opt/piper/daemon.py", cfg.PiperDaemon)
 	}
-	if cfg.PiperVoice != "/opt/piper/voices/en_US-joe-medium.onnx" {
-		t.Errorf("PiperVoice = %q, want /opt/piper/voices/en_US-joe-medium.onnx", cfg.PiperVoice)
+	if cfg.PiperVoice != "/opt/piper/voices/en_US-ryan-high.onnx" {
+		t.Errorf("PiperVoice = %q, want /opt/piper/voices/en_US-ryan-high.onnx", cfg.PiperVoice)
 	}
 	if cfg.AffirmationDir != "/opt/affirmations" {
 		t.Errorf("AffirmationDir = %q, want /opt/affirmations", cfg.AffirmationDir)

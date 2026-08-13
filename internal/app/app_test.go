@@ -17,7 +17,7 @@ func voiceFixture(t *testing.T) *config.Config {
 	script := filepath.Join(dir, "run.py")
 	modelDir := filepath.Join(dir, "model")
 	piperDaemon := filepath.Join(dir, "daemon.py")
-	piperVoice := filepath.Join(dir, "en_US-joe-medium.onnx")
+	piperVoice := filepath.Join(dir, "en_US-ryan-high.onnx")
 
 	for _, p := range []string{script, piperDaemon, piperVoice} {
 		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
@@ -49,8 +49,8 @@ func TestBuildVoiceEngineFasterWhisperAndPiperReady(t *testing.T) {
 	if engine.TTS == nil {
 		t.Error("TTS = nil, want piper wired when daemon and voice exist")
 	}
-	if engine.TTS.Voice() != "en_US-joe-medium" {
-		t.Errorf("TTS voice = %q, want en_US-joe-medium", engine.TTS.Voice())
+	if engine.TTS.Voice() != "en_US-ryan-high" {
+		t.Errorf("TTS voice = %q, want en_US-ryan-high", engine.TTS.Voice())
 	}
 }
 
