@@ -1105,28 +1105,46 @@
     });
   }
 
-  function speakTTS(text) {
-    if (!text) return;
+  function fetchTTSBuffer(text) {
     ensureAudioCtx();
     return api("/web/api/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: text }),
     }).then(function (d) {
-      if (!d || !d.audio) return;
+      if (!d || !d.audio) return null;
       return fetch("data:audio/wav;base64," + d.audio)
         .then(function (r) { return r.arrayBuffer(); })
-        .then(function (buf) { return audioCtx.decodeAudioData(buf); })
-        .then(function (decoded) {
-          return new Promise(function (resolve) {
-            var src = audioCtx.createBufferSource();
-            src.buffer = decoded;
-            src.connect(audioCtx.destination);
-            src.onended = resolve;
-            src.start();
-          });
-        });
-    }).catch(function () {});
+        .then(function (buf) { return audioCtx.decodeAudioData(buf); });
+    }).catch(function () { return null; });
+  }
+
+  function playBuffer(bufPromise) {
+    return bufPromise.then(function (decoded) {
+      if (!decoded) return;
+      return new Promise(function (resolve) {
+        var src = audioCtx.createBufferSource();
+        src.buffer = decoded;
+        src.connect(audioCtx.destination);
+        src.onended = resolve;
+        src.start();
+      });
+    });
+  }
+
+  function chunkSentences(text) {
+    if (!text) return [];
+    return text.match(/[^.!?]+[.!?]+(?:\s+|$)/g) || [text];
+  }
+
+  function speakTTS(text) {
+    if (!text) return;
+    ensureAudioCtx();
+    var chunks = chunkSentences(text);
+    var buffers = chunks.map(fetchTTSBuffer);
+    return buffers.reduce(function (chain, bufPromise) {
+      return chain.then(function () { return playBuffer(bufPromise); });
+    }, Promise.resolve());
   }
 
   function startRecording() {

@@ -32,9 +32,11 @@ VOICES_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_SRC="$SCRIPT_DIR/../tools/kokoro_mac_server.py"
 
-# Pick a python in kokoro-onnx's supported range (>=3.10, <3.14).
+# Pick a python in kokoro-onnx's supported range (>=3.10, <3.14). Prefer 3.12:
+# kokoro-onnx's spacy->thinc->blis chain has macOS arm64 wheels for 3.12 but
+# not always for 3.13 (Cython build fails there).
 find_python() {
-	for c in python3.13 python3.12 python3.11; do
+	for c in python3.12 python3.11 python3.13; do
 		if command -v "$c" >/dev/null 2>&1; then echo "$c"; return 0; fi
 	done
 	if command -v python3 >/dev/null 2>&1; then
@@ -68,6 +70,14 @@ curl -fsSL -o "$DIR/voices-v1.0.bin" "$VOICES_URL"
 echo "==> Copying server script (stable path, independent of the repo)"
 cp "$SERVER_SRC" "$DIR/kokoro_mac_server.py"
 
+echo "==> Installing daemon wrapper (proper name in macOS notifications)"
+cat > /usr/local/bin/kokoro-tts-daemon <<'WRAPPER'
+#!/bin/bash
+DIR="$HOME/.clark/kokoro"
+exec "$DIR/venv/bin/python" "$DIR/kokoro_mac_server.py" "$@"
+WRAPPER
+chmod +x /usr/local/bin/kokoro-tts-daemon
+
 echo "==> Installing launchd plist"
 mkdir -p "$LOG_DIR"
 cat > "$PLIST" <<PLIST
@@ -79,8 +89,7 @@ cat > "$PLIST" <<PLIST
 	<string>com.clark.kokoro-tts</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>$DIR/venv/bin/python</string>
-		<string>$DIR/kokoro_mac_server.py</string>
+		<string>/usr/local/bin/kokoro-tts-daemon</string>
 		<string>--port</string>
 		<string>$PORT</string>
 		<string>--model</string>
