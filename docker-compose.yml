@@ -32,7 +32,7 @@ services:
       - STT_ENGINE=${STT_ENGINE:-faster-whisper}
       - STT_MODEL=${STT_MODEL:-whisper-turbo}
       - TTS_ENGINE=${TTS_ENGINE:-piper}
-      - TTS_VOICE=${TTS_VOICE:-en_US-ryan-high}
+      - TTS_VOICE=${TTS_VOICE:-en_US-joe-medium}
       # Headless container: no desktop notifications.
       - CLARK_NO_NOTIFY=1
       - TZ=${TZ:-Asia/Jakarta}

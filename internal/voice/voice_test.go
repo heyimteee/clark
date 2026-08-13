@@ -159,7 +159,7 @@ func TestPiperSynthesizeWAVHeader(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-joe-medium.onnx")
 	wav, err := p.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
@@ -215,7 +215,7 @@ func TestPiperCommandArgs(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-joe-medium.onnx")
 	if _, err := p.Synthesize(context.Background(), "hi"); err != nil {
 		t.Fatalf("Synthesize: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestPiperCommandArgs(t *testing.T) {
 	if gotName != "python3" {
 		t.Errorf("interpreter = %q, want python3", gotName)
 	}
-	want := []string{"/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx"}
+	want := []string{"/opt/piper/daemon.py", "/opt/piper/voices/en_US-joe-medium.onnx"}
 	if strings.Join(gotArgs, " ") != strings.Join(want, " ") {
 		t.Errorf("args = %v, want %v", gotArgs, want)
 	}
@@ -241,7 +241,7 @@ func TestPiperStartPreWarms(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-joe-medium.onnx")
 	if err := p.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestPiperSynthesizeErrors(t *testing.T) {
 	execMu.Unlock()
 	defer func() { execCommand = exec.CommandContext }()
 
-	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-joe-medium.onnx")
 	if _, err := p.Synthesize(context.Background(), "hi"); err == nil {
 		t.Error("Synthesize succeeded despite piper exiting 1")
 	}
@@ -277,9 +277,9 @@ func TestPiperSynthesizeErrors(t *testing.T) {
 
 // TestPiperVoiceName strips the .onnx extension for the UI.
 func TestPiperVoiceName(t *testing.T) {
-	p := NewPiper("/bin/piper", filepath.Join("voices", "en_US-ryan-high.onnx"))
-	if got := p.Voice(); got != "en_US-ryan-high" {
-		t.Errorf("Voice() = %q, want en_US-ryan-high", got)
+	p := NewPiper("/bin/piper", filepath.Join("voices", "en_US-joe-medium.onnx"))
+	if got := p.Voice(); got != "en_US-joe-medium" {
+		t.Errorf("Voice() = %q, want en_US-joe-medium", got)
 	}
 }
 

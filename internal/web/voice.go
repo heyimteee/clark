@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -104,7 +105,10 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 		Audio string `json:"audio"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxAudioBytes)
-	if err := decodeBody(w, r, &body); err != nil {
+	// Decode directly here instead of decodeBody: decodeBody wraps the body in
+	// its own 1 MB MaxBytesReader, silently overriding the 25 MB STT cap and
+	// rejecting any clip whose base64 body exceeds ~1 MB (~18 s of audio).
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "audio is too large"})

@@ -74,7 +74,7 @@ func TestVoiceStatusAvailable(t *testing.T) {
 	if out["available"] != true {
 		t.Errorf("available = %v, want true", out["available"])
 	}
-	if out["sttModel"] != "whisper-turbo" || out["ttsEngine"] != "piper" || out["ttsVoice"] != "en_US-ryan-high" {
+	if out["sttModel"] != "whisper-turbo" || out["ttsEngine"] != "piper" || out["ttsVoice"] != "en_US-joe-medium" {
 		t.Errorf("voice status = %v", out)
 	}
 }
@@ -187,6 +187,22 @@ func TestSTTTooLarge(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("stt oversized = %d, want 413", resp.StatusCode)
+	}
+}
+
+// TestSTTBodyOver1MBAccepted is a regression for the bug where decodeBody's
+// internal 1 MB MaxBytesReader silently overrode the 25 MB STT cap, rejecting
+// every clip whose base64 body exceeded ~1 MB (~18 s of audio). A 2 MB body
+// (well over the old 1 MB threshold, well under the 25 MB cap) must succeed.
+func TestSTTBodyOver1MBAccepted(t *testing.T) {
+	ts, tok := testVoiceServer(t, &voice.Engine{STT: &fakeSTT{text: "long clip ok"}, TTS: &fakeTTS{wav: []byte{1}}})
+
+	payload := strings.Repeat("A", 2<<20) // 2 MB of base64
+	resp := postJSONBody(t, ts, "/web/api/stt", tok, `{"audio":"`+payload+`"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("stt >1MB body = %d, want 200 (bug: 1MB cap) body=%s", resp.StatusCode, body)
 	}
 }
 

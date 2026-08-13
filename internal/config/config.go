@@ -41,7 +41,7 @@ type Config struct {
 	WhisperScript   string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
 	WhisperModelDir string // WHISPER_MODEL_DIR faster-whisper model dir (default /opt/whisper/model)
 	TTSEngine       string // TTS_ENGINE      "piper" now, "bark" later
-	TTSVoice        string // TTS_VOICE       Piper voice id (default en_US-ryan-high, male)
+	TTSVoice        string // TTS_VOICE       Piper voice id (default en_US-joe-medium, male)
 	PiperDaemon     string // PIPER_DAEMON    long-lived piper runner (default /opt/piper/daemon.py)
 	PiperVoice      string // PIPER_VOICE     piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
 	AffirmationDir  string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
@@ -115,7 +115,7 @@ func Load() (*Config, error) {
 
 	ttsVoice := os.Getenv("TTS_VOICE")
 	if ttsVoice == "" {
-		ttsVoice = "en_US-ryan-high"
+		ttsVoice = "en_US-joe-medium"
 	}
 
 	piperDaemon := os.Getenv("PIPER_DAEMON")
