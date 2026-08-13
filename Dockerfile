@@ -64,6 +64,11 @@ RUN mkdir -p /opt/affirmations \
     && echo "Go ahead, Sir."       | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/09.wav \
     && echo "Processing, Sir."     | piper -m /opt/piper/voices/en_US-ryan-high.onnx -f /opt/affirmations/processing.wav
 
+# Generate the ambient "AI thinking" idle tone (seamlessly loopable sine).
+COPY docker/gen_idle.py /opt/affirmations/gen_idle.py
+RUN python3 /opt/affirmations/gen_idle.py /opt/affirmations/idle.wav \
+    && rm /opt/affirmations/gen_idle.py
+
 ENV CLARK_DB=/data/clark.db
 ENV PIPER_DAEMON=/opt/piper/daemon.py
 ENV PIPER_VOICE=/opt/piper/voices/en_US-ryan-high.onnx

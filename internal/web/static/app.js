@@ -571,6 +571,24 @@
     if (vips.some(function (v) { return v.jid === cur; })) sel.value = cur;
   }
 
+  /* ---------------- idle sound ---------------- */
+
+  function startIdle() {
+    if (!voiceOn || idleAudio) return;
+    idleAudio = new Audio("/web/affirmations/idle.wav");
+    idleAudio.loop = true;
+    idleAudio.volume = 0.25;
+    idleAudio.play().catch(function () {});
+  }
+
+  function stopIdle() {
+    if (idleAudio) {
+      idleAudio.pause();
+      idleAudio.currentTime = 0;
+      idleAudio = null;
+    }
+  }
+
   /* ---------------- chat (ws) ---------------- */
 
   function connectChat() {
@@ -589,6 +607,7 @@
     let streamBubble = null;
     let streamText = "";
     let streamDone = false;
+    let idleAudio = null;
     ws.onmessage = function (ev) {
       let f;
       try { f = JSON.parse(ev.data); } catch (e) { return; }
@@ -610,6 +629,7 @@
         streamBubble = li.querySelector(".bubble");
         streamText = "";
         streamDone = false;
+        startIdle();
       } else if (f.type === "thinking") {
         if (streamBubble) {
           const det = el(
@@ -641,6 +661,7 @@
       } else if (f.type === "done") {
         streamDone = true;
         chatBusy = false;
+        stopIdle();
         if (streamBubble) {
           const dots = streamBubble.querySelector(".typing-dots");
           if (dots) dots.remove();
@@ -663,6 +684,7 @@
       } else if (f.type === "error") {
         chatBusy = false;
         setTyping(false);
+        stopIdle();
         if (streamBubble) {
           const dots = streamBubble.querySelector(".typing-dots");
           if (dots) dots.remove();
@@ -1243,6 +1265,7 @@
   }, 15000);
 
   window.addEventListener("beforeunload", function () {
+    stopIdle();
     stopWake();
     if (recording && mediaRecorder) { try { mediaRecorder.stop(); } catch (e) {} }
     if (chatWs) chatWs.close();
