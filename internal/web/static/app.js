@@ -573,19 +573,44 @@
 
   /* ---------------- idle sound ---------------- */
 
+  let idleSource = null;
+  let idleBuffer = null;
+
+  function ensureAudioCtx() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  }
+
+  async function loadIdleBuffer() {
+    if (idleBuffer) return idleBuffer;
+    try {
+      ensureAudioCtx();
+      const resp = await fetch("/web/affirmations/idle.wav");
+      const buf = await resp.arrayBuffer();
+      idleBuffer = await audioCtx.decodeAudioData(buf);
+      return idleBuffer;
+    } catch (e) { return null; }
+  }
+
   function startIdle() {
-    if (!voiceOn || idleAudio) return;
-    idleAudio = new Audio("/web/affirmations/idle.wav");
-    idleAudio.loop = true;
-    idleAudio.volume = 0.25;
-    idleAudio.play().catch(function () {});
+    if (!voiceOn || idleSource) return;
+    loadIdleBuffer().then(function (decoded) {
+      if (!decoded || !voiceOn) return;
+      idleSource = audioCtx.createBufferSource();
+      idleSource.buffer = decoded;
+      idleSource.loop = true;
+      idleSource.connect(audioCtx.destination);
+      idleSource.start();
+    });
   }
 
   function stopIdle() {
-    if (idleAudio) {
-      idleAudio.pause();
-      idleAudio.currentTime = 0;
-      idleAudio = null;
+    if (idleSource) {
+      try { idleSource.stop(); } catch (e) {}
+      idleSource.disconnect();
+      idleSource = null;
     }
   }
 
@@ -607,7 +632,6 @@
     let streamBubble = null;
     let streamText = "";
     let streamDone = false;
-    let idleAudio = null;
     ws.onmessage = function (ev) {
       let f;
       try { f = JSON.parse(ev.data); } catch (e) { return; }
@@ -985,7 +1009,9 @@
       return;
     }
     voiceOn = true;
+    ensureAudioCtx();
     setupAnalyser();
+    loadIdleBuffer(); // preload so idle is instant on ack
     startWake();
   }
 
@@ -1072,18 +1098,25 @@
   }
 
   function speakTTS(text) {
+    ensureAudioCtx();
     return api("/web/api/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: text }),
     }).then(function (d) {
-      return new Promise(function (resolve) {
-        if (!d || !d.audio) { resolve(); return; }
-        const a = new Audio("data:audio/wav;base64," + d.audio);
-        a.onended = resolve;
-        a.onerror = resolve;
-        a.play();
-      });
+      if (!d || !d.audio) return;
+      return fetch("data:audio/wav;base64," + d.audio)
+        .then(function (r) { return r.arrayBuffer(); })
+        .then(function (buf) { return audioCtx.decodeAudioData(buf); })
+        .then(function (decoded) {
+          return new Promise(function (resolve) {
+            var src = audioCtx.createBufferSource();
+            src.buffer = decoded;
+            src.connect(audioCtx.destination);
+            src.onended = resolve;
+            src.start();
+          });
+        });
     }).catch(function () {});
   }
 
