@@ -2,6 +2,7 @@ package whatsapp
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
@@ -31,9 +32,15 @@ func (m *WAMessenger) Self() string {
 
 // Send delivers a message to a chat and tracks its ID as an echo.
 func (m *WAMessenger) Send(ctx context.Context, chat, text string) error {
+	if m.client == nil || m.client.Store == nil {
+		return fmt.Errorf("whatsapp client not initialized")
+	}
+	if !m.client.IsConnected() {
+		return fmt.Errorf("whatsapp client is not connected to the server")
+	}
 	to, err := types.ParseJID(chat)
 	if err != nil {
-		logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to send message", "to", chat, "error", err)
+		logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to parse JID", "to", chat, "error", err)
 		return err
 	}
 	text = gateway.PrefixMessage(text)

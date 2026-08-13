@@ -43,6 +43,7 @@ func NewWithEndpoint(apiKey, endpoint string) *Client {
 }
 
 type searchRequest struct {
+	APIKey      string `json:"api_key"`
 	Query       string `json:"query"`
 	MaxResults  int    `json:"max_results"`
 	SearchDepth string `json:"search_depth"`
@@ -62,6 +63,7 @@ func (c *Client) Search(ctx context.Context, query string, maxResults int) ([]Re
 	}
 
 	body, err := json.Marshal(searchRequest{
+		APIKey:      c.apiKey,
 		Query:       query,
 		MaxResults:  maxResults,
 		SearchDepth: "basic",

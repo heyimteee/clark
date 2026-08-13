@@ -703,6 +703,13 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 			out, err := s.tools.Execute(loopCtx, tc.Function.Name, tc.Function.Arguments)
 			if err != nil {
 				out = "Error: " + err.Error()
+				logging.Log("TOOLS", logging.SevWarn, "TRIGGER", "Tool failed", "tool", tc.Function.Name, "error", err.Error())
+			} else {
+				preview := out
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				logging.Log("TOOLS", logging.SevInfo, "TRIGGER", "Tool result", "tool", tc.Function.Name, "result", preview)
 			}
 			ranTools[tc.Function.Name] = true
 			messages = append(messages, ollama.Message{Role: "tool", Content: out})
@@ -717,7 +724,9 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 // (a) the reply merely claims a send/manage action that was not performed,
 // (b) the sender explicitly demands a send/manage action, or (c) a research
 // request was met with a refusal rather than an answer. Claims and demands are
-// only honored for tools the sender may actually invoke.
+// only honored for tools the sender may actually invoke. Questions asking the
+// user for more information are never nudged — the model is allowed to seek
+// clarification.
 func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bool, string) {
 	hasTool := func(names ...string) bool {
 		for _, t := range available {
@@ -728,6 +737,13 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 			}
 		}
 		return false
+	}
+
+	// If the model is asking the user a question (seeking clarification),
+	// never force a tool call — the model is legitimately requesting info.
+	replyLow := strings.ToLower(reply)
+	if isQuestion(replyLow) {
+		return false, ""
 	}
 
 	// A reply that merely claims a message was sent or delivered.
@@ -855,6 +871,25 @@ func isRefusal(s string) bool {
 		"don't have", "do not have", "without context", "insufficient",
 		"unfortunately", "no information", "don't know", "do not know",
 		"not sure", "i am not able", "lack the")
+}
+
+// isQuestion reports whether the reply is asking the user for more information
+// rather than claiming to have performed an action. When the model is seeking
+// clarification (missing tool arguments, etc.), the nudge system must not
+// override the response.
+func isQuestion(reply string) bool {
+	return hasAny(reply,
+		"please provide", "kindly provide", "could you provide",
+		"what is", "what are", "what's", "who is", "who are",
+		"how many", "how much", "which", "where is",
+		"please share", "could you share", "can you share",
+		"awaiting the details", "awaiting your", "awaiting",
+		"i need", "i require", "i am missing",
+		"shall i", "should i", "would you like",
+		"clarify", "elaborate", "could you specify",
+		"number, name, and relation",
+		"number and name", "name and number",
+		"which vip", "which contact")
 }
 
 func (s *Service) hasVIPTarget(userMsg string) bool {
