@@ -45,12 +45,14 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	logging.Log("WEB", logging.SevInfo, "TTS", "Synthesizing", "chars", len(body.Text))
 	wav, err := s.voice.TTS.Synthesize(ctx, body.Text)
 	if err != nil {
 		logging.Log("WEB", logging.SevWarn, "TTS", "Synthesis failed", "error", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "synthesis failed"})
 		return
 	}
+	logging.Log("WEB", logging.SevInfo, "TTS", "Synthesis OK", "bytes", len(wav))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"audio":  base64.StdEncoding.EncodeToString(wav),
 		"format": "audio/wav",
@@ -125,11 +127,13 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
+	logging.Log("WEB", logging.SevInfo, "STT", "Transcribing", "audio_bytes", len(audio))
 	text, err := s.voice.STT.Transcribe(ctx, audio)
 	if err != nil {
 		logging.Log("WEB", logging.SevWarn, "STT", "Transcription failed", "error", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "transcription failed"})
 		return
 	}
+	logging.Log("WEB", logging.SevInfo, "STT", "Transcription OK", "chars", len(text))
 	writeJSON(w, http.StatusOK, map[string]any{"text": text})
 }

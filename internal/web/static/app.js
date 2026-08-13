@@ -588,12 +588,13 @@
     ws.onerror = function () { ws.close(); };
     let streamBubble = null;
     let streamText = "";
+    let streamDone = false;
     ws.onmessage = function (ev) {
       let f;
       try { f = JSON.parse(ev.data); } catch (e) { return; }
       if (f.type === "ack") {
         setTyping(false);
-        // Create the bubble shell + typing animation.
+        // Create the bubble shell with typing dots.
         const who = "clark";
         const meta = who + " \u00b7 " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         const li = el(
@@ -608,8 +609,8 @@
         scrollChat();
         streamBubble = li.querySelector(".bubble");
         streamText = "";
+        streamDone = false;
       } else if (f.type === "thinking") {
-        // Show reasoning in a collapsible section inside the bubble.
         if (streamBubble) {
           const det = el(
             '<details class="thinking-block">' +
@@ -617,18 +618,15 @@
               '<div class="thinking-text">' + renderMarkup(f.text || "") + "</div>" +
             "</details>"
           );
-          // Insert before the typing dots or meta.
           const meta = streamBubble.querySelector(".meta");
           if (meta) streamBubble.insertBefore(det, meta);
           else streamBubble.appendChild(det);
           scrollChat();
         }
-      } else if (f.type === "token") {
-        // Append word-by-word; remove typing animation on first token.
+      } else if (f.type === "token" && !streamDone) {
         if (streamBubble) {
           const dots = streamBubble.querySelector(".typing-dots");
           if (dots) dots.remove();
-          // Add or extend a text node.
           let textNode = streamBubble.querySelector(".stream-text");
           if (!textNode) {
             textNode = el("<span class='stream-text'></span>");
@@ -641,28 +639,27 @@
           scrollChat();
         }
       } else if (f.type === "done") {
+        streamDone = true;
         chatBusy = false;
         if (streamBubble) {
           const dots = streamBubble.querySelector(".typing-dots");
           if (dots) dots.remove();
-          // Replace stream text with rendered markdown.
           const textNode = streamBubble.querySelector(".stream-text");
           if (textNode) textNode.outerHTML = renderMarkup(streamText);
-          // Speak reply if voice is on.
           if (voiceOn && streamText.trim()) speakTTS(streamText.trim());
           refreshAfterTurn();
         }
         streamBubble = null;
         streamText = "";
       } else if (f.type === "reply") {
-        // Legacy fallback.
-        chatBusy = false;
-        setTyping(false);
-        appendChat("clark", f.text || "");
-        if (voiceOn && f.text) speakTTS(f.text);
-        refreshAfterTurn();
-        streamBubble = null;
-        streamText = "";
+        // Fallback: if streaming already populated the bubble, ignore this.
+        // If no bubble exists (streaming skipped/failed), create one.
+        if (!streamBubble && !streamDone) {
+          chatBusy = false;
+          appendChat("clark", f.text || "");
+          if (voiceOn && f.text) speakTTS(f.text);
+          refreshAfterTurn();
+        }
       } else if (f.type === "error") {
         chatBusy = false;
         setTyping(false);
@@ -679,6 +676,7 @@
         }
         streamBubble = null;
         streamText = "";
+        streamDone = false;
       } else if (f.type === "pong") {
         /* keepalive ok */
       }

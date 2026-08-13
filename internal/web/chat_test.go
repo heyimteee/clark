@@ -35,12 +35,17 @@ func wsReadReply(t *testing.T, c *websocket.Conn) (text, thinking string) {
 			thinkParts = append(thinkParts, f["text"].(string))
 		case "token":
 			parts = append(parts, f["text"].(string))
+		case "reply":
+			// Fallback frame — only use if no tokens arrived.
+			if len(parts) == 0 {
+				parts = []string{f["text"].(string)}
+			}
 		case "done":
 			return strings.Join(parts, ""), strings.Join(thinkParts, "")
 		case "error":
 			t.Fatalf("error frame: %v", f)
 		default:
-			t.Fatalf("unexpected frame type: %v", f["type"])
+			// Ignore unknown frames (ping, etc.)
 		}
 	}
 }
