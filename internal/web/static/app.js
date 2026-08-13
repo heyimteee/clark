@@ -1119,32 +1119,80 @@
     }).catch(function () { return null; });
   }
 
-  function playBuffer(bufPromise) {
-    return bufPromise.then(function (decoded) {
-      if (!decoded) return;
-      return new Promise(function (resolve) {
-        var src = audioCtx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(audioCtx.destination);
-        src.onended = resolve;
-        src.start();
-      });
+  function playBuffer(buffer) {
+    if (!buffer) return Promise.resolve();
+    return new Promise(function (resolve) {
+      var src = audioCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(audioCtx.destination);
+      src.onended = resolve;
+      src.start();
     });
   }
 
-  function chunkSentences(text) {
+  // splitSentences splits on sentence-ending punctuation while ignoring
+  // punctuation inside backticked code, [links](urls), and decimals.
+  function splitSentences(text) {
     if (!text) return [];
-    return text.match(/[^.!?]+[.!?]+(?:\s+|$)/g) || [text];
+    var out = [];
+    var buf = "";
+    var inBack = false;
+    var bracketDepth = 0;
+    var inUrl = false;
+    var urlTail = "";
+    for (var i = 0; i < text.length; i++) {
+      var c = text[i];
+      buf += c;
+      if (c === "`") inBack = !inBack;
+      else if (c === "[") bracketDepth++;
+      else if (c === "]") bracketDepth = Math.max(0, bracketDepth - 1);
+      urlTail = (urlTail + c).slice(-4);
+      if (urlTail === "://") inUrl = true;
+      if (inUrl && /\s/.test(c)) inUrl = false;
+      var isEnd = c === "." || c === "!" || c === "?";
+      if (isEnd && !inBack && bracketDepth === 0 && !inUrl) {
+        var prev = i > 0 ? text[i - 1] : "";
+        var next = i < text.length - 1 ? text[i + 1] : "";
+        var decimal = c === "." && /[0-9]/.test(prev) && /[0-9]/.test(next);
+        if (!decimal && (i === text.length - 1 || /\s/.test(next))) {
+          var t = buf.trim();
+          if (t) out.push(t);
+          buf = "";
+        }
+      }
+    }
+    var tail = buf.trim();
+    if (tail) out.push(tail);
+    return out;
   }
 
+  // concatenateBuffers merges decoded sentence buffers into one AudioBuffer in
+  // index order, so playback is strictly sequential with no overlap.
+  function concatenateBuffers(buffers) {
+    var ok = buffers.filter(Boolean);
+    if (!ok.length) return null;
+    var total = 0;
+    for (var i = 0; i < ok.length; i++) total += ok[i].length;
+    var merged = audioCtx.createBuffer(1, total, audioCtx.sampleRate);
+    var target = merged.getChannelData(0);
+    var off = 0;
+    for (var i = 0; i < ok.length; i++) {
+      var ch = ok[i].getChannelData(0);
+      for (var j = 0; j < ch.length; j++) target[off++] = ch[j];
+    }
+    return merged;
+  }
+
+  // speakTTS dispatches every sentence to /tts concurrently (the server daemon
+  // serializes synthesis), then plays them merged in index order as one clip —
+  // no mixed/overlapping sentences, natural pauses at each ".".
   function speakTTS(text) {
     if (!text) return;
     ensureAudioCtx();
-    var chunks = chunkSentences(text);
-    var buffers = chunks.map(fetchTTSBuffer);
-    return buffers.reduce(function (chain, bufPromise) {
-      return chain.then(function () { return playBuffer(bufPromise); });
-    }, Promise.resolve());
+    var chunks = splitSentences(text);
+    return Promise.all(chunks.map(fetchTTSBuffer)).then(function (buffers) {
+      return playBuffer(concatenateBuffers(buffers));
+    });
   }
 
   function startRecording() {

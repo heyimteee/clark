@@ -150,31 +150,47 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 }
 
 // stripForSpeech removes markdown formatting so TTS only receives clean plain
-// text. Mirrors the same patterns used by the iMessage messenger so Piper
-// never reads aloud "asterisk Available asterisk".
+// text. Mirrors the iMessage messenger's patterns but extended and run twice:
+// double-asterisk bold must be stripped before single-asterisk emphasis, and a
+// second pass mops up any leftovers (e.g. "*a * b*") so Piper never reads aloud
+// "asterisk Available asterisk".
 func stripForSpeech(s string) string {
-	for _, re := range speechStripRe {
-		s = re.ReplaceAllString(s, "$1")
+	for pass := 0; pass < 2; pass++ {
+		for _, re := range speechStripRe {
+			s = re.ReplaceAllString(s, "$1")
+		}
 	}
 	return s
 }
 
 // speechStripRe strips block and inline markdown in a deterministic order.
-// Only paired delimiters between word characters are unwrapped so literals
-// like "2*3" or "a * b" pass through untouched.
+// Block constructs first (fences, headings, quotes, bullets), then code spans
+// (double-backtick before single), then emphasis (double before single), then
+// links. Only paired delimiters are unwrapped so literals like "2*3" or
+// "a * b" pass through untouched.
 var speechStripRe = []*regexp.Regexp{
+	// "```code```" → "code"
+	regexp.MustCompile(`(?s)\x60{3}[^\n]*\n?(.*?)\x60{3}`),
 	// "# Title" → "Title"
 	regexp.MustCompile(`(?m)^#{1,6}\s+(.*)$`),
 	// "> quote" → "quote"
 	regexp.MustCompile(`(?m)^>\s?(.*)$`),
+	// "- item" / "+ item" / "* item" bullets → "item"
+	regexp.MustCompile(`(?m)^\s*[-+*]\s+`),
 	// "``code``" → "code"
 	regexp.MustCompile("``([^`]+)``"),
 	// "`code`" → "code"
 	regexp.MustCompile("`([^`]+)`"),
+	// "**bold**" → "bold" (before single asterisk)
+	regexp.MustCompile(`\*\*([^*]+)\*\*`),
+	// "__bold__" → "bold" (before single underscore)
+	regexp.MustCompile(`__([^_]+)__`),
 	// "*bold*" → "bold"
 	regexp.MustCompile(`\*([^*\n]+)\*`),
 	// "_italic_" → "italic"
 	regexp.MustCompile(`_([^_\n]+)_`),
 	// "~strike~" → "strike"
 	regexp.MustCompile(`~([^~\n]+)~`),
+	// "[text](url)" → "text"
+	regexp.MustCompile(`\[([^\]]+)\]\([^)]*\)`),
 }
