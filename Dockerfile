@@ -35,7 +35,7 @@ RUN mkdir -p /opt/piper/voices \
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip espeak-ng \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip espeak-ng curl \
     && pip3 install --no-cache-dir --break-system-packages piper-tts faster-whisper kokoro-onnx misaki[en] \
     && rm -rf /var/lib/apt/lists/*
 
