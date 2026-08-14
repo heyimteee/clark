@@ -77,9 +77,33 @@ func main() {
 	logging.Log("BRIDGE", logging.SevNotice, "START", "iMessage bridge starting",
 		"chat_db", cfg.dbPath, "url", cfg.baseURL)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// The action server (FaceTime call + native banner for silent-mode alerts)
+	// runs independently of chat.db so it keeps working even if the bridge
+	// lacks Full Disk Access or chat.db is temporarily unavailable. This is the
+	// redundancy the Master relies on during meetings/class.
+	errCh := make(chan error, 3)
+	go func() {
+		if err := RunActionServer(ctx, cfg.actionAddr, cfg.token); err != nil {
+			errCh <- err
+		}
+	}()
+
 	db, err := openChatDB(cfg.dbPath)
 	if err != nil {
-		logging.Fatalf("DB", "Cannot open chat.db (needs Full Disk Access): %v", err)
+		logging.Log("BRIDGE", logging.SevErr, "DB", "Cannot open chat.db; watcher/poller disabled (action server still up)", "error", err)
+		select {
+		case <-ctx.Done():
+		case err := <-errCh:
+			if err != nil {
+				stop()
+				logging.Fatalf("BRIDGE", "Bridge stopped: %v", err)
+			}
+		}
+		logging.Log("BRIDGE", logging.SevNotice, "STOP", "iMessage bridge stopped (action server only)")
+		return
 	}
 	defer db.Close()
 
@@ -101,13 +125,9 @@ func main() {
 		logging.Fatalf("CLIENT", "Cannot build bridge client: %v", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	watcher := NewWatcher(db, cfg.statePath, ownHandle, client, cfg.pollInterval)
 	poller := NewPoller(client, NewSender(), cfg.pollInterval)
 
-	errCh := make(chan error, 3)
 	go func() {
 		if err := watcher.Run(ctx); err != nil {
 			errCh <- err
@@ -115,11 +135,6 @@ func main() {
 	}()
 	go func() {
 		if err := poller.Run(ctx); err != nil {
-			errCh <- err
-		}
-	}()
-	go func() {
-		if err := RunActionServer(ctx, cfg.actionAddr, cfg.token); err != nil {
 			errCh <- err
 		}
 	}()
