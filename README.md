@@ -408,6 +408,11 @@ it as unavailable instead of crashing.
 - `GET /web/api/history?scope=global|vip|web&jid=&limit=` → chronological turns.
 - `POST /web/api/stt` (base64 WAV → text), `POST /web/api/tts` and
   `POST /web/api/speech` (base64 / raw WAV), `GET /web/api/voice`.
+- `POST /web/api/notify` (monitoring webhooks; auth = `X-Clark-Alert-Token`,
+  a dedicated `ALERT_TOKEN`, body `{"kind","title","body"}`). Alerts are
+  delivered to WhatsApp, the web console chat, and spoken voice; known kinds
+  use hardcoded templates, unknown kinds get a factual AI summary, and when the
+  model is unavailable a generic What/How/When fallback is used.
 - `GET /web/api/chat` and `GET /web/api/logs` WebSockets (auth = first frame).
 
 The iMessage bridge API (`/inbound`, `/outbound`, `/ack`) is mounted inside the

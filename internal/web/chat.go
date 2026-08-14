@@ -36,6 +36,9 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.hub.add(c)
+	defer s.hub.remove(c)
+
 	for {
 		typ, data, err := c.Read(ctx)
 		if err != nil {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/heyimteee/clark/internal/alert"
 	"github.com/heyimteee/clark/internal/assistant"
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/gateway"
@@ -127,15 +128,27 @@ func (a *App) Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Shared alert service: renders and delivers alerts (bypass command,
+	// monitoring webhooks) to WhatsApp, the web console chat, and spoken voice.
+	// The web console wires its chat broadcast; the WhatsApp messenger wires
+	// delivery when it comes up.
+	alerts := alert.New(a.ast)
+	alerts.SetDesktop(a.notifier().Notify)
+
 	errCh := make(chan error, 2)
 	go func() {
 		errCh <- whatsapp.Run(ctx, whatsapp.Options{
 			DBPath:       a.cfg.DBPath,
 			Butler:       a.ast,
-			Notifier:     a.notifier(),
+			Notifier:     alerts,
 			Tools:        a.ast.Tools(),
 			BypassPhrase: a.cfg.BypassPhrase,
 			NameToJID:    a.ast.LookupJID,
+			MessengerHook: func(msgr *whatsapp.WAMessenger) {
+				alerts.SetWASender(func(ctx context.Context, text string) error {
+					return msgr.SendSelf(ctx, text)
+				})
+			},
 		})
 	}()
 
@@ -143,7 +156,7 @@ func (a *App) Run() error {
 		var bridge http.Handler
 		if a.cfg.IMessageEnabled {
 			msgr := imessage.NewMessenger(a.st, a.cfg.IMessageSelfHandle)
-			handler := gateway.NewHandler("IMESSAGE", msgr, a.ast, a.notifier(), a.cfg.BypassPhrase)
+			handler := gateway.NewHandler("IMESSAGE", msgr, a.ast, alerts, a.cfg.BypassPhrase)
 			imessage.RegisterSendMessageTool(a.ast.Tools(), msgr, a.ast.LookupIMessage)
 			bridge = imessage.NewServer(a.cfg.IMessageBridgeToken, a.cfg.IMessageSelfHandle, a.st, handler).Routes()
 			logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "Bridge routes mounted inside web console", "addr", a.cfg.IMessageListenAddr)
@@ -161,6 +174,7 @@ func (a *App) Run() error {
 		errCh <- web.Run(ctx, web.Options{
 			ListenAddr:     a.cfg.IMessageListenAddr,
 			WebToken:       a.cfg.WebToken,
+			AlertToken:     a.cfg.AlertToken,
 			Butler:         a.ast,
 			Store:          a.st,
 			Voice:          engine,
@@ -168,6 +182,7 @@ func (a *App) Run() error {
 			STTModel:       a.cfg.STTModel,
 			TTSEngine:      a.cfg.TTSEngine,
 			AffirmationDir: a.cfg.AffirmationDir,
+			Alerts:         alerts,
 		})
 	} else if a.cfg.IMessageEnabled {
 		logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "iMessage bridge transport enabled",

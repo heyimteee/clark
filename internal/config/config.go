@@ -36,6 +36,7 @@ type Config struct {
 	// Web console transport. Serves the bento dashboard + chat on :8090.
 	WebEnabled      bool   // WEB_ENABLED   "1"/"true"/"on" to serve the console
 	WebToken        string // WEB_TOKEN     required when WEB_ENABLED
+	AlertToken      string // ALERT_TOKEN   shared secret for monitoring alert webhooks
 	STTEngine       string // STT_ENGINE    "faster-whisper" (default) or "ollama"
 	STTModel        string // STT_MODEL     Ollama model for transcription (default whisper-turbo; STT_ENGINE=ollama only)
 	WhisperScript   string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
@@ -164,6 +165,7 @@ func Load() (*Config, error) {
 
 		WebEnabled:      webEnabled,
 		WebToken:        webToken,
+		AlertToken:      os.Getenv("ALERT_TOKEN"),
 		STTEngine:       sttEngine,
 		STTModel:        sttModel,
 		WhisperScript:   whisperScript,

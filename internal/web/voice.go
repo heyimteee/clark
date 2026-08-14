@@ -149,11 +149,11 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"text": text})
 }
 
-// stripForSpeech removes markdown formatting so TTS only receives clean plain
-// text. Mirrors the iMessage messenger's patterns but extended and run twice:
-// double-asterisk bold must be stripped before single-asterisk emphasis, and a
-// second pass mops up any leftovers (e.g. "*a * b*") so TTS never reads aloud
-// "asterisk Available asterisk".
+// stripForSpeech removes markdown formatting and emoji so TTS only receives
+// clean plain text. Mirrors the iMessage messenger's patterns but extended and
+// run twice: double-asterisk bold must be stripped before single-asterisk
+// emphasis, and a second pass mops up any leftovers (e.g. "*a * b*") so TTS
+// never reads aloud "asterisk Available asterisk".
 func stripForSpeech(s string) string {
 	for pass := 0; pass < 2; pass++ {
 		for _, re := range speechStripRe {
@@ -193,4 +193,9 @@ var speechStripRe = []*regexp.Regexp{
 	regexp.MustCompile(`~([^~\n]+)~`),
 	// "[text](url)" → "text"
 	regexp.MustCompile(`\[([^\]]+)\]\([^)]*\)`),
+	// Emoji + common symbols (🚨, ™, ©, arrows, etc.) → "" so they are never
+	// read aloud by TTS. Keeps the WhatsApp/web rendering untouched; this strip
+	// only feeds the speech engine.
+	regexp.MustCompile(`[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2190}-\x{21FF}\x{2B00}-\x{2BFF}]`),
+	regexp.MustCompile(`[\x{FE0F}\x{200D}]`),
 }

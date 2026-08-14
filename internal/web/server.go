@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/heyimteee/clark/internal/alert"
 	"github.com/heyimteee/clark/internal/assistant"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/store"
@@ -30,6 +31,7 @@ const (
 type Options struct {
 	ListenAddr     string
 	WebToken       string
+	AlertToken     string
 	Butler         *assistant.Service
 	Store          *store.Store
 	Bridge         http.Handler
@@ -38,12 +40,14 @@ type Options struct {
 	TTSEngine      string
 	AffirmationDir string
 	SessionTTL     time.Duration
+	Alerts         *alert.Service
 }
 
 // Server owns the HTTP handlers, sessions, and the voice engine.
 type Server struct {
 	mux          *http.ServeMux
 	webToken     string
+	alertToken   string
 	butler       *assistant.Service
 	store        *store.Store
 	voice        *voice.Engine
@@ -51,8 +55,10 @@ type Server struct {
 	ttsEngine    string
 	affirmations string
 	listen       string
+	alerts       *alert.Service
 
 	sessions *sessionManager
+	hub      *chatHub
 }
 
 // New builds the console server (nothing listens yet; app wires the listener).
@@ -64,6 +70,7 @@ func New(opts Options) *Server {
 	s := &Server{
 		mux:          http.NewServeMux(),
 		webToken:     opts.WebToken,
+		alertToken:   opts.AlertToken,
 		butler:       opts.Butler,
 		store:        opts.Store,
 		voice:        opts.Voice,
@@ -71,7 +78,14 @@ func New(opts Options) *Server {
 		ttsEngine:    opts.TTSEngine,
 		affirmations: opts.AffirmationDir,
 		listen:       opts.ListenAddr,
+		alerts:       opts.Alerts,
 		sessions:     newSessionManager(ttl),
+		hub:          newChatHub(),
+	}
+	if s.alerts != nil {
+		// Wire the console chat broadcast into the shared alert service so any
+		// alert (bypass command, monitoring webhook) reaches the web chat.
+		s.alerts.SetBroadcast(s.broadcastChatAlert)
 	}
 
 	s.mux.HandleFunc("POST /web/api/login", s.handleLogin)
@@ -91,6 +105,8 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("POST /web/api/access", s.requireAuth(s.handleSetAccess))
 	s.mux.HandleFunc("POST /web/api/history/clear", s.requireAuth(s.handleClearHistory))
 	s.mux.HandleFunc("POST /web/api/send", s.requireAuth(s.handleSend))
+
+	s.mux.HandleFunc("POST /web/api/notify", s.handleNotify)
 
 	s.mux.HandleFunc("POST /web/api/tts", s.requireAuth(s.handleTTS))
 	s.mux.HandleFunc("POST /web/api/speech", s.requireAuth(s.handleSpeech))

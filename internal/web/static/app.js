@@ -731,6 +731,15 @@
         streamBubble = null;
         streamText = "";
         streamDone = false;
+      } else if (f.type === "alert") {
+        // Server-initiated alert (bypass command, monitoring webhook). Render
+        // it as a clark message and speak it: auto-toggle voice on, synthesize,
+        // speak, then restore the previous toggle state.
+        if (f.text) {
+          appendChat("clark", f.text);
+          speakAlert(f.text);
+          refreshAfterTurn();
+        }
       } else if (f.type === "pong") {
         /* keepalive ok */
       }
@@ -1213,6 +1222,37 @@
       });
     });
     return chain;
+  }
+
+  // speakAlert speaks a server-initiated alert (bypass command, monitoring
+  // webhook). If voice is currently off, it auto-toggles voice on, synthesizes
+  // and speaks the alert, then restores the previous toggle state. It only
+  // needs the audio context (no mic permission), so alerts are always heard.
+  function speakAlert(text) {
+    if (!text) return;
+    const wasOn = voiceOn;
+    const status = $("#voice-status");
+    if (!wasOn) {
+      ensureAudioCtx();
+      voiceOn = true;
+      const t = $("#voice-toggle");
+      if (t) t.checked = true;
+    }
+    if (status) status.textContent = "speaking\u2026";
+    const restore = function () {
+      if (!wasOn) {
+        voiceOn = false;
+        const t = $("#voice-toggle");
+        if (t) t.checked = false;
+        stopIdle();
+        if (status) status.textContent = "voice off \u2014 flip the toggle";
+      } else if (status) {
+        status.textContent = "say \u201cclark\u201d";
+      }
+    };
+    const p = speakTTS(text);
+    if (p && p.then) p.then(restore, restore);
+    else restore();
   }
 
   function startRecording() {

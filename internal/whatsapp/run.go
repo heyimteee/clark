@@ -26,6 +26,9 @@ type Options struct {
 	BypassPhrase string
 	// NameToJID resolves a VIP name or number to a full jid for send_message.
 	NameToJID func(input string) (string, bool)
+	// MessengerHook is called with the live messenger once it is built, so
+	// other components (e.g. the alert service) can send on clark's behalf.
+	MessengerHook func(*WAMessenger)
 }
 
 // Run connects to WhatsApp, wires the handler, and blocks until ctx is done.
@@ -53,6 +56,9 @@ func Run(ctx context.Context, opts Options) error {
 
 	echo := gateway.NewEchoTracker()
 	msgr := NewMessenger(client, echo)
+	if opts.MessengerHook != nil {
+		opts.MessengerHook(msgr)
+	}
 	if opts.Tools != nil && opts.NameToJID != nil {
 		registerSendMessageTool(opts.Tools, msgr, opts.NameToJID)
 	}

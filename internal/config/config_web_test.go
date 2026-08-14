@@ -14,6 +14,7 @@ func loadFromEnv(t *testing.T, env map[string]string) (*Config, error) {
 	_ = os.Unsetenv("OLLAMA_URL")
 	_ = os.Unsetenv("WEB_ENABLED")
 	_ = os.Unsetenv("WEB_TOKEN")
+	_ = os.Unsetenv("ALERT_TOKEN")
 	_ = os.Unsetenv("STT_ENGINE")
 	_ = os.Unsetenv("STT_MODEL")
 	_ = os.Unsetenv("WHISPER_SCRIPT")
@@ -99,6 +100,7 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 		"OLLAMA_MODEL":      "gemma4:cloud",
 		"WEB_ENABLED":       "1",
 		"WEB_TOKEN":         "s3cret",
+		"ALERT_TOKEN":       "alert-s3cret",
 		"STT_ENGINE":        "ollama",
 		"STT_MODEL":         "whisper-large-v3",
 		"WHISPER_SCRIPT":    "/custom/run.py",
@@ -120,6 +122,9 @@ func TestLoadWebEnabledWithToken(t *testing.T) {
 	}
 	if cfg.WebToken != "s3cret" {
 		t.Errorf("WebToken = %q, want s3cret", cfg.WebToken)
+	}
+	if cfg.AlertToken != "alert-s3cret" {
+		t.Errorf("AlertToken = %q, want alert-s3cret", cfg.AlertToken)
 	}
 	if cfg.STTModel != "whisper-large-v3" {
 		t.Errorf("STTModel = %q, want whisper-large-v3", cfg.STTModel)

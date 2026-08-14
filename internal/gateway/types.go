@@ -24,6 +24,14 @@ type Notifier interface {
 	Notify(title, body string) error
 }
 
+// AlertNotifier is an optional richer notifier that delivers alerts across
+// every channel (WhatsApp, web chat, voice) with a kind tag. Transports whose
+// notifier implements it get kind-aware alert delivery for urgent commands;
+// others fall back to plain Notify.
+type AlertNotifier interface {
+	Alert(ctx context.Context, kind, title, body string)
+}
+
 // CommandFunc runs an urgent command, e.g. "get him to me".
 type CommandFunc func(ctx context.Context, chat, relation string)
 

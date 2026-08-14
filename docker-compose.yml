@@ -27,6 +27,7 @@ services:
       # enabled: the server refuses to start without it (port 443 is public).
       - WEB_ENABLED=${WEB_ENABLED:-1}
       - WEB_TOKEN=${WEB_TOKEN:?set WEB_TOKEN in your .env}
+      - ALERT_TOKEN=${ALERT_TOKEN:-}
       # Speech seam. STT runs faster-whisper (baked into the image); STT_ENGINE=ollama
       # uses the Ollama whisper model instead. TTS runs Kokoro on the Master's
       # Mac (TTS_REMOTE_URL, near-instant on Apple Silicon) with the server-side

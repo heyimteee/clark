@@ -212,9 +212,17 @@ func (d *dispatcher) close() {
 }
 
 func (h *Handler) alert(ctx context.Context, chat, relation string) {
-	if err := h.notifier.Notify("Attention Sir!", relation+" needs you!"); err != nil {
-		logging.Log("CLARK", logging.SevWarn, "NOTIFY", "Notification failed", "error", err)
+	title := "Attention Sir!"
+	body := relation + " needs you!"
+	// Prefer the kind-aware alert notifier (delivers to WhatsApp, web chat, and
+	// voice in one shot); fall back to the legacy two-arg Notify + self-chat.
+	if an, ok := h.notifier.(AlertNotifier); ok && an != nil {
+		an.Alert(ctx, "bypass", title, body)
+	} else {
+		if err := h.notifier.Notify(title, body); err != nil {
+			logging.Log("CLARK", logging.SevWarn, "NOTIFY", "Notification failed", "error", err)
+		}
+		h.msgr.SendSelf(ctx, "🚨 "+title+"\n"+body)
 	}
-	h.msgr.SendSelf(ctx, "🚨 Attention Sir!\n"+relation+" needs you!")
 	h.msgr.Send(ctx, chat, "_One moment._ I've alerted the Master.")
 }

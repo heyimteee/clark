@@ -244,6 +244,8 @@ func TestStripForSpeech(t *testing.T) {
 		{"nested", "Say *bold* and _italic_", "Say bold and italic"},
 		{"mixed bullets bold", "*   **The Bus Tragedy:** Nine died", "The Bus Tragedy: Nine died"},
 		{"no false positives", "2*3 = 6", "2*3 = 6"},
+		{"emoji", "\U0001F6A8 Attention Sir!", " Attention Sir!"},
+		{"emoji inline", "All good \u2705 done", "All good  done"},
 		{"empty", "", ""},
 		{"clean", "No formatting here", "No formatting here"},
 	}
