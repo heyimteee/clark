@@ -12,6 +12,13 @@ if [ -d /opt/affirmations-fallback ] && [ -d /opt/affirmations ] && \
   cp /opt/affirmations-fallback/*.wav /opt/affirmations/
 fi
 
+# The idle tone is a voice-agnostic generated sine, not a speech clip, so it
+# must always exist even after Michael clips replace the speech fallbacks.
+if [ -d /opt/affirmations-fallback ] && [ -d /opt/affirmations ] && \
+   [ ! -f /opt/affirmations/idle.wav ]; then
+  cp /opt/affirmations-fallback/idle.wav /opt/affirmations/
+fi
+
 # Optionally seed a master context from the environment.
 if [ -n "${CLARK_CONTEXT:-}" ]; then
   clark ctx -c "$CLARK_CONTEXT"
