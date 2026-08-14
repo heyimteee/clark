@@ -455,7 +455,7 @@
       toggle.disabled = false;
     }
     const amt = $("#alert-mode-toggle");
-    if (amt) amt.checked = (v.alertMode === "silent");
+    if (amt) amt.checked = (v.alertMode !== "silent"); // ON = voice alerts
     $("#btn-testtts").style.visibility = avail ? "" : "hidden";
   }
 
@@ -1024,18 +1024,19 @@
 
   // onAlertModeToggle persists the alert delivery mode ("voice" = speak alerts
   // aloud; "silent" = show on WhatsApp/iMessage/web, buzz via FaceTime+banner).
+  // The switch reads as: ON = voice alerts, OFF = silent alerts.
   async function onAlertModeToggle() {
-    const silent = $("#alert-mode-toggle").checked;
+    const voice = $("#alert-mode-toggle").checked;
     try {
       await api("/web/api/alert-mode", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: silent ? "silent" : "voice" }),
+        body: JSON.stringify({ mode: voice ? "voice" : "silent" }),
       });
       renderVoiceMeta();
     } catch (e) {
       toast(e.message);
-      $("#alert-mode-toggle").checked = !silent;
+      $("#alert-mode-toggle").checked = !voice;
     }
   }
 
