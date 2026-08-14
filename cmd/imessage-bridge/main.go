@@ -26,6 +26,7 @@ type bridgeConfig struct {
 	token        string
 	rootCA       string
 	pollInterval time.Duration
+	actionAddr   string
 }
 
 func loadBridgeConfig() (bridgeConfig, error) {
@@ -35,12 +36,13 @@ func loadBridgeConfig() (bridgeConfig, error) {
 	}
 
 	cfg := bridgeConfig{
-		dbPath:    firstNonEmpty(os.Getenv("IMESSAGE_DB_PATH"), home+"/Library/Messages/chat.db"),
-		statePath: firstNonEmpty(os.Getenv("IMESSAGE_STATE_PATH"), home+"/Library/Application Support/clark-bridge/state.json"),
-		ownHandle: os.Getenv("IMESSAGE_OWN_HANDLE"),
-		baseURL:   os.Getenv("IMESSAGE_BRIDGE_URL"),
-		token:     os.Getenv("IMESSAGE_BRIDGE_TOKEN"),
-		rootCA:    os.Getenv("IMESSAGE_TLS_ROOTCA"),
+		dbPath:     firstNonEmpty(os.Getenv("IMESSAGE_DB_PATH"), home+"/Library/Messages/chat.db"),
+		statePath:  firstNonEmpty(os.Getenv("IMESSAGE_STATE_PATH"), home+"/Library/Application Support/clark-bridge/state.json"),
+		ownHandle:  os.Getenv("IMESSAGE_OWN_HANDLE"),
+		baseURL:    os.Getenv("IMESSAGE_BRIDGE_URL"),
+		token:      os.Getenv("IMESSAGE_BRIDGE_TOKEN"),
+		rootCA:     os.Getenv("IMESSAGE_TLS_ROOTCA"),
+		actionAddr: firstNonEmpty(os.Getenv("IMESSAGE_ACTION_LISTEN"), ":8791"),
 	}
 
 	interval := time.Second
@@ -105,7 +107,7 @@ func main() {
 	watcher := NewWatcher(db, cfg.statePath, ownHandle, client, cfg.pollInterval)
 	poller := NewPoller(client, NewSender(), cfg.pollInterval)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		if err := watcher.Run(ctx); err != nil {
 			errCh <- err
@@ -113,6 +115,11 @@ func main() {
 	}()
 	go func() {
 		if err := poller.Run(ctx); err != nil {
+			errCh <- err
+		}
+	}()
+	go func() {
+		if err := RunActionServer(ctx, cfg.actionAddr, cfg.token); err != nil {
 			errCh <- err
 		}
 	}()

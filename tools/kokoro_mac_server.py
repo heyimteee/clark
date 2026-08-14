@@ -34,6 +34,14 @@ import numpy as np
 _token = ""
 _kokoro = None
 
+# MLX inference (and misaki's spacy phonemizer) is not safe to run concurrently
+# from multiple handler threads: it intermittently raises "There is no
+# Stream(cpu, 1) in current thread" and returns 500s, which made clark fall
+# back to piper mid-reply (mixing voices). Synthesis is ~10x real-time on the
+# Mac, so serializing it costs ~nothing: the HTTP layer stays concurrent and
+# the SPA already queues playback FIFO.
+_synth_lock = threading.Lock()
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Kokoro/1.0"
@@ -96,14 +104,16 @@ _voice = "am_michael"
 def _synthesize(text, voice):
     import mlx.core as mx
 
-    # Lang code "a" = American English. generate() yields per-segment results;
-    # concatenate them into one clip so the reply plays as a single sound.
-    segments = []
-    for result in _kokoro.generate(text=text, voice=voice, speed=1.0, lang_code="a"):
-        segments.append(result.audio)
-    if not segments:
-        raise RuntimeError("model produced no audio")
-    samples = np.asarray(mx.concatenate(segments))
+    with _synth_lock:
+        # Lang code "a" = American English. generate() yields per-segment
+        # results; concatenate them into one clip so the reply plays as a
+        # single sound.
+        segments = []
+        for result in _kokoro.generate(text=text, voice=voice, speed=1.0, lang_code="a"):
+            segments.append(result.audio)
+        if not segments:
+            raise RuntimeError("model produced no audio")
+        samples = np.asarray(mx.concatenate(segments))
     sample_rate = 24000
 
     pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()

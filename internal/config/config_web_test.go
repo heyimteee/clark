@@ -27,6 +27,8 @@ func loadFromEnv(t *testing.T, env map[string]string) (*Config, error) {
 	_ = os.Unsetenv("PIPER_VOICE")
 	_ = os.Unsetenv("KOKORO_VOICE")
 	_ = os.Unsetenv("AFFIRMATIONS_DIR")
+	_ = os.Unsetenv("MAC_ACTION_URL")
+	_ = os.Unsetenv("MAC_ACTION_TOKEN")
 	_ = os.Unsetenv("CLARK_DB")
 	_ = os.Unsetenv("IMESSAGE_ENABLED")
 	_ = os.Unsetenv("IMESSAGE_LISTEN_ADDR")

@@ -45,15 +45,27 @@ func (m *Messenger) Send(_ context.Context, chat, text string) error {
 	return nil
 }
 
-// SendSelf is intentionally a no-op: alerts (rate limits, the "get him to me"
-// bypass) reach the Master on WhatsApp only, not on iMessage. It keeps the
-// gateway.Messenger contract while never enqueueing an iMessage to the Master.
+// SendSelf delivers a message to the Master's own iMessage handle. Used by
+// alerts (rate limits, the "get him to me" bypass) so they reach the Master on
+// iMessage as well as WhatsApp. Echo-safe: the bridge watcher only selects
+// inbound rows (is_from_me = 0) and the server drops master self-chat inbound,
+// so a self-sent message cannot loop back.
 func (m *Messenger) SendSelf(_ context.Context, text string) error {
 	if m.selfHandle == "" {
 		logging.Log("IMESSAGE", logging.SevErr, "SEND", "Cannot send self iMessage", "reason", "IMESSAGE_SELF_HANDLE not set")
 		return errNoSelfHandle
 	}
-	logging.Log("IMESSAGE", logging.SevInfo, "SEND", "Self iMessage suppressed; alerts are WhatsApp-only", "text", text)
+	handle := toHandle(m.selfHandle)
+	if handle == "" {
+		return errEmptyRecipient
+	}
+	text = gateway.PrefixIMessage(text)
+	text = stripMarkdown(text)
+	if _, err := m.out.EnqueueIMessage(handle, text); err != nil {
+		logging.Log("IMESSAGE", logging.SevErr, "SEND", "Failed to queue self iMessage", "to", handle, "error", err)
+		return err
+	}
+	logging.Log("IMESSAGE", logging.SevInfo, "SEND", "Self iMessage queued", "to", handle)
 	return nil
 }
 

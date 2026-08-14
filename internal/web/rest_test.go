@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -128,6 +129,31 @@ func TestHistoryLimitMutation(t *testing.T) {
 		t.Fatalf("state = %d", code)
 	} else if st, _ := out["state"].(map[string]any); st["historyLimit"] != float64(20) {
 		t.Errorf("historyLimit = %v, want 20", st["historyLimit"])
+	}
+}
+
+func TestAlertModeMutation(t *testing.T) {
+	ts, _, _, _ := newTestServer(t)
+	tok := login(t, ts)
+
+	// Default is voice.
+	if code, out := getJSON(t, ts, "/web/api/state", tok); code != 200 {
+		t.Fatalf("state = %d", code)
+	} else if st, _ := out["state"].(map[string]any); st["alertMode"] != "voice" {
+		t.Errorf("default alertMode = %v, want voice", st["alertMode"])
+	}
+
+	if code, out := postJSON(t, ts, "/web/api/alert-mode", tok, map[string]any{"mode": "silent"}); code != 200 {
+		t.Fatalf("alert-mode = %d, want 200: %v", code, out)
+	}
+	if code, out := getJSON(t, ts, "/web/api/state", tok); code != 200 {
+		t.Fatalf("state = %d", code)
+	} else if st, _ := out["state"].(map[string]any); st["alertMode"] != "silent" {
+		t.Errorf("alertMode = %v, want silent", st["alertMode"])
+	}
+
+	if code, _ := postJSON(t, ts, "/web/api/alert-mode", tok, map[string]any{"mode": "bogus"}); code != http.StatusBadRequest {
+		t.Errorf("invalid mode = %d, want 400", code)
 	}
 }
 

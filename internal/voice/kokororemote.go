@@ -5,11 +5,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/heyimteee/clark/internal/logging"
 )
 
 // KokoroRemote synthesizes speech by POSTing to a remote Kokoro server (the
@@ -90,10 +95,24 @@ func (r *KokoroRemote) Synthesize(ctx context.Context, text string) ([]byte, err
 // FailoverTTS tries the primary engine first and falls back to the backup when
 // the primary is unreachable (e.g. the remote Mac is asleep). Voice() reports
 // the primary's voice.
+//
+// The backup (piper) is treated as a last resort: a single transient failure
+// of the primary must not drag a different voice into a reply, so the backup
+// is only used after failThreshold consecutive primary failures, or when the
+// primary is unreachable at the connection level. Success resets the counter.
 type FailoverTTS struct {
 	primary TTS
 	backup  TTS
+
+	mu             sync.Mutex
+	consecFailures int
 }
+
+// failThreshold is how many consecutive primary failures precede a fallback.
+// With the Mac daemon serialized (no more transient 500s), a real outage shows
+// up as repeated failures almost immediately, while a one-off blip never mixes
+// voices.
+const failThreshold = 2
 
 // NewFailoverTTS wraps two engines with primary-first routing.
 func NewFailoverTTS(primary, backup TTS) *FailoverTTS {
@@ -103,20 +122,58 @@ func NewFailoverTTS(primary, backup TTS) *FailoverTTS {
 // Voice returns the primary engine's voice id.
 func (f *FailoverTTS) Voice() string { return f.primary.Voice() }
 
-// Synthesize tries primary, then backup on failure (reporting the primary's
-// error if the backup also fails, as it is the more actionable one).
+// Synthesize tries primary, then backup once the primary has failed repeatedly.
+// Reports the primary's error if the backup also fails, as it is the more
+// actionable one.
 func (f *FailoverTTS) Synthesize(ctx context.Context, text string) ([]byte, error) {
 	wav, err := f.primary.Synthesize(ctx, text)
 	if err == nil {
+		f.mu.Lock()
+		f.consecFailures = 0
+		f.mu.Unlock()
 		return wav, nil
 	}
+
+	f.mu.Lock()
+	f.consecFailures++
+	n := f.consecFailures
+	f.mu.Unlock()
+
 	if f.backup == nil {
 		return nil, err
 	}
+	// Connection-level unreachable fails fast; treat it as an immediate outage.
+	if isUnreachable(err) {
+		return f.fallback(ctx, text, err)
+	}
+	if n < failThreshold {
+		logging.Log("VOICE", logging.SevWarn, "TTS", "Primary TTS failed; holding for fallback threshold", "consecutive", n)
+		return nil, err
+	}
+	return f.fallback(ctx, text, err)
+}
+
+func (f *FailoverTTS) fallback(ctx context.Context, text string, primaryErr error) ([]byte, error) {
+	logging.Log("VOICE", logging.SevWarn, "TTS", "Primary TTS down; falling back to backup", "error", primaryErr.Error())
 	if wav, berr := f.backup.Synthesize(ctx, text); berr == nil {
 		return wav, nil
 	}
-	return nil, err
+	return nil, primaryErr
+}
+
+// isUnreachable reports whether the primary failed at the connection level
+// (host down, network unreachable) rather than a synthesis error — an
+// immediate outage that should fall back right away.
+func isUnreachable(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "dial tcp") ||
+		strings.Contains(msg, "context deadline exceeded")
 }
 
 // Start pre-warms the local backup daemon (the remote server has no daemon to

@@ -2,14 +2,18 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/heyimteee/clark/internal/alert"
 	"github.com/heyimteee/clark/internal/assistant"
@@ -129,11 +133,28 @@ func (a *App) Run() error {
 	defer stop()
 
 	// Shared alert service: renders and delivers alerts (bypass command,
-	// monitoring webhooks) to WhatsApp, the web console chat, and spoken voice.
-	// The web console wires its chat broadcast; the WhatsApp messenger wires
-	// delivery when it comes up.
+	// monitoring webhooks) to WhatsApp, iMessage, the web console chat, and
+	// spoken voice (voice mode) or FaceTime + macOS banner (silent mode).
+	// The web console wires its chat broadcast; the messengers wire delivery
+	// when they come up; the macOS bridge handles FaceTime/banner actions.
 	alerts := alert.New(a.ast)
 	alerts.SetDesktop(a.notifier().Notify)
+	alerts.SetModeReader(func() string { return a.ast.AlertMode() })
+	alerts.SetFaceTime(func(number string) error {
+		if a.cfg.MacActionURL == "" {
+			return nil
+		}
+		if number == "" {
+			number = macPhoneNumber(a.cfg)
+		}
+		return macAction(a.cfg, map[string]any{"type": "facetime", "number": number})
+	})
+	alerts.SetBanner(func(title, body string) error {
+		if a.cfg.MacActionURL == "" {
+			return nil
+		}
+		return macAction(a.cfg, map[string]any{"type": "banner", "title": title, "body": body})
+	})
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -156,6 +177,9 @@ func (a *App) Run() error {
 		var bridge http.Handler
 		if a.cfg.IMessageEnabled {
 			msgr := imessage.NewMessenger(a.st, a.cfg.IMessageSelfHandle)
+			alerts.SetIMessageSender(func(ctx context.Context, text string) error {
+				return msgr.SendSelf(ctx, text)
+			})
 			handler := gateway.NewHandler("IMESSAGE", msgr, a.ast, alerts, a.cfg.BypassPhrase)
 			imessage.RegisterSendMessageTool(a.ast.Tools(), msgr, a.ast.LookupIMessage)
 			bridge = imessage.NewServer(a.cfg.IMessageBridgeToken, a.cfg.IMessageSelfHandle, a.st, handler).Routes()
@@ -273,6 +297,55 @@ func buildPiper(cfg *config.Config) voice.TTS {
 
 // notifier picks the desktop notifier, or a silent no-op in headless
 // environments (CLARK_NO_NOTIFY=1).
+// macPhoneNumber resolves the Master's phone number for a FaceTime call:
+// the iMessage self handle (e.g. +628117705636) is the Master's own number.
+func macPhoneNumber(cfg *config.Config) string {
+	h := cfg.IMessageSelfHandle
+	if h == "" {
+		return ""
+	}
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, h)
+	if digits == "" {
+		return ""
+	}
+	return "+" + digits
+}
+
+// macAction POSTs an action to the macOS bridge so it can run a FaceTime call
+// or show a native banner (things only the Mac's GUI session can do).
+func macAction(cfg *config.Config, payload map[string]any) error {
+	if cfg.MacActionURL == "" {
+		return nil
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(cfg.MacActionURL, "/")+"/action", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.MacActionToken != "" {
+		req.Header.Set("X-Clark-Bridge-Token", cfg.MacActionToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("mac bridge action returned %s", resp.Status)
+	}
+	return nil
+}
+
 func (a *App) notifier() gateway.Notifier {
 	if a.cfg.NoNotify {
 		return notify.Silent{}

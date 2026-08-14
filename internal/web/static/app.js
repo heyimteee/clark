@@ -204,6 +204,8 @@
               "</div>" +
               '<div class="toggle-row"><div><div class="t-lbl">voice on</div><div class="t-desc">wake word + hands-free talk</div></div>' +
                 '<label class="switch"><input type="checkbox" id="voice-toggle"><span class="track"></span><span class="knob"></span></label></div>' +
+              '<div class="toggle-row"><div><div class="t-lbl">voice alerts</div><div class="t-desc">speak alerts aloud (voice) \u2014 or stay silent and buzz the phone instead</div></div>' +
+                '<label class="switch"><input type="checkbox" id="alert-mode-toggle"><span class="track"></span><span class="knob"></span></label></div>' +
               '<div class="voice-actions" id="voice-actions">' +
                 '<button class="btn" id="btn-testtts">test voice</button>' +
               "</div>" +
@@ -351,6 +353,7 @@
     $("#vip-picker").addEventListener("change", renderAccess);
     $("#btn-testtts").addEventListener("click", testTTS);
     $("#voice-toggle").addEventListener("change", onVoiceToggle);
+    $("#alert-mode-toggle").addEventListener("change", onAlertModeToggle);
 
     const tabs = document.querySelectorAll(".scope-tabs button");
     tabs.forEach(function (b) {
@@ -451,6 +454,8 @@
       st.textContent = "voice off \u2014 flip the toggle";
       toggle.disabled = false;
     }
+    const amt = $("#alert-mode-toggle");
+    if (amt) amt.checked = (v.alertMode === "silent");
     $("#btn-testtts").style.visibility = avail ? "" : "hidden";
   }
 
@@ -732,12 +737,14 @@
         streamText = "";
         streamDone = false;
       } else if (f.type === "alert") {
-        // Server-initiated alert (bypass command, monitoring webhook). Render
-        // it as a clark message and speak it: auto-toggle voice on, synthesize,
-        // speak, then restore the previous toggle state.
+        // Server-initiated alert (bypass command, monitoring webhook). Always
+        // render it as a clark message and log it to the console. In voice
+        // mode (speak=true) also read it aloud (auto-toggle voice on, speak,
+        // restore); in silent mode keep the console silent.
         if (f.text) {
           appendChat("clark", f.text);
-          speakAlert(f.text);
+          if (f.speak !== false) speakAlert(f.text);
+          else stopIdle();
           refreshAfterTurn();
         }
       } else if (f.type === "pong") {
@@ -1013,6 +1020,23 @@
   async function onVoiceToggle() {
     if ($("#voice-toggle").checked) await armVoice();
     else disarmVoice();
+  }
+
+  // onAlertModeToggle persists the alert delivery mode ("voice" = speak alerts
+  // aloud; "silent" = show on WhatsApp/iMessage/web, buzz via FaceTime+banner).
+  async function onAlertModeToggle() {
+    const silent = $("#alert-mode-toggle").checked;
+    try {
+      await api("/web/api/alert-mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: silent ? "silent" : "voice" }),
+      });
+      renderVoiceMeta();
+    } catch (e) {
+      toast(e.message);
+      $("#alert-mode-toggle").checked = !silent;
+    }
   }
 
   async function armVoice() {

@@ -410,14 +410,21 @@ it as unavailable instead of crashing.
   `POST /web/api/speech` (base64 / raw WAV), `GET /web/api/voice`.
 - `POST /web/api/notify` (monitoring webhooks; auth = `X-Clark-Alert-Token`,
   a dedicated `ALERT_TOKEN`, body `{"kind","title","body"}`). Alerts are
-  delivered to WhatsApp, the web console chat, and spoken voice; known kinds
-  use hardcoded templates, unknown kinds get a factual AI summary, and when the
+  delivered to WhatsApp, iMessage, and the web console chat; known kinds use
+  hardcoded templates, unknown kinds get a factual AI summary, and when the
   model is unavailable a generic What/How/When fallback is used.
+- `POST /web/api/alert-mode` with `{"mode":"voice"|"silent"}` (also a console
+  toggle). Voice mode speaks alerts aloud; silent mode stays quiet and instead
+  triggers a FaceTime call + native macOS banner via the bridge's action
+  endpoint (`MAC_ACTION_URL`). Both modes deliver to WhatsApp/iMessage/web.
 - `GET /web/api/chat` and `GET /web/api/logs` WebSockets (auth = first frame).
 
 The iMessage bridge API (`/inbound`, `/outbound`, `/ack`) is mounted inside the
 same listener, so the existing macOS bridge keeps working unchanged when the web
-console is enabled.
+console is enabled. The bridge also listens on `IMESSAGE_ACTION_LISTEN`
+(default `:8791`) for `POST /action` — `{"type":"facetime","number":...}` opens
+a FaceTime audio call, `{"type":"banner","title","body"}` shows a native macOS
+notification — used by silent-mode alerts.
 
 ## Tools
 

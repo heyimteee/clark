@@ -40,14 +40,15 @@ func newAlertTestServer(t *testing.T) (*httptest.Server, *alert.Service, *alertR
 		Alerts:     svc,
 	})
 	// Re-point the broadcast hook at the recorder so we can observe it.
-	svc.SetBroadcast(func(text string) { rec.web = append(rec.web, text) })
+	svc.SetBroadcast(func(text string, speak bool) { rec.web = append(rec.web, text); rec.speak = append(rec.speak, speak) })
 	ts := newServerFor(t, srv)
 	return ts, svc, rec
 }
 
 type alertRecorder struct {
-	wa  []string
-	web []string
+	wa    []string
+	web   []string
+	speak []bool
 }
 
 // postAlert sends a notify webhook with the alert token header.
@@ -95,6 +96,24 @@ func TestNotifyDeliversToWhatsAppAndWeb(t *testing.T) {
 	}
 	if len(rec.web) != 1 || rec.web[0] != rec.wa[0] {
 		t.Errorf("web broadcast mismatch: %v vs %v", rec.web, rec.wa)
+	}
+	if len(rec.speak) != 1 || !rec.speak[0] {
+		t.Errorf("voice-mode broadcast speak = %v, want true", rec.speak)
+	}
+}
+
+func TestNotifySilentModeShowsButDoesNotSpeak(t *testing.T) {
+	ts, svc, rec := newAlertTestServer(t)
+	svc.SetModeReader(func() string { return "silent" })
+	code, _ := postAlert(t, ts, map[string]any{"kind": "bypass", "title": "Sir", "body": "you are needed"})
+	if code != http.StatusOK {
+		t.Fatalf("notify = %d, want 200", code)
+	}
+	if len(rec.web) != 1 {
+		t.Fatalf("web broadcast = %d, want 1", len(rec.web))
+	}
+	if len(rec.speak) != 1 || rec.speak[0] {
+		t.Errorf("silent-mode broadcast speak = %v, want false", rec.speak)
 	}
 }
 

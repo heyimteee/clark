@@ -61,11 +61,13 @@ func (h *chatHub) broadcast(v any) {
 }
 
 // broadcastChatAlert pushes an alert message to every open web console, where
-// the SPA renders it as a chat bubble and speaks it aloud.
-func (s *Server) broadcastChatAlert(text string) {
+// the SPA renders it as a chat bubble and, when speak is true, reads it aloud.
+// Silent-mode alerts pass speak=false so the console shows the alert without
+// any audio (clark stays quiet during meetings/class).
+func (s *Server) broadcastChatAlert(text string, speak bool) {
 	if text == "" {
 		return
 	}
-	logging.Log("WEB", logging.SevNotice, "ALERT", "Pushing alert to web consoles", "chars", len(text))
-	s.hub.broadcast(map[string]any{"type": "alert", "text": text})
+	logging.Log("WEB", logging.SevNotice, "ALERT", "Pushing alert to web consoles", "chars", len(text), "speak", speak)
+	s.hub.broadcast(map[string]any{"type": "alert", "text": text, "speak": speak})
 }

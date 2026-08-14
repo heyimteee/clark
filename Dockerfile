@@ -55,15 +55,19 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Pre-render the wake-word affirmations and the "Processing, Sir." clip with
 # the piper fallback voice (en_US-ryan-high), so the browser plays them
-# instantly with zero server latency even when the Mac is offline.
-RUN mkdir -p /opt/affirmations \
+# instantly with zero server latency even when the Mac is offline. These land
+# in /opt/affirmations-fallback: the runtime mounts a host volume at
+# /opt/affirmations and the entrypoint seeds it from here on first boot, so
+# Michael clips synced from the Mac take priority and piper is only the
+# last-resort fallback.
+RUN mkdir -p /opt/affirmations-fallback \
     && python3 /opt/piper/gen_affirmations.py \
-        /opt/piper/voices/en_US-ryan-high.onnx /opt/affirmations
+        /opt/piper/voices/en_US-ryan-high.onnx /opt/affirmations-fallback
 
 # Generate the ambient "AI thinking" idle tone (seamlessly loopable sine).
-COPY docker/gen_idle.py /opt/affirmations/gen_idle.py
-RUN python3 /opt/affirmations/gen_idle.py /opt/affirmations/idle.wav \
-    && rm /opt/affirmations/gen_idle.py
+COPY docker/gen_idle.py /opt/affirmations-fallback/gen_idle.py
+RUN python3 /opt/affirmations-fallback/gen_idle.py /opt/affirmations-fallback/idle.wav \
+    && rm /opt/affirmations-fallback/gen_idle.py
 
 ENV CLARK_DB=/data/clark.db
 ENV PIPER_DAEMON=/opt/piper/daemon.py

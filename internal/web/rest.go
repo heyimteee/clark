@@ -22,6 +22,7 @@ func (s *Server) state() map[string]any {
 		"model":        b.Model(),
 		"enabled":      b.Enabled(),
 		"thinking":     b.Thinking(),
+		"alertMode":    b.AlertMode(),
 		"historyLimit": b.HistoryLimit(),
 		"context":      b.Context(),
 		"sttModel":     s.sttModel,
@@ -163,6 +164,25 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.butler.SetThinking(*body.Enabled); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to set thinking"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"state": s.state()})
+}
+
+func (s *Server) handleSetAlertMode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := decodeBody(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	if body.Mode != "voice" && body.Mode != "silent" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "mode must be voice or silent"})
+		return
+	}
+	if err := s.butler.SetAlertMode(body.Mode); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to set alert mode"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"state": s.state()})

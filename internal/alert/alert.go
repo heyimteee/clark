@@ -28,8 +28,12 @@ type Service struct {
 	butler    Butler
 	hardcoded map[string]string
 	sendWA    func(ctx context.Context, text string) error
-	broadcast func(text string)
+	sendIM    func(ctx context.Context, text string) error
+	broadcast func(text string, speak bool)
 	desktop   func(title, body string) error
+	mode      func() string
+	faceTime  func(number string) error
+	banner    func(title, body string) error
 }
 
 // New returns a Service with the default hardcoded alert templates. butler may
@@ -45,12 +49,30 @@ func New(butler Butler) *Service {
 // which reaches the Master's own chat).
 func (s *Service) SetWASender(fn func(ctx context.Context, text string) error) { s.sendWA = fn }
 
-// SetBroadcast wires the web console chat broadcast (the chat hub).
-func (s *Service) SetBroadcast(fn func(text string)) { s.broadcast = fn }
+// SetIMessageSender wires iMessage delivery (the imessage messenger's SendSelf,
+// which enqueues a message for the macOS bridge to deliver).
+func (s *Service) SetIMessageSender(fn func(ctx context.Context, text string) error) { s.sendIM = fn }
+
+// SetBroadcast wires the web console chat broadcast. speak tells the console
+// whether to also read the alert aloud; silent-mode alerts set it false so the
+// console shows the alert without any audio.
+func (s *Service) SetBroadcast(fn func(text string, speak bool)) { s.broadcast = fn }
 
 // SetDesktop wires the desktop notification path (beeep), used in addition to
 // the other channels on the Master's Mac.
 func (s *Service) SetDesktop(fn func(title, body string) error) { s.desktop = fn }
+
+// SetModeReader wires the alert-mode reader ("voice" or "silent"). The web
+// console toggle persists the mode; delivery consults it per alert.
+func (s *Service) SetModeReader(fn func() string) { s.mode = fn }
+
+// SetFaceTime wires the FaceTime-call action (the macOS bridge triggers the
+// call). Used by silent-mode alerts so the Master is physically buzzed.
+func (s *Service) SetFaceTime(fn func(number string) error) { s.faceTime = fn }
+
+// SetBanner wires the native macOS banner action (the macOS bridge shows it).
+// Used by silent-mode alerts as a visible-on-the-Mac fallback to speech.
+func (s *Service) SetBanner(fn func(title, body string) error) { s.banner = fn }
 
 // Notify implements gateway.Notifier. It is the fallback delivery path used by
 // transports that only know the two-argument form; alerts reach the Master on
@@ -66,11 +88,16 @@ func (s *Service) Alert(ctx context.Context, kind, title, body string) {
 	s.Deliver(ctx, kind, title, body)
 }
 
-// Deliver renders the message for kind and pushes it to every wired channel:
-// desktop notification, WhatsApp, and the web console chat (which the browser
-// also speaks aloud). Any channel that is not yet wired (nil hook) is skipped.
+// Deliver renders the message for kind and pushes it to every wired channel.
+// Voice mode: desktop, WhatsApp, iMessage, and web console (spoken aloud).
+// Silent mode: desktop, WhatsApp, iMessage, web console (shown, not spoken),
+// plus a FaceTime call and a native macOS banner so the Master is buzzed even
+// when clark must stay quiet. Any channel that is not yet wired (nil hook) is
+// skipped; the modes share all messaging channels for redundancy.
 func (s *Service) Deliver(ctx context.Context, kind, title, body string) {
 	text := s.render(ctx, kind, title, body)
+	silent := s.silent()
+
 	if s.desktop != nil {
 		if err := s.desktop(title, text); err != nil {
 			logf("ALERT", "desktop notification failed: %v", err)
@@ -81,10 +108,35 @@ func (s *Service) Deliver(ctx context.Context, kind, title, body string) {
 			logf("ALERT", "whatsapp delivery failed: %v", err)
 		}
 	}
-	if s.broadcast != nil {
-		s.broadcast(text)
+	if s.sendIM != nil {
+		if err := s.sendIM(ctx, text); err != nil {
+			logf("ALERT", "imessage delivery failed: %v", err)
+		}
 	}
-	logf("ALERT", "alert delivered", "kind", kind, "title", title)
+	if s.broadcast != nil {
+		s.broadcast(text, !silent)
+	}
+	if silent {
+		if s.faceTime != nil {
+			if err := s.faceTime(""); err != nil {
+				logf("ALERT", "facetime trigger failed: %v", err)
+			}
+		}
+		if s.banner != nil {
+			if err := s.banner(title, text); err != nil {
+				logf("ALERT", "macos banner failed: %v", err)
+			}
+		}
+	}
+	logf("ALERT", "alert delivered", "kind", kind, "title", title, "silent", silent)
+}
+
+// silent reports whether alert mode is "silent" (default "voice").
+func (s *Service) silent() bool {
+	if s.mode == nil {
+		return false
+	}
+	return strings.TrimSpace(strings.ToLower(s.mode())) == "silent"
 }
 
 // render picks the message text for an alert by precedence:

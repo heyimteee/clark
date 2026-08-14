@@ -28,6 +28,9 @@ services:
       - WEB_ENABLED=${WEB_ENABLED:-1}
       - WEB_TOKEN=${WEB_TOKEN:?set WEB_TOKEN in your .env}
       - ALERT_TOKEN=${ALERT_TOKEN:-}
+      - ALERT_MODE=${ALERT_MODE:-voice}
+      - MAC_ACTION_URL=${MAC_ACTION_URL:-}
+      - MAC_ACTION_TOKEN=${MAC_ACTION_TOKEN:-}
       # Speech seam. STT runs faster-whisper (baked into the image); STT_ENGINE=ollama
       # uses the Ollama whisper model instead. TTS runs Kokoro on the Master's
       # Mac (TTS_REMOTE_URL, near-instant on Apple Silicon) with the server-side
@@ -45,6 +48,10 @@ services:
     volumes:
       # Persists the SQLite database (WhatsApp session + settings + history).
       - ./data:/data
+      # Affirmations (wake + "Processing, Sir."). Michael clips synced from the
+      # Mac via scripts/sync-affirmations.sh live here and take priority; the
+      # image bakes piper fallback clips that seed this dir on first boot.
+      - ./affirmations:/opt/affirmations
     # Explicit upstream DNS for clark's outbound lookups (web_search). Docker's
     # embedded resolver cannot forward through Tailscale MagicDNS on its own;
     # these bypass the broken 127.0.0.11 path. Tailscale MagicDNS first (keeps

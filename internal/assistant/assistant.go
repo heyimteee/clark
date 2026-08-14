@@ -107,17 +107,18 @@ type pendingIter struct {
 
 // Service is the assistant's orchestration layer. It satisfies whatsapp.Butler.
 type Service struct {
-	settings store.Settings
-	history  store.HistoryStore
-	access   store.AccessStore
-	vip      *VIP
-	tools    *tools.Registry
-	llm      LLM
-	model    string
-	name     string
-	status   bool
-	context  string
-	think    bool
+	settings  store.Settings
+	history   store.HistoryStore
+	access    store.AccessStore
+	vip       *VIP
+	tools     *tools.Registry
+	llm       LLM
+	model     string
+	name      string
+	status    bool
+	context   string
+	think     bool
+	alertMode string // "voice" (default) or "silent"
 
 	historyLimit int
 
@@ -213,6 +214,12 @@ func (s *Service) load() error {
 	s.context = ctxValue
 	s.status = status
 	s.think = think
+	s.alertMode = "voice"
+	if mode, err := s.settings.Get("alert_mode"); err == nil && mode != "" {
+		if mode == "silent" || mode == "voice" {
+			s.alertMode = mode
+		}
+	}
 	s.historyLimit = historyLimit
 	s.llm.SetThink(think)
 	return nil
@@ -400,6 +407,23 @@ func (s *Service) SetContext(contextInput string) error {
 
 // Thinking reports whether the model reasons before replying.
 func (s *Service) Thinking() bool { return s.think }
+
+// AlertMode reports the alert delivery mode: "voice" (speak alerts aloud) or
+// "silent" (show via WhatsApp/iMessage/web + FaceTime/banner, no speech).
+func (s *Service) AlertMode() string { return s.alertMode }
+
+// SetAlertMode persists and applies the alert delivery mode.
+func (s *Service) SetAlertMode(mode string) error {
+	if mode != "voice" && mode != "silent" {
+		return fmt.Errorf("alert mode must be voice or silent, Sir")
+	}
+	if err := s.settings.Set("alert_mode", mode); err != nil {
+		return err
+	}
+	s.alertMode = mode
+	logging.Log("CLARK", logging.SevInfo, "ALERT", "Alert mode changed", "mode", mode)
+	return nil
+}
 
 // SetThinking enables or disables reasoning mode and persists the choice.
 func (s *Service) SetThinking(on bool) error {

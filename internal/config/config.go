@@ -49,6 +49,8 @@ type Config struct {
 	PiperVoice      string // PIPER_VOICE     piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
 	KokoroVoice     string // KOKORO_VOICE    remote Kokoro voice id (default am_michael)
 	AffirmationDir  string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
+	MacActionURL    string // MAC_ACTION_URL  macOS bridge action endpoint (e.g. http://100.94.240.11:8791)
+	MacActionToken  string // MAC_ACTION_TOKEN shared secret for the macOS bridge action endpoint
 }
 
 // Person is a named person with an optional relation to the Master.
@@ -178,6 +180,8 @@ func Load() (*Config, error) {
 		PiperVoice:      piperVoice,
 		KokoroVoice:     kokoroVoice,
 		AffirmationDir:  affirmationDir,
+		MacActionURL:    os.Getenv("MAC_ACTION_URL"),
+		MacActionToken:  os.Getenv("MAC_ACTION_TOKEN"),
 	}, nil
 }
 

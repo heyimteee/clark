@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -123,5 +124,75 @@ func TestFailoverTTSNoBackup(t *testing.T) {
 
 	if _, err := f.Synthesize(context.Background(), "x"); err == nil {
 		t.Error("Synthesize succeeded without a backup")
+	}
+}
+
+// genericErr is a synthesis-level failure (not connection-level): it should not
+// trigger a fallback until the consecutive-failure threshold is reached.
+var genericErr = fmt.Errorf("synthesis failed: boom")
+
+func TestFailoverTTSTransientFailureNoFallback(t *testing.T) {
+	primary := &stubFailTTS{err: genericErr}
+	backup := &stubFailTTS{text: "b"}
+	f := NewFailoverTTS(primary, backup)
+
+	if _, err := f.Synthesize(context.Background(), "x"); err == nil {
+		t.Fatal("Synthesize succeeded on first failure")
+	}
+	if primary.calls != 1 || backup.calls != 0 {
+		t.Errorf("calls p=%d b=%d, want p=1 b=0 (no fallback on first transient failure)", primary.calls, backup.calls)
+	}
+}
+
+func TestFailoverTTSPersistentFailureFallsBack(t *testing.T) {
+	primary := &stubFailTTS{err: genericErr}
+	backup := &stubFailTTS{text: "b"}
+	f := NewFailoverTTS(primary, backup)
+
+	for i := 0; i < failThreshold; i++ {
+		if _, err := f.Synthesize(context.Background(), "x"); err == nil && i < failThreshold-1 {
+			t.Fatalf("Synthesize %d succeeded, want failure", i+1)
+		}
+	}
+	if backup.calls != 1 {
+		t.Errorf("backup calls = %d, want 1 after %d consecutive failures", backup.calls, failThreshold)
+	}
+}
+
+func TestFailoverTTSSuccessResetsCounter(t *testing.T) {
+	primary := &stubFailTTS{err: genericErr}
+	backup := &stubFailTTS{text: "b"}
+	f := NewFailoverTTS(primary, backup)
+
+	// First failure: no fallback, counter = 1.
+	if _, err := f.Synthesize(context.Background(), "x"); err == nil {
+		t.Fatal("first synthesize should fail")
+	}
+	// Recovery: primary succeeds, resets the counter.
+	primary.err = nil
+	if _, err := f.Synthesize(context.Background(), "x"); err != nil {
+		t.Fatalf("recovered synthesize: %v", err)
+	}
+	// Next failure should again be a transient (counter back to 1).
+	primary.err = genericErr
+	if _, err := f.Synthesize(context.Background(), "x"); err == nil {
+		t.Fatal("post-reset failure should not succeed")
+	}
+	if backup.calls != 0 {
+		t.Errorf("backup calls = %d, want 0 (counter reset after recovery)", backup.calls)
+	}
+}
+
+func TestFailoverTTSTimeoutFallsBackImmediately(t *testing.T) {
+	primary := &stubFailTTS{err: context.DeadlineExceeded}
+	backup := &stubFailTTS{text: "b"}
+	f := NewFailoverTTS(primary, backup)
+
+	wav, err := f.Synthesize(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if string(wav) != "WAVb" {
+		t.Errorf("wav = %q, want backup on timeout", wav)
 	}
 }

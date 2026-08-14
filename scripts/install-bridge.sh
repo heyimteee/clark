@@ -62,6 +62,8 @@ cat > "$PLIST" <<PLIST
 		<string>${IMESSAGE_OWN_HANDLE:-}</string>
 		<key>IMESSAGE_TLS_ROOTCA</key>
 		<string>${IMESSAGE_TLS_ROOTCA:-}</string>
+		<key>IMESSAGE_ACTION_LISTEN</key>
+		<string>${IMESSAGE_ACTION_LISTEN:-:8791}</string>
 	</dict>
 	<key>StandardOutPath</key>
 	<string>$LOG_DIR/clark-bridge.log</string>
