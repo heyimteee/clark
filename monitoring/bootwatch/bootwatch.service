@@ -1,0 +1,14 @@
+[Unit]
+Description=Report boot/reboot to clark
+DefaultDependencies=no
+After=docker.service network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/tristan/monitoring/bootwatch/bootwatch.sh
+TimeoutStartSec=120
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

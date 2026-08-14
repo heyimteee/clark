@@ -1,0 +1,52 @@
+services:
+  netdata:
+    image: netdata/netdata:latest
+    container_name: netdata
+    restart: unless-stopped
+    # Host network so Netdata reads host thermal zones + proc/sys directly and
+    # uses the host resolver (Tailscale MagicDNS) — which works on the host.
+    network_mode: host
+    pid: host
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - netdataconfig:/etc/netdata
+      - netdatalib:/var/lib/netdata
+      - netdatacache:/var/cache/netdata
+      # Our config: webhook notifications -> clark, and 60-day dbengine.
+      - ./netdata/netdata.conf:/etc/netdata/netdata.conf:ro
+      - ./netdata/health_alarm_notify.conf:/etc/netdata/health_alarm_notify.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - /:/host/root:ro,rslave
+    environment:
+      - DO_NOT_TRACK=1
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./uptime-kuma:/app/data
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
+    networks:
+      - npm
+
+networks:
+  npm:
+    external: true
+    name: nginx-proxy-manager_default
+
+volumes:
+  netdataconfig:
+  netdatalib:
+  netdatacache:

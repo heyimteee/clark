@@ -1,0 +1,33 @@
+# Netdata custom notifications -> clark /web/api/notify
+# Mounted as /etc/netdata/health_alarm_notify.conf
+#
+# Copy to the server as monitoring/netdata/health_alarm_notify.conf and replace
+# REPLACE_WITH_ALERT_TOKEN with the server's ALERT_TOKEN value.
+
+SEND_CUSTOM="YES"
+DEFAULT_RECIPIENT_CUSTOM="clark"
+
+custom_sender() {
+    local msg="${host} ${status_message}: ${alarm} ${value_string} ${units}"
+    local kind="generic"
+    case "${alarm}" in
+        *[Tt]emp*|*temperature*) kind="overheat" ;;
+        *[Dd]isk*|*[Ss]pace*) kind="disk_high" ;;
+        *[Rr]am*|*[Mm]em*|*memory*) kind="memory_high" ;;
+        *[Cc][Pp][Uu]*|*[Ll]oad*) kind="cpu_high" ;;
+    esac
+    local httpcode
+    httpcode=$(curl -ksS -o /dev/null -w "%{http_code}" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -H "X-Clark-Alert-Token: REPLACE_WITH_ALERT_TOKEN" \
+        -d "{\"kind\":\"${kind}\",\"title\":\"${status_message}: ${alarm}\",\"body\":\"${msg}\"}" \
+        "https://clark.studio.lab/web/api/notify" 2>/dev/null)
+    if [ "${httpcode}" = "200" ]; then
+        info "sent clark alert ${msg}"
+        sent=$((sent + 1))
+    else
+        error "failed to send clark alert (HTTP ${httpcode})"
+    fi
+    return 0
+}
