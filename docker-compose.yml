@@ -45,6 +45,13 @@ services:
     volumes:
       # Persists the SQLite database (WhatsApp session + settings + history).
       - ./data:/data
+    # Explicit upstream DNS for clark's outbound lookups (web_search). Docker's
+    # embedded resolver cannot forward through Tailscale MagicDNS on its own;
+    # these bypass the broken 127.0.0.11 path. Tailscale MagicDNS first (keeps
+    # tailnet hostnames), Cloudflare as a public fallback.
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
     networks:
       - clark
       - npm
