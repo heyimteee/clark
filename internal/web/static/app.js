@@ -647,7 +647,18 @@
     let streamDone = false;
     let spokenCount = 0;
     let speechGen = 0;
+    let pendingTTSCallback = null;
     ws.onmessage = function (ev) {
+      // Binary frame: TTS audio response
+      if (ev.data instanceof ArrayBuffer) {
+        var data = new Uint8Array(ev.data);
+        if (data.length > 1 && data[0] === 0x04 && pendingTTSCallback) {
+          var wavBytes = ev.data.slice(1);
+          pendingTTSCallback(wavBytes);
+          pendingTTSCallback = null;
+        }
+        return;
+      }
       let f;
       try { f = JSON.parse(ev.data); } catch (e) { return; }
       if (f.type === "ack") {
@@ -1164,6 +1175,31 @@
   }
 
   function fetchTTSBuffer(text) {
+    ensureAudioCtx();
+    // Try binary WebSocket first (faster, no base64 overhead)
+    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+      return new Promise(function (resolve) {
+        pendingTTSCallback = function (wavBytes) {
+          audioCtx.decodeAudioData(wavBytes).then(resolve).catch(function () { resolve(null); });
+        };
+        var enc = new TextEncoder().encode(text);
+        var frame = new Uint8Array(1 + enc.length);
+        frame[0] = 0x03; // TTS request type
+        frame.set(enc, 1);
+        chatWs.send(frame);
+        // Timeout fallback: if no response in 30s, fall back to HTTP
+        setTimeout(function () {
+          if (pendingTTSCallback) {
+            pendingTTSCallback = null;
+            fetchTTSBufferHTTP(text).then(resolve);
+          }
+        }, 30000);
+      });
+    }
+    return fetchTTSBufferHTTP(text);
+  }
+
+  function fetchTTSBufferHTTP(text) {
     ensureAudioCtx();
     return api("/web/api/tts", {
       method: "POST",
