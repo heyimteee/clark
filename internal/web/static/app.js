@@ -17,7 +17,7 @@
   let historyAll = false;
   let historyLoading = false;
   let vipSort = "default";
-  let voiceOn = false;
+  let voiceOn = localStorage.getItem("clark-voiceOn") === "true";
   let recording = false;
   let mediaRecorder = null;
   let audioCtx = null;
@@ -35,6 +35,7 @@
   // is the actively playing BufferSource so it can be cut off mid-word.
   let speechGen = 0;
   let speechSource = null;
+  let spokenCount = 0;
 
   const $ = function (sel, root) {
     return (root || document).querySelector(sel);
@@ -645,8 +646,6 @@
     let streamBubble = null;
     let streamText = "";
     let streamDone = false;
-    let spokenCount = 0;
-    let speechGen = 0;
     ws.onmessage = function (ev) {
       let f;
       try { f = JSON.parse(ev.data); } catch (e) { return; }
@@ -1074,6 +1073,7 @@
       return;
     }
     voiceOn = true;
+    localStorage.setItem("clark-voiceOn", "true");
     ensureAudioCtx();
     setupAnalyser();
     loadIdleBuffer(); // preload so idle is instant on ack
@@ -1082,6 +1082,7 @@
 
   function disarmVoice() {
     voiceOn = false;
+    localStorage.setItem("clark-voiceOn", "false");
     wakeHeld = false;
     stopSpeech();
     stopWake();
@@ -1356,6 +1357,13 @@
 
   async function onRecordingStop() {
     recording = false;
+    // Auto-enable voice when STT is triggered — if you're talking, you want to hear back.
+    if (!voiceOn) {
+      voiceOn = true;
+      localStorage.setItem("clark-voiceOn", "true");
+      const t = $("#voice-toggle");
+      if (t) t.checked = true;
+    }
     const status = $("#voice-status");
     if (status) status.textContent = "Processing, Sir\u2026";
     playClip("processing.wav").catch(function(){});
