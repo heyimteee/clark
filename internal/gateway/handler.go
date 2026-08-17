@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/ollama"
@@ -19,6 +20,11 @@ type Handler struct {
 	notifier  Notifier
 	commands  []command
 	disp      *dispatcher
+
+	// dedup tracks recently processed message IDs to prevent re-delivery
+	// on bridge restarts. Entries are evicted after dedupTTL.
+	dedupMu sync.Mutex
+	dedup   map[string]time.Time
 }
 
 // NewHandler wires the pipeline around its dependencies. component names the
@@ -31,6 +37,7 @@ func NewHandler(component string, msgr Messenger, butler Butler, notifier Notifi
 		butler:    butler,
 		notifier:  notifier,
 		disp:      newDispatcher(component, butler, msgr),
+		dedup:     make(map[string]time.Time),
 	}
 	bypass := strings.TrimSpace(bypassPhrase)
 	if bypass == "" {
@@ -49,6 +56,20 @@ func (h *Handler) Close() {
 
 // Handle runs one inbound message through the pipeline.
 func (h *Handler) Handle(msg Message) {
+	// Deduplication: reject messages with an ID we've already processed
+	// within the last dedupTTL window.
+	if msg.ID != "" {
+		h.dedupMu.Lock()
+		if _, seen := h.dedup[msg.ID]; seen {
+			h.dedupMu.Unlock()
+			logging.Log(h.component, logging.SevInfo, "DEDUP", "Duplicate message dropped", "id", msg.ID)
+			return
+		}
+		h.dedup[msg.ID] = time.Now()
+		h.dedupMu.Unlock()
+		h.evictDedup()
+	}
+
 	relation, isVIP := h.butler.Relation(msg.Sender)
 
 	// The Master's own chat is always trusted (whether clark is enabled or the
@@ -225,4 +246,18 @@ func (h *Handler) alert(ctx context.Context, chat, relation string) {
 		h.msgr.SendSelf(ctx, "🚨 "+title+"\n"+body)
 	}
 	h.msgr.Send(ctx, chat, "_One moment._ I've alerted the Master.")
+}
+
+const dedupTTL = 10 * time.Minute
+
+// evictDedup removes entries older than dedupTTL. Called after each insert.
+func (h *Handler) evictDedup() {
+	h.dedupMu.Lock()
+	defer h.dedupMu.Unlock()
+	cutoff := time.Now().Add(-dedupTTL)
+	for id, t := range h.dedup {
+		if t.Before(cutoff) {
+			delete(h.dedup, id)
+		}
+	}
 }

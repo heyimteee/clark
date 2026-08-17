@@ -4,7 +4,10 @@
 // no transport needs to reimplement the brain contract.
 package gateway
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Butler is the conversational brain the handler replies through.
 type Butler interface {
@@ -52,6 +55,9 @@ type Message struct {
 	Chat string
 	// Text is the message body.
 	Text string
+	// Timestamp is when the message was originally sent (from the transport).
+	// Used for staleness filtering — messages older than a threshold are dropped.
+	Timestamp time.Time
 	// IsSelf reports whether this is the Master's own chat.
 	IsSelf bool
 	// IsGroup reports whether this arrived in a group conversation.

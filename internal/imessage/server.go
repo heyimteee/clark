@@ -4,10 +4,15 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
 )
+
+// maxMessageAge is the staleness threshold — messages older than this are
+// silently dropped to prevent spam after bridge restarts or reconnections.
+const maxMessageAge = 5 * time.Minute
 
 // Server exposes the bridge-facing HTTP API: it accepts inbound messages,
 // serves outbound ones for the bridge to deliver, and receives delivery acks.
@@ -71,6 +76,15 @@ func (s *Server) handleInbound(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	// Staleness guard: reject messages older than maxMessageAge. This prevents
+	// spam when the bridge restarts and re-delivers messages that arrived while
+	// Clark was off. WhatsApp has this via connectedAt; iMessage needs it here.
+	if !in.Timestamp.IsZero() && time.Since(in.Timestamp) > maxMessageAge {
+		logging.Log("IMESSAGE", logging.SevInfo, "INBOUND", "Dropped stale message",
+			"handle", in.Handle, "age", time.Since(in.Timestamp).Round(time.Second))
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	s.gw.Handle(toGateway(in))
 	w.WriteHeader(http.StatusOK)
 }
@@ -130,11 +144,12 @@ func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 func toGateway(in InboundMessage) gateway.Message {
 	sender := canonicalSender(in.Handle)
 	return gateway.Message{
-		ID:      in.ID,
-		Sender:  sender,
-		Chat:    sender,
-		Text:    in.Text,
-		IsSelf:  in.IsSelf,
-		IsGroup: false,
+		ID:        in.ID,
+		Sender:    sender,
+		Chat:      sender,
+		Text:      in.Text,
+		Timestamp: in.Timestamp,
+		IsSelf:    in.IsSelf,
+		IsGroup:   false,
 	}
 }
