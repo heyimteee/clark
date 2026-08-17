@@ -645,6 +645,8 @@
     let streamBubble = null;
     let streamText = "";
     let streamDone = false;
+    let spokenCount = 0;
+    let speechGen = 0;
     ws.onmessage = function (ev) {
       let f;
       try { f = JSON.parse(ev.data); } catch (e) { return; }
@@ -694,6 +696,16 @@
           textNode.textContent += f.text;
           streamText += f.text;
           scrollChat();
+          // Early TTS: speak complete sentences as they arrive
+          if (voiceOn && !streamDone) {
+            var sentences = splitSentences(streamText);
+            if (sentences.length > spokenCount) {
+              for (var si = spokenCount; si < sentences.length; si++) {
+                speakSingleSentence(sentences[si], speechGen);
+              }
+              spokenCount = sentences.length;
+            }
+          }
         }
       } else if (f.type === "done") {
         streamDone = true;
@@ -704,11 +716,17 @@
           if (dots) dots.remove();
           const textNode = streamBubble.querySelector(".stream-text");
           if (textNode) textNode.outerHTML = renderMarkup(streamText);
-          if (voiceOn && streamText.trim()) speakTTS(streamText.trim());
+          // Speak any remaining text not yet spoken
+          if (voiceOn && streamText.trim()) {
+            var remaining = splitSentences(streamText).slice(spokenCount);
+            var tail = remaining.join(" ").trim();
+            if (tail) speakSingleSentence(tail, speechGen);
+          }
           refreshAfterTurn();
         }
         streamBubble = null;
         streamText = "";
+        spokenCount = 0;
       } else if (f.type === "reply") {
         // Fallback: if streaming already populated the bubble, ignore this.
         // If no bubble exists (streaming skipped/failed), create one.
@@ -1219,6 +1237,17 @@
     var tail = buf.trim();
     if (tail) out.push(tail);
     return out;
+  }
+
+  // speakSingleSentence fetches TTS for one sentence and plays it.
+  // gen is the speech generation counter — stale sentences are skipped.
+  function speakSingleSentence(text, gen) {
+    if (!text || !voiceOn) return;
+    ensureAudioCtx();
+    fetchTTSBuffer(text).then(function (buf) {
+      if (gen !== speechGen) return;
+      if (buf) playBuffer(buf);
+    });
   }
 
   // speakTTS dispatches every sentence to /tts concurrently (the server daemon

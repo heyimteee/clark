@@ -95,6 +95,7 @@ func nudgeFor(hint string) string {
 // LLM generates replies from a chat history, optionally with tools.
 type LLM interface {
 	Chat(ctx context.Context, messages []ollama.Message, tools []ollama.Tool) (*ollama.ChatResult, error)
+	ChatStream(ctx context.Context, messages []ollama.Message, tools []ollama.Tool, fn func(token string)) (*ollama.ChatResult, error)
 	SetThink(on bool)
 }
 
@@ -474,6 +475,13 @@ func (s *Service) ReplyLLM(ctx context.Context, senderJID, userMsg string, isSel
 	return s.reply(ctx, senderJID, userMsg, isSelf, false)
 }
 
+// ReplyLLMStream runs the full model pipeline with streaming tokens delivered
+// via onToken as they arrive from Ollama. Tool calls are still executed
+// synchronously between rounds. The final reply is saved to history.
+func (s *Service) ReplyLLMStream(ctx context.Context, senderJID, userMsg string, isSelf bool, onToken func(string)) (string, string, error) {
+	return s.replyStream(ctx, senderJID, userMsg, isSelf, onToken)
+}
+
 // reply implements both entry points. allowFastPath decides whether
 // deterministic commands (views and Master-only mutations) are answered
 // hardcoded; the web session sets it false so the model always runs.
@@ -582,6 +590,159 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 
 	saved, err := s.saveReply(senderJID, reply)
 	return saved, thinking, err
+}
+
+// replyStream is like reply but streams tokens via onToken during the final
+// LLM round. Tool call rounds still use non-streaming Chat().
+func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, isSelf bool, onToken func(string)) (string, string, error) {
+	if senderJID == "" {
+		return "", "", fmt.Errorf("empty sender JID")
+	}
+	_, isVIP := s.vip.Check(senderJID)
+	if !isSelf && !isVIP {
+		return "", "", fmt.Errorf("sender not in VIP list")
+	}
+	if userMsg == "" {
+		return "", "", fmt.Errorf("empty message content")
+	}
+	ctx = tools.WithSender(ctx, senderJID)
+	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
+		return "", "", err
+	}
+	history, err := s.history.RecentMessages(senderJID, s.historyLimit)
+	if err != nil {
+		return "", "", err
+	}
+	if len(history) == 0 {
+		return "", "", fmt.Errorf("no chat history available")
+	}
+
+	if it := s.pendingIteration(senderJID); it != nil {
+		if isContinueMsg(userMsg) {
+			s.clearPending(senderJID)
+			it.messages = append(it.messages, ollama.Message{Role: "user", Content: userMsg})
+			reply, thinking, pending, err := s.runToolLoopStream(ctx, it.messages, userMsg, s.toolsForSender(senderJID, it.isSelf), it.isSelf, onToken)
+			if err != nil {
+				return "", thinking, s.handleModelError(err)
+			}
+			if pending != nil {
+				s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: it.isSelf, messages: pending})
+				reply = iterationLimitMessage
+			}
+			saved, err := s.saveReply(senderJID, reply)
+			return saved, thinking, err
+		}
+		s.clearPending(senderJID)
+	}
+
+	available := s.toolsForSender(senderJID, isSelf)
+	relation, _ := s.vip.Check(senderJID)
+	task := followUpTask
+	if len(history) == 1 {
+		if isSelf {
+			task = masterFirstTurnTask
+		} else {
+			task = s.visitorFirstTurnTask()
+		}
+	}
+	systemPrompt, err := s.renderPrompt(s.name, s.context, statusLabel(s.EnabledFor(senderJID)), relation, describeTools(available), task)
+	if err != nil {
+		return "", "", err
+	}
+	messages := make([]ollama.Message, 0, len(history)+1)
+	messages = append(messages, ollama.Message{Role: "system", Content: systemPrompt})
+	for _, m := range history {
+		messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
+	}
+
+	logging.Log("OLLAMA", logging.SevInfo, "REQUEST", "Generating response (streaming)", "model", s.model)
+	start := time.Now()
+
+	reply, thinking, pending, err := s.runToolLoopStream(ctx, messages, userMsg, available, isSelf, onToken)
+	if err != nil {
+		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
+	}
+
+	logging.Log("OLLAMA", logging.SevInfo, "RESPONSE", "Generation completed (streaming)",
+		"model", s.model,
+		"duration", time.Since(start).Round(time.Millisecond))
+
+	if pending != nil {
+		s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: isSelf, messages: pending})
+		reply = iterationLimitMessage
+	}
+	saved, err := s.saveReply(senderJID, reply)
+	return saved, thinking, err
+}
+
+// runToolLoopStream is like runToolLoop but uses ChatStream for the final
+// round (when no more tool calls are expected) to deliver tokens via onToken.
+func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Message, userMsg string, available []tools.Tool, isSelf bool, onToken func(string)) (string, string, []ollama.Message, error) {
+	if isSelf {
+		ctx = tools.WithMaster(ctx)
+	}
+	loopCtx, cancel := context.WithTimeout(ctx, maxTurnDuration)
+	defer cancel()
+
+	requestTools := toOllamaTools(available)
+	ranTools := make(map[string]bool)
+	nudges := 0
+	var lastThinking string
+	for round := 0; round < maxToolRounds; round++ {
+		// Use streaming on the last possible round (when we expect a final reply).
+		// Tool call rounds use non-streaming since tool calls arrive in the final chunk.
+		isLastRound := round == maxToolRounds-1
+		var result *ollama.ChatResult
+		var err error
+		if isLastRound && onToken != nil {
+			result, err = s.llm.ChatStream(loopCtx, messages, requestTools, onToken)
+		} else {
+			result, err = s.llm.Chat(loopCtx, messages, requestTools)
+		}
+		if err != nil {
+			if loopCtx.Err() == context.DeadlineExceeded {
+				return s.tooSlowMessage(), lastThinking, nil, nil
+			}
+			if round == 0 {
+				return "", lastThinking, nil, err
+			}
+			return "I beg your pardon, Sir, but something interrupted my train of thought. Pray _continue_ and I shall resume my duties at once.", lastThinking, nil, nil
+		}
+		if result.Thinking != "" {
+			lastThinking = result.Thinking
+		}
+		if len(result.ToolCalls) == 0 {
+			needed, hint := s.needsAction(userMsg, result.Content, available)
+			if !needed || hintSatisfied(hint, ranTools) {
+				return result.Content, lastThinking, nil, nil
+			}
+			if nudges >= maxNudges {
+				return couldNotActMessage, lastThinking, nil, nil
+			}
+			nudges++
+			messages = append(messages, ollama.Message{Role: "assistant", Content: result.Content})
+			messages = append(messages, ollama.Message{Role: "system", Content: nudgeFor(hint)})
+			continue
+		}
+		messages = append(messages, ollama.Message{Role: "assistant", Content: result.Content, ToolCalls: result.ToolCalls})
+		for _, tc := range result.ToolCalls {
+			logging.Log("TOOLS", logging.SevInfo, "TRIGGER", "Tool invoked", "tool", tc.Function.Name, "args", compactArgs(tc.Function.Arguments))
+			out, err := s.tools.Execute(loopCtx, tc.Function.Name, tc.Function.Arguments)
+			if err != nil {
+				out = "Error: " + err.Error()
+				logging.Log("TOOLS", logging.SevWarn, "TRIGGER", "Tool failed", "tool", tc.Function.Name, "error", err.Error())
+			} else {
+				preview := out
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				logging.Log("TOOLS", logging.SevInfo, "TRIGGER", "Tool result", "tool", tc.Function.Name, "result", preview)
+			}
+			ranTools[tc.Function.Name] = true
+			messages = append(messages, ollama.Message{Role: "tool", Content: out})
+		}
+	}
+	return "", lastThinking, messages, nil
 }
 
 // saveReply persists an assistant reply and returns it.

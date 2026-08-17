@@ -86,6 +86,7 @@ type chatResponse struct {
 		Thinking  string     `json:"thinking"`
 		ToolCalls []ToolCall `json:"tool_calls"`
 	} `json:"message"`
+	Done bool `json:"done"`
 }
 
 // ErrRateLimited marks a model reply refused because the server is throttling
@@ -143,5 +144,85 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (*C
 		Content:   chatResp.Message.Content,
 		Thinking:  chatResp.Message.Thinking,
 		ToolCalls: chatResp.Message.ToolCalls,
+	}, nil
+}
+
+// ChatStream sends the messages and streams tokens back via fn as they arrive.
+// Tool calls are buffered until the stream completes (Ollama sends them in the
+// final chunk). Returns the full assembled reply and tool calls.
+func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Tool, fn func(token string)) (*ChatResult, error) {
+	reqBody, err := json.Marshal(chatRequest{
+		Model:    c.model,
+		Messages: messages,
+		Tools:    tools,
+		Stream:   true,
+		Think:    c.think,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode request: %w", err)
+	}
+
+	url := c.baseURL + "/api/chat"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach Ollama at %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("%w: %s", ErrRateLimited, strings.TrimSpace(string(body)))
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	// Read NDJSON stream line-by-line.
+	decoder := json.NewDecoder(resp.Body)
+	var (
+		content   string
+		thinking  string
+		toolCalls []ToolCall
+	)
+	for {
+		var chunk chatResponse
+		if err := decoder.Decode(&chunk); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("failed to decode stream chunk: %w", err)
+		}
+		if chunk.Message.Content != "" {
+			content += chunk.Message.Content
+			if fn != nil {
+				fn(chunk.Message.Content)
+			}
+		}
+		if chunk.Message.Thinking != "" {
+			thinking += chunk.Message.Thinking
+		}
+		if len(chunk.Message.ToolCalls) > 0 {
+			toolCalls = append(toolCalls, chunk.Message.ToolCalls...)
+		}
+		if chunk.Done {
+			break
+		}
+	}
+
+	if content == "" && len(toolCalls) == 0 {
+		return nil, fmt.Errorf("empty response from model")
+	}
+
+	return &ChatResult{
+		Content:   content,
+		Thinking:  thinking,
+		ToolCalls: toolCalls,
 	}, nil
 }

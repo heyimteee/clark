@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -89,9 +88,8 @@ func (s *Server) chatAuth(ctx context.Context, c *websocket.Conn) bool {
 }
 
 // handleChatTurn runs one full-AI turn for the web session and streams the
-// outcome back. Thinking is sent first, then word-by-word tokens, then a
-// legacy "reply" frame with the full text as a fallback in case streaming
-// frames are lost in transit.  A final "done" frame signals completion.
+// outcome back. Tokens are delivered in real-time from Ollama via streaming.
+// A final "done" frame signals completion.
 func (s *Server) handleChatTurn(ctx context.Context, c *websocket.Conn, frame chatFrame) {
 	if frame.Text == "" {
 		s.writeFrame(ctx, c, map[string]any{"type": "error", "message": "empty message"})
@@ -101,7 +99,9 @@ func (s *Server) handleChatTurn(ctx context.Context, c *websocket.Conn, frame ch
 	turnCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	reply, thinking, err := s.butler.ReplyLLM(turnCtx, webJID, frame.Text, true)
+	reply, thinking, err := s.butler.ReplyLLMStream(turnCtx, webJID, frame.Text, true, func(token string) {
+		s.writeFrame(ctx, c, map[string]any{"type": "token", "text": token})
+	})
 	if err != nil {
 		if errors.Is(err, ollama.ErrRateLimited) {
 			s.writeFrame(ctx, c, map[string]any{"type": "error", "message": "I'm a bit swamped. Try again in a minute or two."})
@@ -112,31 +112,11 @@ func (s *Server) handleChatTurn(ctx context.Context, c *websocket.Conn, frame ch
 		return
 	}
 
-	// Stream reasoning if thinking mode produced output.
 	if thinking != "" {
 		s.writeFrame(ctx, c, map[string]any{"type": "thinking", "text": thinking})
 	}
 
-	// Stream word-by-word tokens for a natural typing feel.
-	words := strings.Fields(reply)
-	for i, word := range words {
-		if i > 0 {
-			time.Sleep(25 * time.Millisecond)
-		}
-		token := word
-		if i < len(words)-1 {
-			token += " "
-		}
-		s.writeFrame(ctx, c, map[string]any{"type": "token", "text": token})
-	}
-
-	// Send the full text as a "reply" frame too — a robust fallback in
-	// case streaming frames were lost in transit (browser WS quirks,
-	// proxy buffering, etc.). The client treats "reply" as a second path:
-	// if the streaming bubble already has content the reply is ignored.
 	s.writeFrame(ctx, c, map[string]any{"type": "reply", "text": reply})
-
-	// Done frame signals the streaming cycle is complete.
 	s.writeFrame(ctx, c, map[string]any{"type": "done"})
 }
 

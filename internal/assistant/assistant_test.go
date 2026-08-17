@@ -224,6 +224,19 @@ func (f *fakeLLM) Chat(_ context.Context, messages []ollama.Message, tools []oll
 	return r, nil
 }
 
+func (f *fakeLLM) ChatStream(ctx context.Context, messages []ollama.Message, tools []ollama.Tool, fn func(string)) (*ollama.ChatResult, error) {
+	result, err := f.Chat(ctx, messages, tools)
+	if err != nil {
+		return nil, err
+	}
+	if fn != nil && result.Content != "" {
+		for _, word := range strings.Fields(result.Content) {
+			fn(word + " ")
+		}
+	}
+	return result, nil
+}
+
 func newService(t *testing.T) (*Service, *store.Store, *fakeLLM) {
 	t.Helper()
 	st, err := store.Open(":memory:")

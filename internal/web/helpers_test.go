@@ -39,6 +39,19 @@ func (s *stubLLM) Chat(_ context.Context, messages []ollama.Message, tools []oll
 	return &ollama.ChatResult{Content: "Indubitably."}, nil
 }
 
+func (s *stubLLM) ChatStream(ctx context.Context, messages []ollama.Message, tools []ollama.Tool, fn func(string)) (*ollama.ChatResult, error) {
+	result, err := s.Chat(ctx, messages, tools)
+	if err != nil {
+		return nil, err
+	}
+	if fn != nil && result.Content != "" {
+		for _, word := range strings.Fields(result.Content) {
+			fn(word + " ")
+		}
+	}
+	return result, nil
+}
+
 func testStore(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(":memory:")
