@@ -51,6 +51,7 @@ type Config struct {
 	AffirmationDir  string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
 	MacActionURL    string // MAC_ACTION_URL  macOS bridge action endpoint (e.g. http://100.94.240.11:8791)
 	MacActionToken  string // MAC_ACTION_TOKEN shared secret for the macOS bridge action endpoint
+	StartStatus     bool   // CLARK_START_STATUS force status on startup (default false = OFF)
 }
 
 // Person is a named person with an optional relation to the Master.
@@ -182,6 +183,7 @@ func Load() (*Config, error) {
 		AffirmationDir:  affirmationDir,
 		MacActionURL:    os.Getenv("MAC_ACTION_URL"),
 		MacActionToken:  os.Getenv("MAC_ACTION_TOKEN"),
+		StartStatus:     envOn(os.Getenv("CLARK_START_STATUS")),
 	}, nil
 }
 

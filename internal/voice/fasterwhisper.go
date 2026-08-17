@@ -99,7 +99,8 @@ func (w *FasterWhisper) startLocked(ctx context.Context) error {
 }
 
 // Transcribe pipes the WAV audio into the daemon on stdin and returns the
-// transcript read from stdout.
+// transcript read from stdout. If the write fails (daemon crashed), the daemon
+// is restarted and the write is retried once.
 func (w *FasterWhisper) Transcribe(ctx context.Context, audioWAV []byte) (string, error) {
 	if len(audioWAV) == 0 {
 		return "", fmt.Errorf("empty audio")
@@ -116,8 +117,15 @@ func (w *FasterWhisper) Transcribe(ctx context.Context, audioWAV []byte) (string
 
 	// Write framed audio to daemon stdin.
 	if _, err := w.d.stdin.Write(sttFrameBytes(audioWAV)); err != nil {
+		// Daemon died — restart and retry once.
 		w.d = nil
-		return "", fmt.Errorf("faster-whisper daemon write: %w", err)
+		if err := w.startLocked(ctx); err != nil {
+			return "", fmt.Errorf("faster-whisper daemon restart: %w", err)
+		}
+		if _, err := w.d.stdin.Write(sttFrameBytes(audioWAV)); err != nil {
+			w.d = nil
+			return "", fmt.Errorf("faster-whisper daemon write: %w", err)
+		}
 	}
 
 	// Read framed transcript from daemon stdout.

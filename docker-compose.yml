@@ -27,6 +27,7 @@ services:
       # enabled: the server refuses to start without it (port 443 is public).
       - WEB_ENABLED=${WEB_ENABLED:-1}
       - WEB_TOKEN=${WEB_TOKEN:?set WEB_TOKEN in your .env}
+      - CLARK_START_STATUS=${CLARK_START_STATUS:-}
       - ALERT_TOKEN=${ALERT_TOKEN:-}
       - ALERT_MODE=${ALERT_MODE:-voice}
       - MAC_ACTION_URL=${MAC_ACTION_URL:-}

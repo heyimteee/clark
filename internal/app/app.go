@@ -121,6 +121,11 @@ func (a *App) Run() error {
 	if !available {
 		return fmt.Errorf("No assistant is initiated Sir. Do 'clark init' first.")
 	}
+	// Force status on startup if CLARK_START_STATUS is set. This ensures
+	// Clark always starts in a known state after deploys/restarts.
+	if err := a.ast.SetStatus(a.cfg.StartStatus); err != nil {
+		logging.Log("CLARK", logging.SevWarn, "STATUS", "Failed to apply start status", "error", err)
+	}
 	if a.ast.Context() == "" {
 		return fmt.Errorf("No context yet Sir. Do 'clark ctx -c [context]' first.")
 	}

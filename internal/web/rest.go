@@ -154,6 +154,17 @@ func (s *Server) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"state": s.state()})
 }
 
+// handleKill is a no-body emergency endpoint that instantly silences Clark.
+// POST /web/api/kill with auth — one tap from a phone Shortcut or curl.
+func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
+	if err := s.butler.SetStatus(false); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to kill"})
+		return
+	}
+	logging.Log("WEB", logging.SevWarn, "KILL", "Emergency kill switch activated")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "Clark silenced"})
+}
+
 func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled *bool `json:"enabled"`

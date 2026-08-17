@@ -95,6 +95,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("GET /web/api/voice", s.requireAuth(s.handleVoiceStatus))
 
 	s.mux.HandleFunc("POST /web/api/status", s.requireAuth(s.handleSetStatus))
+	s.mux.HandleFunc("POST /web/api/kill", s.requireAuth(s.handleKill))
 	s.mux.HandleFunc("POST /web/api/thinking", s.requireAuth(s.handleSetThinking))
 	s.mux.HandleFunc("POST /web/api/alert-mode", s.requireAuth(s.handleSetAlertMode))
 	s.mux.HandleFunc("POST /web/api/history-limit", s.requireAuth(s.handleSetHistoryLimit))
