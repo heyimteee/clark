@@ -313,11 +313,11 @@ needed if your reverse proxy uses a certificate Clark doesn't trust), and
   the iMessage service, then acks. A failed delivery is never re-served (no
   double-sends); stale picked messages show up in the host logs.
 
-### Kokoro TTS server (optional, Mac)
+### Kokoro TTS server (Mac, primary voice)
 
-Clark can offload text-to-speech synthesis to a Mac (near-instant on Apple
-Silicon via onnxruntime CoreML) instead of the server's CPU. The Mac runs a
-tiny HTTP server and clark calls it over Tailscale.
+Clark offloads text-to-speech synthesis to a Mac via Tailscale. The Mac runs a
+tiny HTTP server using MLX Kokoro (8-bit, Apple Silicon native) — ~5× faster
+than onnxruntime/CoreML. Michael (am_michael) is the default voice.
 
 ```sh
 # On the Mac (from this repo):
@@ -359,7 +359,40 @@ sleeps when the lid closes, and clark then speaks via the Piper fallback above.
 For a lid-close override that also works on battery, run once as admin:
 `sudo pmset -a disablesleep 1`.
 
-## Web console (v4)
+## Alerts
+
+Clark can deliver urgent alerts across multiple channels with two delivery modes:
+
+- **Voice mode** — alerts are spoken aloud via the TTS engine, plus delivered to
+  WhatsApp, iMessage, and the web console.
+- **Silent mode** — no speech. Instead, triggers a FaceTime audio call and a
+  native macOS banner via the bridge's action endpoint, plus WhatsApp/iMessage/web.
+
+Toggle via the web console or `POST /web/api/alert-mode` with `{"mode":"voice"|"silent"}`.
+
+Alert triggers:
+- Bypass command ("get him to me") from any channel
+- Netdata webhooks (CPU, memory, disk, container health)
+- Uptime Kuma webhooks (service reachability)
+- Bootwatch (system reboots)
+
+Alerts land on `POST /web/api/notify` (auth: `ALERT_TOKEN`). Known kinds use
+hardcoded templates; unknown kinds get a factual AI summary; when the model is
+unavailable a generic What/How/When fallback is used.
+
+## Monitoring
+
+A lightweight monitoring stack runs alongside clark on the server:
+
+- **Netdata** (`:19999`) — host and container telemetry with 60-day retention.
+  Alarms webhook to clark's `/web/api/notify`.
+- **Uptime Kuma** (`:3001`) — reachability probes for clark and other services.
+  Notifications webhook to clark.
+- **Bootwatch** — systemd oneshot that reports reboots to clark on boot.
+
+Start the stack: `cd monitoring && docker compose up -d`
+
+## Web console
 
 A single-page dashboard served from the same `:8090` listener — no build step,
 vanilla JS embedded via `go:embed`. Two full-screen modes:
@@ -463,8 +496,9 @@ Clark is split into small, interface-driven packages so each concern scales and 
 
 ```
 main.go                       thin entry point: validates args, dispatches
-cmd/imessage-bridge           macOS bridge daemon: chat.db watcher, HTTPS client, osascript sender
+cmd/imessage-bridge           macOS bridge daemon: chat.db watcher, HTTPS client, osascript sender, action server
 internal/app                  composition root + CLI commands (init/run/vip/ctx/toggle/think/history/view/access/help)
+internal/alert                alert service: voice/silent modes, multi-channel delivery, rendering
 internal/config               single .env load + validation
 internal/logging              structured colored log emitter + whatsmeow adapter
 internal/store                persistence interfaces + SQLite implementation
@@ -475,7 +509,9 @@ internal/assistant            butler service: settings, VIP rules, prompt, tool 
 internal/gateway              transport-neutral message pipeline (handler, echo tracker, prefixes)
 internal/imessage             iMessage bridge transport: HTTP API, outbound queue, messenger
 internal/whatsapp             WhatsApp transport: messenger, handler pipeline, echo tracker
+internal/voice                STT/TTS engines: faster-whisper, Kokoro remote, Piper fallback, FailoverTTS
 internal/notify               desktop notifications
+internal/web                  web console: REST API, WebSocket chat/logs, SPA, voice endpoints
 ```
 
 Dependencies flow downward (`app -> whatsapp, imessage, assistant, store, ollama, notify`);
