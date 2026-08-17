@@ -1329,7 +1329,7 @@
     recording = false;
     const status = $("#voice-status");
     if (status) status.textContent = "Processing, Sir\u2026";
-    playClip("processing.wav");
+    playClip("processing.wav").catch(function(){});
     try {
       const mime = mediaRecorder ? mediaRecorder.mimeType : "audio/webm";
       const blob = new Blob(chunks, { type: mime || "audio/webm" });
