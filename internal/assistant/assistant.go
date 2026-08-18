@@ -689,12 +689,12 @@ func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Messa
 	nudges := 0
 	var lastThinking string
 	for round := 0; round < maxToolRounds; round++ {
-		// Use streaming on the last possible round (when we expect a final reply).
-		// Tool call rounds use non-streaming since tool calls arrive in the final chunk.
-		isLastRound := round == maxToolRounds-1
+		// Use streaming when onToken is provided so tokens are always delivered
+		// to the browser regardless of which round produces the final content.
+		// ChatStream handles tool calls correctly (they arrive in the final chunk).
 		var result *ollama.ChatResult
 		var err error
-		if isLastRound && onToken != nil {
+		if onToken != nil {
 			result, err = s.llm.ChatStream(loopCtx, messages, requestTools, onToken)
 		} else {
 			result, err = s.llm.Chat(loopCtx, messages, requestTools)
