@@ -1241,34 +1241,27 @@
     return out;
   }
 
-  // ---- Serial speech queue -------------------------------------------------
-  // All speech (streaming early-TTS, reply fallback, alerts) routes through one
-  // queue so sentences play one at a time, in order. Ollama streams tokens far
-  // faster than audio plays, so without serialization the per-sentence fetches
-  // resolve while earlier sentences are still playing and overlap → garble.
-  let speechQueue = [];
-  let speechDraining = false;
-  let drainPromise = null;
+  // ---- Serial speech playback ---------------------------------------------
+  // Sentences start their TTS fetch IMMEDIATELY and concurrently (the synthesis
+  // PROCESS runs in parallel with playback of earlier sentences), but playback
+  // is appended to playChain so each sentence only PLAYS after the previous one
+  // finishes. This keeps latency low (Clark talks on the first sentence) while
+  // preventing overlap/garble. stopSpeech() bumps speechGen so stale chain links
+  // are skipped.
+  let playChain = Promise.resolve();
 
   function enqueueSpeech(text, gen) {
     if (!text || !voiceOn) return;
     if (gen !== speechGen) return; // stale (voice off / superseded by newer turn)
-    speechQueue.push({ text: text, gen: gen });
-    if (!speechDraining) drainPromise = drainSpeech();
-  }
-
-  function drainSpeech() {
-    speechDraining = true;
-    return (async function () {
-      while (speechQueue.length) {
-        const item = speechQueue.shift();
-        if (item.gen !== speechGen) continue; // dropped by stopSpeech()
-        const buf = await fetchTTSBuffer(item.text);
-        if (item.gen !== speechGen) continue;
-        if (buf) await playBuffer(buf);
-      }
-      speechDraining = false;
-    })();
+    // Kick off synthesis now, in parallel with everything else.
+    const fetchPromise = fetchTTSBuffer(text);
+    // Sequence only the PLAYBACK.
+    playChain = playChain.then(async function () {
+      if (gen !== speechGen) return; // dropped by stopSpeech()
+      const buf = await fetchPromise;
+      if (gen !== speechGen) return;
+      if (buf) await playBuffer(buf);
+    });
   }
 
   // nextStableSentence returns the next complete, stable sentence starting at
@@ -1304,11 +1297,11 @@
     enqueueSpeech(text, gen);
   }
 
-  // speakTTS routes every sentence through the shared serial speech queue (see
+  // speakTTS routes every sentence through the shared playback chain (see
   // enqueueSpeech), so streaming, reply-fallback, and alert speech never overlap.
   // stopSpeech() bumps speechGen and cuts any in-flight audio before the new
-  // generation is enqueued. The returned promise resolves when this
-  // generation's queue has drained, so callers (speakAlert) can restore state.
+  // generation is enqueued. The returned promise resolves when the chain has
+  // drained, so callers (speakAlert) can restore state.
   function speakTTS(text) {
     if (!text) return Promise.resolve();
     ensureAudioCtx();
@@ -1317,7 +1310,7 @@
     var chunks = splitSentences(text);
     if (!chunks.length) return Promise.resolve();
     chunks.forEach(function (c) { enqueueSpeech(c, gen); });
-    return drainPromise || Promise.resolve();
+    return playChain;
   }
 
   // speakAlert speaks a server-initiated alert (bypass command, monitoring
