@@ -36,6 +36,7 @@
   let speechGen = 0;
   let speechSource = null;
   let spokenCount = 0;
+  let spokenUpTo = 0; // char offset up to which streamed text has been queued for TTS
 
   const $ = function (sel, root) {
     return (root || document).querySelector(sel);
@@ -667,6 +668,8 @@
         streamBubble = li.querySelector(".bubble");
         streamText = "";
         streamDone = false;
+        stopSpeech(); // cut any prior-turn audio so its queued sentences drop
+        spokenUpTo = 0;
         startIdle();
       } else if (f.type === "thinking") {
         if (streamBubble) {
@@ -695,14 +698,12 @@
           textNode.textContent += f.text;
           streamText += f.text;
           scrollChat();
-          // Early TTS: speak complete sentences as they arrive
+          // Early TTS: speak each newly-completed stable sentence exactly once.
           if (voiceOn && !streamDone) {
-            var sentences = splitSentences(streamText);
-            if (sentences.length > spokenCount) {
-              for (var si = spokenCount; si < sentences.length; si++) {
-                speakSingleSentence(sentences[si], speechGen);
-              }
-              spokenCount = sentences.length;
+            var s;
+            while ((s = nextStableSentence(streamText, spokenUpTo)) !== null) {
+              enqueueSpeech(s.text, speechGen);
+              spokenUpTo = s.end;
             }
           }
         }
@@ -715,16 +716,16 @@
           if (dots) dots.remove();
           const textNode = streamBubble.querySelector(".stream-text");
           if (textNode) textNode.outerHTML = renderMarkup(streamText);
-          // Speak any remaining text not yet spoken
-          if (voiceOn && streamText.trim()) {
-            var remaining = splitSentences(streamText).slice(spokenCount);
-            var tail = remaining.join(" ").trim();
-            if (tail) speakSingleSentence(tail, speechGen);
+          // Speak any remaining text not yet queued (incomplete final sentence).
+          if (voiceOn && spokenUpTo < streamText.length) {
+            var tail = streamText.slice(spokenUpTo).trim();
+            if (tail) enqueueSpeech(tail, speechGen);
           }
           refreshAfterTurn();
         }
         streamBubble = null;
         streamText = "";
+        spokenUpTo = 0;
         spokenCount = 0;
       } else if (f.type === "reply") {
         // Fallback: if streaming already populated the bubble, ignore this.
@@ -1240,43 +1241,83 @@
     return out;
   }
 
-  // speakSingleSentence fetches TTS for one sentence and plays it.
-  // gen is the speech generation counter — stale sentences are skipped.
+  // ---- Serial speech queue -------------------------------------------------
+  // All speech (streaming early-TTS, reply fallback, alerts) routes through one
+  // queue so sentences play one at a time, in order. Ollama streams tokens far
+  // faster than audio plays, so without serialization the per-sentence fetches
+  // resolve while earlier sentences are still playing and overlap → garble.
+  let speechQueue = [];
+  let speechDraining = false;
+  let drainPromise = null;
+
+  function enqueueSpeech(text, gen) {
+    if (!text || !voiceOn) return;
+    if (gen !== speechGen) return; // stale (voice off / superseded by newer turn)
+    speechQueue.push({ text: text, gen: gen });
+    if (!speechDraining) drainPromise = drainSpeech();
+  }
+
+  function drainSpeech() {
+    speechDraining = true;
+    return (async function () {
+      while (speechQueue.length) {
+        const item = speechQueue.shift();
+        if (item.gen !== speechGen) continue; // dropped by stopSpeech()
+        const buf = await fetchTTSBuffer(item.text);
+        if (item.gen !== speechGen) continue;
+        if (buf) await playBuffer(buf);
+      }
+      speechDraining = false;
+    })();
+  }
+
+  // nextStableSentence returns the next complete, stable sentence starting at
+  // `from`, or null. "Stable" means the terminal punctuation is followed by
+  // whitespace AND the next word does NOT start with a capital letter — so
+  // "Dr. Smith", "Mr. Jones", "U.S." are not chopped mid-abbreviation. Decimals
+  // (3.14) are not split either.
+  function nextStableSentence(text, from) {
+    for (let i = from; i < text.length; i++) {
+      const c = text[i];
+      if (c !== "." && c !== "!" && c !== "?") continue;
+      const prev = i > 0 ? text[i - 1] : "";
+      const after = text.slice(i + 1);
+      let j = 0;
+      while (j < after.length && /\s/.test(after[j])) j++;
+      const nextChar = j < after.length ? after[j] : "";
+      const decimal = c === "." && /[0-9]/.test(prev) && /[0-9]/.test(nextChar);
+      const abbrev = /[A-Z]/.test(nextChar); // next word capitalized → likely "Dr. Smith"
+      if (!decimal && !abbrev) {
+        const t = text.slice(from, i + 1).trim();
+        if (t) return { text: t, end: i + 1 };
+      }
+    }
+    return null;
+  }
+
+  // speakSingleSentence fetches TTS for one sentence and plays it through the
+  // serial queue. gen is the speech generation counter — stale sentences are
+  // skipped. Kept for one-off callers; the streaming path uses enqueueSpeech.
   function speakSingleSentence(text, gen) {
     if (!text || !voiceOn) return;
     ensureAudioCtx();
-    fetchTTSBuffer(text).then(function (buf) {
-      if (gen !== speechGen) return;
-      if (buf) playBuffer(buf);
-    });
+    enqueueSpeech(text, gen);
   }
 
-  // speakTTS dispatches every sentence to /tts concurrently (the server daemon
-  // serializes synthesis), but plays them back as an indexed FIFO queue: chunk
-  // i only plays after chunks 0..i-1 have finished, so early-arriving chunks
-  // wait in line and later chunks never overtake or overlap earlier ones. A
-  // failed chunk (null buffer) is skipped without blocking the next.
+  // speakTTS routes every sentence through the shared serial speech queue (see
+  // enqueueSpeech), so streaming, reply-fallback, and alert speech never overlap.
+  // stopSpeech() bumps speechGen and cuts any in-flight audio before the new
+  // generation is enqueued. The returned promise resolves when this
+  // generation's queue has drained, so callers (speakAlert) can restore state.
   function speakTTS(text) {
-    if (!text) return;
+    if (!text) return Promise.resolve();
     ensureAudioCtx();
-    stopSpeech();            // cut off any in-flight reply immediately
+    stopSpeech();            // cut off any in-flight reply, bump generation
     var gen = speechGen;     // generation after the stop bump
     var chunks = splitSentences(text);
-    if (!chunks.length) return;
-    // All fetches start immediately and resolve in arbitrary order.
-    var avail = chunks.map(fetchTTSBuffer);
-    // FIFO: await chunk i (if not ready yet), play it to completion, then i+1.
-    var chain = Promise.resolve();
-    avail.forEach(function (p) {
-      chain = chain.then(function () {
-        if (gen !== speechGen) return null; // superseded/stopped: drop the rest
-        return p.then(function (buf) {
-          if (gen !== speechGen) return null;
-          return buf ? playBuffer(buf) : null;
-        });
-      });
-    });
-    return chain;
+    if (!chunks.length) return Promise.resolve();
+    chunks.forEach(function (c) { enqueueSpeech(c, gen); });
+    return drainPromise || Promise.resolve();
   }
 
   // speakAlert speaks a server-initiated alert (bypass command, monitoring
