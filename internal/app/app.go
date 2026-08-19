@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -133,6 +134,26 @@ func (a *App) Run() error {
 	logging.Log("CLARK", logging.SevInfo, "START", "Assistant started", "name", a.ast.Name())
 	logging.Log("CLARK", logging.SevInfo, "CONTEXT", "Master context loaded", "context", a.ast.Context())
 	logging.Log("CLARK", logging.SevInfo, "STATUS", "Assistant status", "enabled", a.ast.Enabled())
+
+	// Advertise this process so the `clark` CLI can poke it to reload its cache
+	// after changing settings in a separate process. The SIGHUP handler re-reads
+	// the store so CLI changes (ctx, toggle, think, ...) take effect live.
+	if err := writePidFile(a.cfg); err != nil {
+		logging.Log("CLARK", logging.SevWarn, "PID", "Could not write pidfile", "error", err.Error())
+	} else {
+		defer removePidFile(a.cfg)
+	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGHUP)
+	go func() {
+		for range sigCh {
+			if err := a.ast.Reload(); err != nil {
+				logging.Log("CLARK", logging.SevWarn, "RELOAD", "Failed to reload state from DB", "error", err.Error())
+			} else {
+				logging.Log("CLARK", logging.SevInfo, "RELOAD", "State reloaded from DB")
+			}
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -417,6 +438,7 @@ func (a *App) VIP(args []string) error {
 		logging.Log("MEMORY", logging.SevInfo, "VIPLIST", "VIP entry", "jid", jid, "relation", relation)
 	}
 
+	a.notifyRunning()
 	return nil
 }
 
@@ -446,10 +468,10 @@ func (a *App) Context(args []string) error {
 		if context != "" {
 			return fmt.Errorf("cannot mix -clear with -change")
 		}
-		return a.ast.SetContext("")
+		return a.setAndNotify(a.ast.SetContext(""))
 	}
 
-	return a.ast.SetContext(context)
+	return a.setAndNotify(a.ast.SetContext(context))
 }
 
 // Toggle flips the assistant's enabled status. Bare usage flips everyone;
@@ -485,19 +507,19 @@ func (a *App) Toggle(args []string) error {
 		if all != "on" && all != "off" {
 			return fmt.Errorf("invalid -all %q. Use 'on' or 'off'", all)
 		}
-		return a.ast.SetStatus(all == "on")
+		return a.setAndNotify(a.ast.SetStatus(all == "on"))
 	}
 	if recipient != "" {
 		if set != "on" && set != "off" {
 			return fmt.Errorf("usage: clark toggle -r <name|number> -set on|off")
 		}
-		return a.ast.SetVIPStatus(recipient, set == "on")
+		return a.setAndNotify(a.ast.SetVIPStatus(recipient, set == "on"))
 	}
 	if set != "" {
 		return fmt.Errorf("usage: clark toggle -set requires -r <name|number>")
 	}
 
-	return a.ast.Toggle()
+	return a.setAndNotify(a.ast.Toggle())
 }
 
 // Think enables or disables the model's reasoning mode.
@@ -514,7 +536,7 @@ func (a *App) Think(args []string) error {
 		return fmt.Errorf("usage: clark think on|off")
 	}
 
-	return a.ast.SetThinking(args[0] == "on")
+	return a.setAndNotify(a.ast.SetThinking(args[0] == "on"))
 }
 
 // History sets how many recent messages clark reviews on every turn.
@@ -535,7 +557,7 @@ func (a *App) History(args []string) error {
 		return fmt.Errorf("invalid history limit %q", args[0])
 	}
 
-	return a.ast.SetHistoryLimit(limit)
+	return a.setAndNotify(a.ast.SetHistoryLimit(limit))
 }
 
 // View prints the current settings, VIP list, and per-VIP tool access.
@@ -632,6 +654,7 @@ func (a *App) Access(args []string) error {
 	if err := a.ast.SetAccess(jid, grants); err != nil {
 		return err
 	}
+	a.notifyRunning()
 
 	logging.Log("MEMORY", logging.SevInfo, "ACCESS", "Access updated",
 		"jid", jid, "tool", tool, "enabled", enabled, "grants", grants)
@@ -651,4 +674,49 @@ func (a *App) Help() error {
 		"view", "clark view",
 		"access", "clark access -r <name|number> -tool <tool> -set on|off")
 	return nil
+}
+
+// pidPath returns the pidfile location: a fixed name next to the store so both
+// `clark run` and the `clark` CLI (which resolve the same cfg.DBPath) agree on
+// where to write/read the running process's PID.
+func pidPath(cfg *config.Config) string {
+	return filepath.Join(filepath.Dir(cfg.DBPath), "clark.pid")
+}
+
+func writePidFile(cfg *config.Config) error {
+	return os.WriteFile(pidPath(cfg), []byte(strconv.Itoa(os.Getpid())), 0644)
+}
+
+func removePidFile(cfg *config.Config) {
+	_ = os.Remove(pidPath(cfg))
+}
+
+// setAndNotify applies a setting change and, on success, pokes any running
+// `clark run` process to reload its cache from the DB so the change takes
+// effect live (the two are separate processes sharing one SQLite store).
+func (a *App) setAndNotify(err error) error {
+	if err != nil {
+		return err
+	}
+	a.notifyRunning()
+	return nil
+}
+
+// notifyRunning signals a running `clark run` process (if any) with SIGHUP so it
+// reloads its in-memory cache from the DB. Best-effort: missing or stale pidfile
+// (no instance running, or a dead PID) is silently ignored.
+func (a *App) notifyRunning() {
+	data, err := os.ReadFile(pidPath(a.cfg))
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	_ = proc.Signal(syscall.SIGHUP)
 }

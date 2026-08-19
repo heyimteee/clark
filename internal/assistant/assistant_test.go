@@ -300,6 +300,35 @@ func TestServiceNotifyState(t *testing.T) {
 	}
 }
 
+// TestServiceReload verifies Reload re-reads settings from the store into the
+// cache, so an out-of-process writer (the clark CLI) is picked up without a
+// restart. It writes directly to the store (bypassing the cache) then reloads.
+func TestServiceReload(t *testing.T) {
+	s, st, _ := newService(t)
+
+	if err := st.Set("context", "from-db"); err != nil {
+		t.Fatalf("store Set: %v", err)
+	}
+	if err := st.Set("status", "true"); err != nil {
+		t.Fatalf("store Set: %v", err)
+	}
+
+	// Cache still holds the newService() defaults; force a mismatch first.
+	if s.Context() == "from-db" {
+		t.Fatalf("precondition failed: cache already equals DB value")
+	}
+
+	if err := s.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if s.Context() != "from-db" {
+		t.Errorf("Context = %q after Reload, want %q", s.Context(), "from-db")
+	}
+	if !s.Enabled() {
+		t.Error("Enabled = false after Reload, want true")
+	}
+}
+
 func TestServiceToggle(t *testing.T) {
 	s, _, _ := newService(t)
 

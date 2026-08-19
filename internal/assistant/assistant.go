@@ -133,6 +133,12 @@ type Service struct {
 	pendingMu sync.Mutex
 	pending   map[string]*pendingIter
 
+	// cacheMu guards the in-memory scalar settings (name, context, status,
+	// think, alertMode, historyLimit). Reload (SIGHUP) and the setters write
+	// under Lock; getters read under RLock, so an out-of-process reload can't
+	// race with reads.
+	cacheMu sync.RWMutex
+
 	// stateSubs receives a callback whenever any persisted setting changes
 	// (status, context, thinking, alert mode, history limit, VIPs, access).
 	// Web consoles subscribe so they can push live state to open dashboards
@@ -170,17 +176,24 @@ func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 	return s, nil
 }
 
+// load reads persisted scalars into the cache. Called once at startup.
 func (s *Service) load() error {
+	return s.reloadScalars()
+}
+
+// reloadScalars re-reads the persisted scalar settings (name, context, status,
+// thinking, alert mode, history limit) from the store into the in-memory cache.
+// The field writes are guarded by cacheMu so it is safe to call from any
+// goroutine (e.g. a SIGHUP handler triggered by the clark CLI).
+func (s *Service) reloadScalars() error {
 	name, err := s.settings.Get("name")
 	if err != nil {
 		return err
 	}
-
 	ctxValue, err := s.settings.Get("context")
 	if err != nil {
 		return err
 	}
-
 	statusStr, err := s.settings.Get("status")
 	if err != nil {
 		return err
@@ -192,7 +205,6 @@ func (s *Service) load() error {
 			return fmt.Errorf("Invalid status value Sir. Error: %w", err)
 		}
 	}
-
 	thinkStr, err := s.settings.Get("think")
 	if err != nil {
 		return err
@@ -204,7 +216,6 @@ func (s *Service) load() error {
 			return fmt.Errorf("Invalid thinking value Sir. Error: %w", err)
 		}
 	}
-
 	historyLimit := defaultHistoryLimit
 	limitStr, err := s.settings.Get("history_limit")
 	if err != nil {
@@ -217,33 +228,67 @@ func (s *Service) load() error {
 		}
 		historyLimit = limit
 	}
+	alertMode := "voice"
+	if mode, merr := s.settings.Get("alert_mode"); merr == nil && mode != "" {
+		if mode == "silent" || mode == "voice" {
+			alertMode = mode
+		}
+	}
 
+	s.cacheMu.Lock()
 	s.name = name
 	s.context = ctxValue
 	s.status = status
 	s.think = think
-	s.alertMode = "voice"
-	if mode, err := s.settings.Get("alert_mode"); err == nil && mode != "" {
-		if mode == "silent" || mode == "voice" {
-			s.alertMode = mode
-		}
-	}
+	s.alertMode = alertMode
 	s.historyLimit = historyLimit
+	s.cacheMu.Unlock()
 	s.llm.SetThink(think)
 	return nil
 }
 
+// Reload refreshes the in-memory cache from the store. It is triggered when an
+// out-of-process writer (the `clark` CLI) changes settings, so the running
+// service picks up the new values without a restart. It also reloads the VIP
+// cache and notifies subscribers (the web console then pushes the fresh state).
+func (s *Service) Reload() error {
+	if err := s.reloadScalars(); err != nil {
+		return err
+	}
+	if err := s.vip.Load(); err != nil {
+		return err
+	}
+	s.notifyState()
+	return nil
+}
+
 // Name returns the assistant's display name.
-func (s *Service) Name() string { return s.name }
+func (s *Service) Name() string {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	return s.name
+}
 
 // Model returns the configured Ollama model.
-func (s *Service) Model() string { return s.model }
+func (s *Service) Model() string {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	return s.model
+}
 
 // Context returns the master context.
-func (s *Service) Context() string { return s.context }
+func (s *Service) Context() string {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	return s.context
+}
 
 // Enabled reports whether the assistant accepts and answers messages.
-func (s *Service) Enabled() bool { return s.status }
+func (s *Service) Enabled() bool {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	return s.status
+}
 
 // EnabledFor reports whether clark answers a given sender. A per-VIP status
 // override wins; otherwise the global status applies.
@@ -251,6 +296,8 @@ func (s *Service) EnabledFor(jid string) bool {
 	if on, ok := s.vip.IsEnabled(jid); ok {
 		return on
 	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
 	return s.status
 }
 
@@ -421,7 +468,9 @@ func (s *Service) SetStatus(on bool) error {
 		return err
 	}
 
+	s.cacheMu.Lock()
 	s.status = on
+	s.cacheMu.Unlock()
 	logging.Log("CLARK", logging.SevInfo, "STATUS", "Assistant status changed", "enabled", s.status)
 	s.notifyState()
 	return nil
@@ -448,18 +497,28 @@ func (s *Service) SetContext(contextInput string) error {
 		return err
 	}
 
+	s.cacheMu.Lock()
 	s.context = contextInput
+	s.cacheMu.Unlock()
 	logging.Log("CLARK", logging.SevInfo, "CONTEXT", "Master context loaded", "context", s.context)
 	s.notifyState()
 	return nil
 }
 
 // Thinking reports whether the model reasons before replying.
-func (s *Service) Thinking() bool { return s.think }
+func (s *Service) Thinking() bool {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	return s.think
+}
 
 // AlertMode reports the alert delivery mode: "voice" (speak alerts aloud) or
 // "silent" (show via WhatsApp/iMessage/web + FaceTime/banner, no speech).
-func (s *Service) AlertMode() string { return s.alertMode }
+func (s *Service) AlertMode() string {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	return s.alertMode
+}
 
 // SetAlertMode persists and applies the alert delivery mode.
 func (s *Service) SetAlertMode(mode string) error {
@@ -469,7 +528,9 @@ func (s *Service) SetAlertMode(mode string) error {
 	if err := s.settings.Set("alert_mode", mode); err != nil {
 		return err
 	}
+	s.cacheMu.Lock()
 	s.alertMode = mode
+	s.cacheMu.Unlock()
 	logging.Log("CLARK", logging.SevInfo, "ALERT", "Alert mode changed", "mode", mode)
 	s.notifyState()
 	return nil
@@ -481,7 +542,9 @@ func (s *Service) SetThinking(on bool) error {
 		return err
 	}
 
+	s.cacheMu.Lock()
 	s.think = on
+	s.cacheMu.Unlock()
 	s.llm.SetThink(on)
 	logging.Log("CLARK", logging.SevInfo, "THINK", "Thinking mode changed", "enabled", on)
 	s.notifyState()
@@ -494,7 +557,11 @@ func (s *Service) ToggleThinking() error {
 }
 
 // HistoryLimit reports how many recent messages are injected per turn.
-func (s *Service) HistoryLimit() int { return s.historyLimit }
+func (s *Service) HistoryLimit() int {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	return s.historyLimit
+}
 
 // SetHistoryLimit configures the per-turn history window and persists it.
 func (s *Service) SetHistoryLimit(n int) error {
@@ -505,7 +572,9 @@ func (s *Service) SetHistoryLimit(n int) error {
 		return err
 	}
 
+	s.cacheMu.Lock()
 	s.historyLimit = n
+	s.cacheMu.Unlock()
 	logging.Log("CLARK", logging.SevInfo, "HISTORY", "History limit changed", "limit", n)
 	s.notifyState()
 	return nil
