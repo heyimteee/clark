@@ -17,6 +17,9 @@ All work tracked via GitHub Issues at `heyimteee/clark`.
 Open → Plan (comment) → Implement → Commit → Close
 ```
 
+- Label: Assign proper labels
+- Asignees: Assign Myself
+
 ### Issue body (problem statement)
 
 Every issue must contain:
@@ -51,6 +54,7 @@ Or for multiple commits per issue, each commit references the issue number.
 ### Closing issues
 
 Close the issue only after:
+
 1. All commits are pushed
 2. All tests pass (`gofmt -l .`, `go vet ./...`, `go test -race ./...`)
 3. The success criteria in the issue are met
@@ -71,15 +75,15 @@ All commits follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ### Types
 
-| Type | When to use |
-|---|---|
-| `feat` | New feature or capability |
-| `fix` | Bug fix |
-| `chore` | Maintenance, deps, config, no logic change |
-| `tune` | Performance, optimization, tuning |
+| Type       | When to use                                |
+| ---------- | ------------------------------------------ |
+| `feat`     | New feature or capability                  |
+| `fix`      | Bug fix                                    |
+| `chore`    | Maintenance, deps, config, no logic change |
+| `tune`     | Performance, optimization, tuning          |
 | `refactor` | Code restructuring without behavior change |
-| `docs` | Documentation only |
-| `test` | Adding or fixing tests |
+| `docs`     | Documentation only                         |
+| `test`     | Adding or fixing tests                     |
 
 ### Rules
 
@@ -150,6 +154,7 @@ Pushing to `main` triggers the GitHub Actions self-hosted runner on the server:
 ### Manual verification after deploy
 
 After pushing, verify on the server:
+
 1. `docker compose logs clark` — no startup errors
 2. `curl -k https://clark.studio.lab/web/api/state` — API responds
 3. Test the specific feature that changed
@@ -232,20 +237,20 @@ Semantic versioning: `vMAJOR.MINOR.PATCH`
 
 ## 8. File Reference
 
-| File | Purpose |
-|---|---|
-| `internal/voice/fasterwhisper.go` | STT engine (FasterWhisper) |
-| `internal/voice/piper.go` | TTS daemon (Piper fallback) |
-| `internal/voice/kokororemote.go` | TTS remote (Kokoro MLX on Mac) |
-| `internal/ollama/ollama.go` | LLM client (Ollama) |
-| `internal/assistant/assistant.go` | Butler service (brain) |
-| `internal/web/chat.go` | WebSocket chat handler |
-| `internal/web/voice.go` | STT/TTS HTTP handlers |
-| `internal/web/static/app.js` | SPA frontend |
-| `internal/alert/alert.go` | Alert delivery service |
-| `internal/gateway/` | Transport-neutral pipeline |
-| `cmd/imessage-bridge/` | macOS iMessage bridge |
-| `docker/whisper_run.py` | FasterWhisper runner script |
-| `Dockerfile` | Multi-stage container build |
-| `docker-compose.yml` | Container orchestration |
-| `.github/workflows/deploy.yml` | Auto-deploy on push |
+| File                              | Purpose                        |
+| --------------------------------- | ------------------------------ |
+| `internal/voice/fasterwhisper.go` | STT engine (FasterWhisper)     |
+| `internal/voice/piper.go`         | TTS daemon (Piper fallback)    |
+| `internal/voice/kokororemote.go`  | TTS remote (Kokoro MLX on Mac) |
+| `internal/ollama/ollama.go`       | LLM client (Ollama)            |
+| `internal/assistant/assistant.go` | Butler service (brain)         |
+| `internal/web/chat.go`            | WebSocket chat handler         |
+| `internal/web/voice.go`           | STT/TTS HTTP handlers          |
+| `internal/web/static/app.js`      | SPA frontend                   |
+| `internal/alert/alert.go`         | Alert delivery service         |
+| `internal/gateway/`               | Transport-neutral pipeline     |
+| `cmd/imessage-bridge/`            | macOS iMessage bridge          |
+| `docker/whisper_run.py`           | FasterWhisper runner script    |
+| `Dockerfile`                      | Multi-stage container build    |
+| `docker-compose.yml`              | Container orchestration        |
+| `.github/workflows/deploy.yml`    | Auto-deploy on push            |

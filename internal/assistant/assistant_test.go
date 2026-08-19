@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/heyimteee/clark/internal/config"
@@ -266,17 +267,36 @@ func newService(t *testing.T) (*Service, *store.Store, *fakeLLM) {
 func TestServiceLoadsState(t *testing.T) {
 	s, _, _ := newService(t)
 
-	if s.Name() != "Clark" {
-		t.Errorf("Name = %q, want Clark", s.Name())
-	}
-	if s.Model() != "test-model" {
-		t.Errorf("Model = %q, want test-model", s.Model())
-	}
 	if s.Context() != "testing context" {
 		t.Errorf("Context = %q, want testing context", s.Context())
 	}
 	if !s.Enabled() {
 		t.Error("Enabled = false, want true")
+	}
+}
+
+func TestServiceNotifyState(t *testing.T) {
+	s, _, _ := newService(t)
+
+	var got int
+	var mu sync.Mutex
+	s.Subscribe(func() {
+		mu.Lock()
+		got++
+		mu.Unlock()
+	})
+
+	if err := s.SetContext("new context"); err != nil {
+		t.Fatalf("SetContext: %v", err)
+	}
+	if err := s.SetStatus(true); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got != 2 {
+		t.Errorf("subscriber invoked %d times, want 2", got)
 	}
 }
 

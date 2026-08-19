@@ -132,6 +132,13 @@ type Service struct {
 
 	pendingMu sync.Mutex
 	pending   map[string]*pendingIter
+
+	// stateSubs receives a callback whenever any persisted setting changes
+	// (status, context, thinking, alert mode, history limit, VIPs, access).
+	// Web consoles subscribe so they can push live state to open dashboards
+	// instead of polling. Guarded by stateMu.
+	stateMu   sync.Mutex
+	stateSubs []func()
 }
 
 // New loads persisted state and returns a ready Service.
@@ -270,7 +277,11 @@ func (s *Service) LookupIMessage(input string) (string, bool) {
 
 // AddVIP parses and persists a "[number], [name], [relation]" entry.
 func (s *Service) AddVIP(input string) error {
-	return s.vip.Add(input)
+	if err := s.vip.Add(input); err != nil {
+		return err
+	}
+	s.notifyState()
+	return nil
 }
 
 // AddVIPBulk parses and persists several entries at once, all-or-nothing. It
@@ -291,12 +302,20 @@ func (s *Service) AddVIPBulk(entries []string) error {
 	if sb.Len() == 0 {
 		return fmt.Errorf("no VIP entries to add")
 	}
-	return s.vip.Add(sb.String())
+	if err := s.vip.Add(sb.String()); err != nil {
+		return err
+	}
+	s.notifyState()
+	return nil
 }
 
 // DeleteVIP removes a VIP by number.
 func (s *Service) DeleteVIP(input string) error {
-	return s.vip.Delete(input)
+	if err := s.vip.Delete(input); err != nil {
+		return err
+	}
+	s.notifyState()
+	return nil
 }
 
 // VIPList returns the current inner circle keyed by jid.
@@ -310,6 +329,7 @@ func (s *Service) ClearVIPs() error {
 		return err
 	}
 	logging.Log("MEMORY", logging.SevInfo, "VIPCLEAR", "Inner circle emptied")
+	s.notifyState()
 	return nil
 }
 
@@ -337,7 +357,11 @@ func (s *Service) AccessMap() map[string][]string {
 
 // SetAccess persists a VIP's granted tools.
 func (s *Service) SetAccess(jid string, grants []string) error {
-	return s.access.SetTools(jid, grants)
+	if err := s.access.SetTools(jid, grants); err != nil {
+		return err
+	}
+	s.notifyState()
+	return nil
 }
 
 // Init seeds the default settings.
@@ -348,6 +372,27 @@ func (s *Service) Init() error {
 // IsInitialized reports whether defaults have been seeded.
 func (s *Service) IsInitialized() (bool, error) {
 	return s.settings.IsInitialized()
+}
+
+// Subscribe registers a callback invoked whenever any persisted setting
+// changes. Web consoles use this to push live state to open dashboards instead
+// of polling every few seconds.
+func (s *Service) Subscribe(fn func()) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	s.stateSubs = append(s.stateSubs, fn)
+}
+
+// notifyState fans out to subscribers. Safe to call from any goroutine (e.g.
+// the WhatsApp handler) because it copies the slice under the mutex before
+// invoking callbacks.
+func (s *Service) notifyState() {
+	s.stateMu.Lock()
+	subs := append([]func(){}, s.stateSubs...)
+	s.stateMu.Unlock()
+	for _, fn := range subs {
+		fn()
+	}
 }
 
 // Toggle flips the enabled status.
@@ -378,6 +423,7 @@ func (s *Service) SetStatus(on bool) error {
 
 	s.status = on
 	logging.Log("CLARK", logging.SevInfo, "STATUS", "Assistant status changed", "enabled", s.status)
+	s.notifyState()
 	return nil
 }
 
@@ -392,6 +438,7 @@ func (s *Service) SetVIPStatus(recipient string, on bool) error {
 		return err
 	}
 	logging.Log("CLARK", logging.SevInfo, "STATUS", "VIP status changed", "jid", jid, "enabled", on)
+	s.notifyState()
 	return nil
 }
 
@@ -403,6 +450,7 @@ func (s *Service) SetContext(contextInput string) error {
 
 	s.context = contextInput
 	logging.Log("CLARK", logging.SevInfo, "CONTEXT", "Master context loaded", "context", s.context)
+	s.notifyState()
 	return nil
 }
 
@@ -423,6 +471,7 @@ func (s *Service) SetAlertMode(mode string) error {
 	}
 	s.alertMode = mode
 	logging.Log("CLARK", logging.SevInfo, "ALERT", "Alert mode changed", "mode", mode)
+	s.notifyState()
 	return nil
 }
 
@@ -435,6 +484,7 @@ func (s *Service) SetThinking(on bool) error {
 	s.think = on
 	s.llm.SetThink(on)
 	logging.Log("CLARK", logging.SevInfo, "THINK", "Thinking mode changed", "enabled", on)
+	s.notifyState()
 	return nil
 }
 
@@ -457,6 +507,7 @@ func (s *Service) SetHistoryLimit(n int) error {
 
 	s.historyLimit = n
 	logging.Log("CLARK", logging.SevInfo, "HISTORY", "History limit changed", "limit", n)
+	s.notifyState()
 	return nil
 }
 

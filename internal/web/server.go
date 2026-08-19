@@ -88,6 +88,17 @@ func New(opts Options) *Server {
 		s.alerts.SetBroadcast(s.broadcastChatAlert)
 	}
 
+	if s.butler != nil {
+		// Push live state to every open console the instant any setting
+		// changes (status, context, thinking, alert mode, VIPs, access) — via
+		// the existing chat hub — so the dashboard reflects changes in
+		// real-time instead of waiting for the 5s poll. Broadcast async so a
+		// slow WS write can never block the mutating goroutine (e.g. WhatsApp).
+		s.butler.Subscribe(func() {
+			go s.hub.broadcast(map[string]any{"type": "state", "state": s.state()})
+		})
+	}
+
 	s.mux.HandleFunc("POST /web/api/login", s.handleLogin)
 
 	s.mux.HandleFunc("GET /web/api/state", s.requireAuth(s.handleState))

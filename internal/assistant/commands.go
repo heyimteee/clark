@@ -212,7 +212,11 @@ func (s *Service) mutateAccess(recipient, tool string, enabled bool) error {
 	}
 
 	sort.Strings(grants)
-	return s.access.SetTools(jid, grants)
+	if err := s.access.SetTools(jid, grants); err != nil {
+		return err
+	}
+	s.notifyState()
+	return nil
 }
 
 func contextUpdatedReply(text string) string {

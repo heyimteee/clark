@@ -410,12 +410,13 @@
     try {
       const d = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (d && d.error) { toast(d.error); return; }
-      if (d && d.state) {
-        state = d.state;
-        captureState();
-        renderVips();
-        renderAccess();
-      }
+    if (d && d.state) {
+      state = d.state;
+      captureState();
+      renderVips();
+      renderAccess();
+      renderVoiceMeta();
+    }
       if (note) toast(note);
     } catch (e) {
       toast(e.message);
@@ -764,6 +765,14 @@
           if (f.speak !== false) speakAlert(f.text);
           else stopIdle();
           refreshAfterTurn();
+        }
+      } else if (f.type === "state") {
+        // Server pushes a fresh state snapshot whenever any setting changes
+        // (status, context, thinking, alert mode, VIPs, access). Reflect it
+        // immediately instead of waiting for the slow safety poll.
+        if (f.state) {
+          state = f.state;
+          renderState();
         }
       } else if (f.type === "pong") {
         /* keepalive ok */
@@ -1520,9 +1529,11 @@
     if (chatWs && chatWs.readyState === WebSocket.OPEN) sendFrame("ping", {});
   }, 25000);
 
+  // Safety net only — live state is pushed over the chat WebSocket the instant
+  // any setting changes, so this slow poll just catches any missed push.
   setInterval(function () {
     if (token) pollState();
-  }, 5000);
+  }, 30000);
 
   setInterval(function () {
     if (mode === "bento" && token) refreshHistory();
