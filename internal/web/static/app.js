@@ -39,6 +39,7 @@
   let spokenUpTo = 0; // char offset up to which streamed text has been queued for TTS
   let disarming = false; // true while disarmVoice triggered stopRecording -> onRecordingStop
   let clarkSpeaking = false; // true while Clark is playing audio (TTS/affirmation/processing)
+  let activeClips = new Set(); // HTMLAudioElements for affirmations/processing
 
   const $ = function (sel, root) {
     return (root || document).querySelector(sel);
@@ -458,6 +459,10 @@
     } else if (!voiceOn) {
       st.textContent = "voice off \u2014 flip the toggle";
       toggle.disabled = false;
+    } else {
+      // voiceOn — keep status meaningful instead of leaving the stale "voice off" text
+      if (st && !recording && !clarkSpeaking) st.textContent = "say \u201cclark\u201d";
+      if (toggle) toggle.disabled = false;
     }
     const amt = $("#alert-mode-toggle");
     if (amt) amt.checked = (v.alertMode !== "silent"); // ON = voice alerts
@@ -730,6 +735,11 @@
         streamText = "";
         spokenUpTo = 0;
         spokenCount = 0;
+        // If TTS had nothing to play (empty reply or fetch failure), playBuffer
+        // never fired its onended fallback. Ensure wake resumes.
+        setTimeout(function () {
+          if (voiceOn && !clarkSpeaking && !recording && !wakeHeld && !wakeRecognition) startWake();
+        }, 150);
       } else if (f.type === "reply") {
         // Fallback: if streaming already populated the bubble, ignore this.
         // If no bubble exists (streaming skipped/failed), create one.
@@ -757,6 +767,9 @@
         streamBubble = null;
         streamText = "";
         streamDone = false;
+        setTimeout(function () {
+          if (voiceOn && !clarkSpeaking && !recording && !wakeHeld && !wakeRecognition) startWake();
+        }, 150);
       } else if (f.type === "alert") {
         // Server-initiated alert (bypass command, monitoring webhook). Always
         // render it as a clark message and log it to the console. In voice
@@ -1089,7 +1102,14 @@
     ensureAudioCtx();
     setupAnalyser();
     loadIdleBuffer(); // preload so idle is instant on ack
+    if (status) status.textContent = "say \u201cclark\u201d";
     startWake();
+    // startWake may bail on clarkSpeaking/wakeRecognition; ensure the pill
+    // reflects the real toggle even when the mic hasn't re-armed yet. The
+    // playBuffer/playClip onended fallback will re-arm once the clip clears.
+    if (voiceOn && status && status.textContent.indexOf("voice off") !== -1) {
+      status.textContent = "say \u201cclark\u201d";
+    }
   }
 
   function disarmVoice() {
@@ -1173,8 +1193,9 @@
       clarkSpeaking = true;
       try { stopWake(); } catch (e) {}
       const a = new Audio("/web/affirmations/" + file);
-      a.onended = function () { clarkSpeaking = false; resolve(); };
-      a.onerror = function () { clarkSpeaking = false; resolve(); };
+      activeClips.add(a);
+      a.onended = function () { activeClips.delete(a); clarkSpeaking = false; resolve(); };
+      a.onerror = function () { activeClips.delete(a); clarkSpeaking = false; resolve(); };
       a.play();
     });
   }
@@ -1217,6 +1238,9 @@
   // mid-word (barge-in / voice toggle off).
   function stopSpeech() {
     speechGen++;
+    clarkSpeaking = false;
+    activeClips.forEach(function (a) { try { a.pause(); a.src = ""; } catch (e) {} });
+    activeClips.clear();
     if (speechSource) {
       try { speechSource.stop(); } catch (e) {}
       speechSource = null;
