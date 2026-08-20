@@ -10,7 +10,22 @@ This is the minimal path from a fresh checkout to a running assistant. For the f
 
 Optional prerequisites are covered in their respective docs: the iMessage bridge and Kokoro voice require a Mac (see `transports.md`), voice and alerts require tokens (see `requirements.md`).
 
-## 1. Clone and build
+## Quick install (no git clone)
+
+```sh
+# Homebrew (macOS/Linux)
+brew install heyimteee/tap/clark
+clark install
+
+# Or one-liner (no clone, no Go toolchain)
+curl -fsSL https://raw.githubusercontent.com/heyimteee/clark/main/install.sh | bash
+# with options:
+curl -fsSL https://raw.githubusercontent.com/heyimteee/clark/main/install.sh | bash -s -- --yes --ollama-model llama3.2 --ssh 3studio-server-tail
+```
+
+Both fetch the latest `clark_*` tarball from GitHub Releases and run `clark install` (interactive by default, `--yes` for CI). No `git clone` needed.
+
+## 1. Clone and build (alternative)
 
 ```sh
 git clone https://github.com/heyimteee/clark.git

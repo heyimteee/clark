@@ -1,0 +1,52 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: clark
+    main: .
+    binary: clark
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+    flags:
+      - -trimpath
+
+archives:
+  - id: clark
+    builds:
+      - clark
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    format_overrides:
+      - goos: darwin
+        format: tar.gz
+    files:
+      - README.md
+      - LICENSE
+      - .env.example
+      - docker-compose.yml
+      - Dockerfile
+
+brews:
+  - repository:
+      owner: heyimteee
+      name: homebrew-tap
+      token: '{{ .Env.GITHUB_TOKEN }}'
+    folder: Formula
+    homepage: "https://github.com/heyimteee/clark"
+    description: "Personal AI butler for WhatsApp, iMessage and the web"
+    license: "MIT"
+    test: |
+      system "#{bin}/clark", "--help"
+    install: |
+      bin.install "clark"
