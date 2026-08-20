@@ -1,7 +1,7 @@
 # ---- build stage ----
 # clark links against CGO for SQLite (mattn/go-sqlite3), so the build stage
 # needs a C compiler. The result is a fully static binary.
-FROM golang:1.26-alpine AS build
+FROM golang:1.25-alpine AS build
 
 RUN apk add --no-cache gcc musl-dev
 
