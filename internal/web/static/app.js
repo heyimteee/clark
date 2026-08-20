@@ -37,6 +37,8 @@
   let speechSource = null;
   let spokenCount = 0;
   let spokenUpTo = 0; // char offset up to which streamed text has been queued for TTS
+  let disarming = false; // true while disarmVoice triggered stopRecording -> onRecordingStop
+  let clarkSpeaking = false; // true while Clark is playing audio (TTS/affirmation/processing)
 
   const $ = function (sel, root) {
     return (root || document).querySelector(sel);
@@ -1091,6 +1093,7 @@
   }
 
   function disarmVoice() {
+    disarming = true;
     voiceOn = false;
     localStorage.setItem("clark-voiceOn", "false");
     wakeHeld = false;
@@ -1116,7 +1119,7 @@
   }
 
   function startWake() {
-    if (!voiceOn || wakeRecognition || wakeHeld) return;
+    if (!voiceOn || wakeRecognition || wakeHeld || clarkSpeaking) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const status = $("#voice-status");
     if (!SR) {
@@ -1136,7 +1139,7 @@
     r.onerror = function () {};
     r.onend = function () {
       wakeRecognition = null;
-      if (voiceOn && !recording && !wakeHeld) startWake();
+      if (!clarkSpeaking && voiceOn && !recording && !wakeHeld) startWake();
     };
     r.start();
     wakeRecognition = r;
@@ -1152,7 +1155,7 @@
   }
 
   function handleWake() {
-    if (recording || wakeHeld) return;
+    if (recording || wakeHeld || clarkSpeaking) return;
     stopWake();
     wakeHeld = true;
     const idx = Math.floor(Math.random() * AFFIRMATIONS.length);
@@ -1167,9 +1170,11 @@
 
   function playClip(file) {
     return new Promise(function (resolve) {
+      clarkSpeaking = true;
+      try { stopWake(); } catch (e) {}
       const a = new Audio("/web/affirmations/" + file);
-      a.onended = resolve;
-      a.onerror = resolve;
+      a.onended = function () { clarkSpeaking = false; resolve(); };
+      a.onerror = function () { clarkSpeaking = false; resolve(); };
       a.play();
     });
   }
@@ -1191,12 +1196,16 @@
   function playBuffer(buffer) {
     if (!buffer) return Promise.resolve();
     return new Promise(function (resolve) {
+      clarkSpeaking = true;
+      try { stopWake(); } catch (e) {}
       var src = audioCtx.createBufferSource();
       src.buffer = buffer;
       src.connect(audioCtx.destination);
       speechSource = src;
       src.onended = function () {
         speechSource = null;
+        clarkSpeaking = false;
+        if (voiceOn && !recording && !wakeHeld) startWake();
         resolve();
       };
       src.start();
@@ -1399,14 +1408,12 @@
   }
 
   async function onRecordingStop() {
-    recording = false;
-    // Auto-enable voice when STT is triggered — if you're talking, you want to hear back.
-    if (!voiceOn) {
-      voiceOn = true;
-      localStorage.setItem("clark-voiceOn", "true");
-      const t = $("#voice-toggle");
-      if (t) t.checked = true;
+    if (disarming) {
+      disarming = false;
+      recording = false;
+      return;
     }
+    recording = false;
     const status = $("#voice-status");
     if (status) status.textContent = "Processing, Sir\u2026";
     playClip("processing.wav").catch(function(){});
