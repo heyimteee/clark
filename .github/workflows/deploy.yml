@@ -19,7 +19,7 @@ jobs:
         run: |
           cd /home/tristan/clark
           for i in 1 2 3; do docker compose up -d --build && break || { echo "retry $i/3 failed, waiting..."; sleep 10; }; done
-          docker compose ps --filter name=clark --format '{{.Names}}\t{{.Status}}' | grep -q clark || { echo "build still failed after retries"; exit 1; }
+          docker ps --filter name=clark --format '{{.Names}}\t{{.Status}}' | grep -q clark || { echo "container clark not running after build"; docker ps -a --filter name=clark; exit 1; }
 
       - name: Verify container
         run: docker ps --filter name=clark --format '{{.Names}}\t{{.Status}}'
