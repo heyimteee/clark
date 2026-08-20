@@ -6,6 +6,33 @@ All management goes through the `clark` binary. Commands are Master-only.
 ./clark <command> [flags]
 ```
 
+## `install` — interactive setup (recommended)
+
+Answers step-by-step and does the rest. See `install.md` for the full wizard.
+
+```sh
+clark install                         # interactive (huh TUI)
+clark install --yes --ollama-model llama3.2
+clark install --ssh 3studio-server-tail
+clark install --no-docker             # native go build, no Docker
+```
+
+Writes `.env` `0600` (with `.env.bak`), validates via `config.Load`, runs `clark init` and `docker compose up -d --build` (or `go build` for `--no-docker`). Re-runnable without data loss.
+
+## `config` — reconfigure after install
+
+Interactive checklist of what is currently `✓`/`✗`. Pick a group to re-enter the wizard for just that feature; `.env` changes auto-restart, store changes (status/context/think/VIPs) apply live.
+
+```sh
+clark config                          # checklist → pick a group
+clark config --edit core              # core: OLLAMA_*
+clark config --edit persona           # MASTER_NAME, PROTOCOL_NAME, PALACE_NAME, BYPASS_PHRASE, INNER_CIRCLE
+clark config --edit imessage          # bridge token/handle
+clark config --edit web               # WEB_TOKEN, ALERT_TOKEN
+clark config --edit voice             # STT/TTS, Kokoro remote
+clark config --edit live              # status, context, think, VIPs (live, no restart)
+```
+
 ## `run`
 
 Start the assistant. On first run a QR code is printed — scan it in WhatsApp > Settings > Linked Devices.

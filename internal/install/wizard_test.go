@@ -20,13 +20,13 @@ func TestGenerateToken(t *testing.T) {
 func TestBuildEnv_WhatsAppOnly(t *testing.T) {
 	existing := map[string]string{}
 	ans := Answers{
-		OllamaURL:   "http://localhost:11434",
-		OllamaModel: "llama3.2",
-		WebToken:    "tok1",
-		AlertToken:  "tok2",
-		STTEngine:   "faster-whisper",
-		TTSEngine:   "kokoro-remote",
-		NPMNetwork:  "npm_default",
+		OllamaURL:    "http://localhost:11434",
+		OllamaModel:  "llama3.2",
+		WebToken:     "tok1",
+		AlertToken:   "tok2",
+		STTEngine:    "faster-whisper",
+		TTSEngine:    "kokoro-remote",
+		NPMNetwork:   "npm_default",
 		BypassPhrase: "get him to me",
 	}
 	env := BuildEnv(ans, existing)
@@ -147,8 +147,8 @@ func TestBuildEnv_NativeNoDocker(t *testing.T) {
 
 func TestBuildEnv_ReRunIdempotent(t *testing.T) {
 	existing := map[string]string{
-		"WEB_TOKEN":   "keep-me",
-		"ALERT_TOKEN": "keep-also",
+		"WEB_TOKEN":    "keep-me",
+		"ALERT_TOKEN":  "keep-also",
 		"OLLAMA_MODEL": "old-model",
 	}
 	ans := Answers{

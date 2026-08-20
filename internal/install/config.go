@@ -72,7 +72,7 @@ func buildChecklist(env map[string]string) []string {
 	}
 	opts := []string{
 		fmt.Sprintf("%s Core (OLLAMA_MODEL, OLLAMA_URL) — %s model, %s url", check(has("OLLAMA_MODEL")), firstNonEmpty(env["OLLAMA_MODEL"], "not set"), firstNonEmpty(env["OLLAMA_URL"], "http://localhost:11434")),
-		fmt.Sprintf("%s Persona (MASTER_NAME, PROTOCOL_NAME, PALACE_NAME, BYPASS_PHRASE, INNER_CIRCLE)", check(has("MASTER_NAME")||has("PROTOCOL_NAME")||has("PALACE_NAME")||has("INNER_CIRCLE"))),
+		fmt.Sprintf("%s Persona (MASTER_NAME, PROTOCOL_NAME, PALACE_NAME, BYPASS_PHRASE, INNER_CIRCLE)", check(has("MASTER_NAME") || has("PROTOCOL_NAME") || has("PALACE_NAME") || has("INNER_CIRCLE"))),
 		fmt.Sprintf("%s iMessage (IMESSAGE_ENABLED, bridge token, handle) — %s", check(env["IMESSAGE_ENABLED"] == "1"), map[bool]string{true: "enabled", false: "disabled"}[env["IMESSAGE_ENABLED"] == "1"]),
 		fmt.Sprintf("%s Web console (WEB_TOKEN, ALERT_TOKEN) — %s", check(has("WEB_TOKEN")), map[bool]string{true: "enabled", false: "disabled"}[has("WEB_TOKEN")]),
 		fmt.Sprintf("%s Voice (STT/TTS, Kokoro remote) — %s / %s", check(true), firstNonEmpty(env["STT_ENGINE"], "faster-whisper"), firstNonEmpty(env["TTS_ENGINE"], "kokoro-remote")),

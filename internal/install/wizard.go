@@ -453,5 +453,7 @@ func firstNonEmpty(vals ...string) string {
 }
 
 // For testability: export helpers
-func BuildEnv(ans Answers, existing map[string]string) map[string]string { return buildEnv(ans, existing) }
-func GenerateToken() string                                              { return generateToken() }
+func BuildEnv(ans Answers, existing map[string]string) map[string]string {
+	return buildEnv(ans, existing)
+}
+func GenerateToken() string { return generateToken() }

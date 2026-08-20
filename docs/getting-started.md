@@ -25,7 +25,9 @@ curl -fsSL https://raw.githubusercontent.com/heyimteee/clark/main/install.sh | b
 
 Both fetch the latest `clark_*` tarball from GitHub Releases and run `clark install` (interactive by default, `--yes` for CI). No `git clone` needed.
 
-## 1. Clone and build (alternative)
+The wizard asks step-by-step whether you want iMessage, a separate server over SSH, and what to provide for each — see [Install](install.md) for every prompt, every topology (WA-only local, WA-only remote, server + Mac, native `go build` with `--no-docker`), and the non-interactive flags. After install, `clark config` lets you tick/untick any feature later without reinstalling.
+
+## 1. Clone and build (alternative, contributors)
 
 ```sh
 git clone https://github.com/heyimteee/clark.git
@@ -107,4 +109,4 @@ docker ps --filter name=clark --format '{{.Names}}\t{{.Status}}'
 curl -k https://clark.studio.lab/web/api/state   # when WEB_ENABLED=1
 ```
 
-Next steps: `cli.md` for day-to-day commands, `in-chat.md` for the Master-only chat surface, `transports.md` to add iMessage and voice, `web-console.md` for the dashboard, and `alerts-and-monitoring.md` for operations.
+Next steps: `install.md` for the full wizard (every prompt and topology), `cli.md` for `install`/`config`/`run` and day-to-day commands, `in-chat.md` for the Master-only chat surface, `transports.md` to add iMessage and voice, `web-console.md` for the dashboard, and `alerts-and-monitoring.md` for operations.

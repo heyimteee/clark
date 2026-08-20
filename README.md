@@ -16,13 +16,16 @@ Web chat ─┘
 ## Quick start
 
 ```sh
-cp .env.example .env   # set OLLAMA_MODEL and OLLAMA_URL
-go build -o clark . && ./clark init && ./clark run  # prints a QR code — scan in WhatsApp > Linked Devices
-# or
-docker compose up -d && docker compose logs -f
+# One-line (no git clone, no Go toolchain)
+curl -fsSL https://raw.githubusercontent.com/heyimteee/clark/main/install.sh | bash
+# or Homebrew
+brew install heyimteee/tap/clark && clark install
+# then follow the wizard — or non-interactive:
+clark install --yes --ollama-model llama3.2 --ssh 3studio-server-tail
 ```
 
 Verify: `./clark view` and, when the console is enabled, `https://clark.studio.lab`.
+Later: `clark config` to tick/untick any feature without reinstalling.
 
 ## Documentation
 
@@ -31,8 +34,9 @@ Clark is a **homelab service** — a long-running private assistant, not a SaaS.
 | Doc | What it covers |
 | --- | --- |
 | [Requirements](docs/requirements.md) | Homelab model, hardware profile (author: Mac M4 24 GB + Debian 13 i5-9500T), and every feature dependency |
-| [Getting started](docs/getting-started.md) | Prerequisites, `.env`, `init`/`run`, Docker, first VIP bootstrap |
-| [CLI reference](docs/cli.md) | `run`/`vip`/`ctx`/`toggle`/`think`/`history`/`access`/`view` |
+| [Getting started](docs/getting-started.md) | Prerequisites, `.env`, and first run (links to Install) |
+| [Install](docs/install.md) | Interactive wizard `clark install` (all topologies, `--yes`, Homebrew / one-liner) |
+| [CLI reference](docs/cli.md) | `install` / `config` / `run` / `vip` / `ctx` / `toggle` / `think` / `history` / `access` / `view` |
 | [In-chat commands](docs/in-chat.md) | Master-only self-chat surface and status layering |
 | [Transports](docs/transports.md) | WhatsApp, iMessage bridge (macOS + Docker), voice (faster-whisper / Kokoro MLX on Mac → Piper fallback) |
 | [Web console](docs/web-console.md) | Bento/chat, `WEB_TOKEN`, and the REST + WebSocket API |
