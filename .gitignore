@@ -36,3 +36,7 @@ utils/
 
 # Docker volume (persisted SQLite + WhatsApp session data)
 data/
+
+# Python bytecode
+__pycache__/
+*.pyc
