@@ -43,15 +43,15 @@ func NewHandler(component string, msgr Messenger, butler Butler, notifier Notifi
 		bypass = defaultBypassPhrase
 	}
 	h := &Handler{
-		component:  component,
-		msgr:       msgr,
-		butler:     butler,
-		notifier:   notifier,
-		disp:       newDispatcher(component, butler, msgr),
-		dedup:      make(map[string]time.Time),
-		bypassRe:   compileBypass(bypass),
-		clock:      time.Now,
-		lastAlert:  make(map[string]time.Time),
+		component: component,
+		msgr:      msgr,
+		butler:    butler,
+		notifier:  notifier,
+		disp:      newDispatcher(component, butler, msgr),
+		dedup:     make(map[string]time.Time),
+		bypassRe:  compileBypass(bypass),
+		clock:     time.Now,
+		lastAlert: make(map[string]time.Time),
 	}
 	return h
 }

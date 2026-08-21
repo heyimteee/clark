@@ -135,7 +135,7 @@ func TestHandlerBypassWordBoundary(t *testing.T) {
 		want bool
 	}{
 		{"get him to me", true},
-		{"Get Him To Me!", true},   // case + trailing punctuation
+		{"Get Him To Me!", true}, // case + trailing punctuation
 		{"please get him to me now", true},
 		{"(get him to me)", true},
 		{"target him to me", false}, // different first word
