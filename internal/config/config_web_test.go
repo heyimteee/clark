@@ -176,3 +176,60 @@ func TestLoadWebEnabledWithoutModelStillFails(t *testing.T) {
 		t.Fatal("Load succeeded without OLLAMA_MODEL; want an error")
 	}
 }
+
+func TestLoadIMessageEnabledWithoutTokenFails(t *testing.T) {
+	_, err := loadFromEnv(t, map[string]string{
+		"OLLAMA_MODEL":     "gemma4:cloud",
+		"IMESSAGE_ENABLED": "1",
+	})
+	if err == nil {
+		t.Fatal("Load succeeded with IMESSAGE_ENABLED=1 but no IMESSAGE_BRIDGE_TOKEN; want an error")
+	}
+}
+
+func TestLoadIMessageEnabledWithToken(t *testing.T) {
+	cfg, err := loadFromEnv(t, map[string]string{
+		"OLLAMA_MODEL":          "gemma4:cloud",
+		"IMESSAGE_ENABLED":      "1",
+		"IMESSAGE_BRIDGE_TOKEN": "bridge-s3cret",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.IMessageEnabled {
+		t.Error("IMessageEnabled = false, want true")
+	}
+	if cfg.IMessageBridgeToken != "bridge-s3cret" {
+		t.Errorf("IMessageBridgeToken = %q, want bridge-s3cret", cfg.IMessageBridgeToken)
+	}
+}
+
+func TestLoadListenAddrDefaults(t *testing.T) {
+	cfg, err := loadFromEnv(t, map[string]string{"OLLAMA_MODEL": "gemma4:cloud"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.WebListenAddr != ":8090" {
+		t.Errorf("WebListenAddr = %q, want :8090", cfg.WebListenAddr)
+	}
+	if cfg.IMessageListenAddr != ":8091" {
+		t.Errorf("IMessageListenAddr = %q, want :8091 (bridge must not share the public console port)", cfg.IMessageListenAddr)
+	}
+}
+
+func TestLoadListenAddrOverrides(t *testing.T) {
+	cfg, err := loadFromEnv(t, map[string]string{
+		"OLLAMA_MODEL":         "gemma4:cloud",
+		"WEB_LISTEN_ADDR":      "127.0.0.1:9000",
+		"IMESSAGE_LISTEN_ADDR": "127.0.0.1:9001",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.WebListenAddr != "127.0.0.1:9000" {
+		t.Errorf("WebListenAddr = %q, want 127.0.0.1:9000", cfg.WebListenAddr)
+	}
+	if cfg.IMessageListenAddr != "127.0.0.1:9001" {
+		t.Errorf("IMessageListenAddr = %q, want 127.0.0.1:9001", cfg.IMessageListenAddr)
+	}
+}

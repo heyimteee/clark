@@ -118,31 +118,11 @@ func TestSessionSlides(t *testing.T) {
 	}
 }
 
-func TestBridgeRoutesMounted(t *testing.T) {
-	st := testStore(t)
-	llm := &stubLLM{}
-	ast := newAssistant(t, st, llm)
-
-	bridge := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/inbound" {
-			w.WriteHeader(http.StatusTeapot)
-			w.Write([]byte("bridge"))
-			return
-		}
-		http.NotFound(w, r)
-	})
-
-	srv := New(Options{
-		ListenAddr: ":0",
-		WebToken:   testWebToken,
-		Butler:     ast,
-		Store:      st,
-		Bridge:     bridge,
-		STTModel:   "whisper-turbo",
-		TTSEngine:  "kokoro-remote",
-		Voice:      voiceEngine(),
-	})
-	ts := newServerFor(t, srv)
+// TestBridgeRoutesNotMounted guards the security boundary fixed in #57: the
+// bridge API must never be reachable through the public console mux. The
+// bridge runs on its own listener; /inbound here must 404.
+func TestBridgeRoutesNotMounted(t *testing.T) {
+	ts, _, _, _ := newTestServer(t)
 
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/inbound", strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
@@ -151,12 +131,17 @@ func TestBridgeRoutesMounted(t *testing.T) {
 		t.Fatalf("bridge request: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusTeapot {
-		t.Fatalf("bridge /inbound = %d, want 418", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("console /inbound = %d, want 404 (bridge must not be mounted under the console)", resp.StatusCode)
 	}
 
-	// The web SPA and the bridge coexist under the root mux.
-	if code, _ := getJSON(t, ts, "/web/api/state", login(t, ts)); code != http.StatusOK {
-		t.Fatalf("state with bridge mounted = %d, want 200", code)
+	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/outbound", nil)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("outbound request: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("console /outbound = %d, want 404", resp2.StatusCode)
 	}
 }

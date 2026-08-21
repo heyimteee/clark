@@ -56,6 +56,10 @@ func loadBridgeConfig() (bridgeConfig, error) {
 	if cfg.baseURL == "" {
 		return bridgeConfig{}, fmt.Errorf("IMESSAGE_BRIDGE_URL is required, e.g. https://clark.example.com")
 	}
+	if cfg.token == "" {
+		return bridgeConfig{}, fmt.Errorf("IMESSAGE_BRIDGE_TOKEN is required: the bridge forwards private iMessages " +
+			"and serves the FaceTime/banner action API, so it must never run unauthenticated")
+	}
 	return cfg, nil
 }
 

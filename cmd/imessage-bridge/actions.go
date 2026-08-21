@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -81,13 +82,28 @@ func (s *ActionServer) handleAction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// e164Re matches a strict +E.164 phone number: leading +, country code not
+// starting with 0, 8-14 more digits, nothing else. Every FaceTime number must
+// pass this before it is ever concatenated into a URL scheme.
+var e164Re = regexp.MustCompile(`^\+[1-9]\d{7,14}$`)
+
+// validE164 reports whether number is a strict +E.164 string.
+func validE164(number string) bool {
+	return e164Re.MatchString(number)
+}
+
 // triggerFaceTime opens the facetime:// URL scheme, which starts a FaceTime
 // audio call to the number (rings the Master's iPhone so he notices, without
-// needing to answer). Requires the number to be a +E.164 string.
+// needing to answer). Requires the number to be a +E.164 string so arbitrary
+// input can never reach the URL scheme (e.g. an email handle or injected
+// shell/scheme characters).
 func triggerFaceTime(number string) error {
 	number = strings.TrimSpace(number)
 	if number == "" {
 		return fmt.Errorf("facetime requires a number")
+	}
+	if !validE164(number) {
+		return fmt.Errorf("facetime number %q is not a valid +E.164 string", number)
 	}
 	cmd := exec.Command("open", "facetime://"+number)
 	if out, err := cmd.CombinedOutput(); err != nil {

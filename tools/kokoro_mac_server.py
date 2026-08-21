@@ -21,6 +21,7 @@ mlx-community/Kokoro-82M-8bit (config.json + safetensors + voices/).
 """
 import argparse
 import base64
+import hmac
 import io
 import signal
 import sys
@@ -30,6 +31,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import numpy as np
+
+# Requests larger than this are rejected outright: a legitimate TTS payload is
+# a few KB of text, so anything bigger is abuse or a bug (memory DoS guard).
+MAX_BODY_BYTES = 1 << 20
 
 _token = ""
 _kokoro = None
@@ -50,9 +55,9 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[kokoro] " + (fmt % args) + "\n")
 
     def _check_token(self):
-        if not _token:
-            return True
-        return self.headers.get("X-Clark-Kokoro-Token", "") == _token
+        # Constant-time comparison so token bytes are never leaked via timing.
+        got = self.headers.get("X-Clark-Kokoro-Token", "")
+        return hmac.compare_digest(got, _token)
 
     def do_POST(self):
         if urlparse(self.path).path != "/tts":
@@ -63,6 +68,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self._json(400, {"error": "invalid Content-Length"})
+            return
+        if length > MAX_BODY_BYTES:
+            self._json(413, {"error": "body too large"})
+            return
+        try:
             body = json_loads(self.rfile.read(length))
         except Exception:
             self._json(400, {"error": "invalid JSON body"})
@@ -134,8 +146,22 @@ def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--model", required=True, help="local dir with config.json + safetensors + voices/")
     parser.add_argument("--voice", default="am_michael")
+    parser.add_argument("--allow-no-token", action="store_true",
+                        help="dev only: run without a shared token (auth disabled)")
     parser.add_argument("--token", default=os.environ.get("KOKORO_TOKEN", ""))
     args = parser.parse_args()
+
+    # Fail closed (#57): an empty token silently disabled auth, leaving the
+    # synthesis endpoint open to anyone who can reach the Mac. Refuse to start
+    # instead; pass --allow-no-token explicitly to opt out (dev only).
+    if not args.token and not args.allow_no_token:
+        print(
+            "error: a non-empty --token (or KOKORO_TOKEN env) is required. "
+            "The TTS endpoint can synthesize speech in Clark's voice, so it must never run unauthenticated. "
+            "Pass --allow-no-token to override for local development only.",
+            file=sys.stderr,
+        )
+        return 2
 
     _token = args.token
     _voice = args.voice

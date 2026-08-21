@@ -17,11 +17,15 @@ services:
       - PALACE_NAME=${PALACE_NAME:-Palace}
       - BYPASS_PHRASE=${BYPASS_PHRASE:-get him to me}
       - INNER_CIRCLE=${INNER_CIRCLE:-}
-      # iMessage bridge transport. Never published to a host port: NPM proxies
-      # https://clark.<domain>/ to http://clark:8090 inside the Docker network.
+      # iMessage bridge transport. The bridge API listens on its own address
+      # (:8091), separate from the public web console — it is never reachable
+      # through https://clark.<domain>/. The macOS bridge daemon connects over
+      # Tailscale, e.g. IMESSAGE_BRIDGE_URL=http://<server-tailnet-ip>:8091.
+      # To expose 8091 to the tailnet only, uncomment the ports block below
+      # AND firewall host port 8091 to your tailnet subnet.
       - IMESSAGE_ENABLED=${IMESSAGE_ENABLED:-0}
-      - IMESSAGE_LISTEN_ADDR=:8090
-      - IMESSAGE_BRIDGE_TOKEN=${IMESSAGE_BRIDGE_TOKEN:-}
+      - IMESSAGE_LISTEN_ADDR=:8091
+      - IMESSAGE_BRIDGE_TOKEN=${IMESSAGE_BRIDGE_TOKEN:?set IMESSAGE_BRIDGE_TOKEN in your .env}
       - IMESSAGE_SELF_HANDLE=${IMESSAGE_SELF_HANDLE:-}
       # Web console (bento dashboard + chat). WEB_TOKEN is mandatory when
       # enabled: the server refuses to start without it (port 443 is public).

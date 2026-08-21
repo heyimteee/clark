@@ -61,6 +61,28 @@ func TestTriggerFaceTimeRequiresNumber(t *testing.T) {
 	}
 }
 
+func TestValidE164(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"+628117705636", true},
+		{"+12125550123", true},
+		{"628117705636", false},      // missing +
+		{"+02125550123", false},      // leading 0 after +
+		{"+1212", false},             // too short
+		{"+12125550123;echo", false}, // injection attempt
+		{"attacker@evil.com", false}, // email handle
+		{"+1212 555 0123", false},    // spaces rejected (caller must trim/normalize)
+		{"facetime://x", false},      // scheme smuggling
+	}
+	for _, c := range cases {
+		if got := validE164(c.in); got != c.want {
+			t.Errorf("validE164(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 func TestMacPhoneNumber(t *testing.T) {
 	// macPhoneNumber lives in internal/app; verify the digits-only rule here is
 	// covered by the app's own tests. This guards the helper contract.

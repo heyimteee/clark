@@ -182,7 +182,7 @@ func (a *App) Run() error {
 		return macAction(a.cfg, map[string]any{"type": "banner", "title": title, "body": body})
 	})
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		errCh <- whatsapp.Run(ctx, whatsapp.Options{
 			DBPath:       a.cfg.DBPath,
@@ -199,18 +199,14 @@ func (a *App) Run() error {
 		})
 	}()
 
+	if a.cfg.IMessageEnabled {
+		msgr := imessage.NewMessenger(a.st, a.cfg.IMessageSelfHandle)
+		alerts.SetIMessageSender(func(ctx context.Context, text string) error {
+			return msgr.SendSelf(ctx, text)
+		})
+	}
+
 	if a.cfg.WebEnabled {
-		var bridge http.Handler
-		if a.cfg.IMessageEnabled {
-			msgr := imessage.NewMessenger(a.st, a.cfg.IMessageSelfHandle)
-			alerts.SetIMessageSender(func(ctx context.Context, text string) error {
-				return msgr.SendSelf(ctx, text)
-			})
-			handler := gateway.NewHandler("IMESSAGE", msgr, a.ast, alerts, a.cfg.BypassPhrase)
-			imessage.RegisterSendMessageTool(a.ast.Tools(), msgr, a.ast.LookupIMessage)
-			bridge = imessage.NewServer(a.cfg.IMessageBridgeToken, a.cfg.IMessageSelfHandle, a.st, handler).Routes()
-			logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "Bridge routes mounted inside web console", "addr", a.cfg.IMessageListenAddr)
-		}
 		engine := buildVoiceEngine(a.cfg)
 		// Pre-warm any resident TTS daemon (piper, or the failover's piper
 		// backup) so the model is loaded before first use.
@@ -222,26 +218,28 @@ func (a *App) Run() error {
 			}
 		}
 		errCh <- web.Run(ctx, web.Options{
-			ListenAddr:     a.cfg.IMessageListenAddr,
+			ListenAddr:     a.cfg.WebListenAddr,
 			WebToken:       a.cfg.WebToken,
 			AlertToken:     a.cfg.AlertToken,
 			Butler:         a.ast,
 			Store:          a.st,
 			Voice:          engine,
-			Bridge:         bridge,
 			STTModel:       a.cfg.STTModel,
 			TTSEngine:      a.cfg.TTSEngine,
 			AffirmationDir: a.cfg.AffirmationDir,
 			Alerts:         alerts,
 		})
-	} else if a.cfg.IMessageEnabled {
-		logging.Log("IMESSAGE", logging.SevNotice, "SERVER", "iMessage bridge transport enabled",
-			"listen", a.cfg.IMessageListenAddr)
+	}
+
+	// The iMessage bridge API always runs on its own listener (default :8091),
+	// never inside the public console mux (#57). The macOS bridge daemon is
+	// the only intended client.
+	if a.cfg.IMessageEnabled {
 		go func() {
 			errCh <- imessage.Run(ctx, imessage.Options{
 				Out:          a.st,
 				Butler:       a.ast,
-				Notifier:     a.notifier(),
+				Notifier:     alerts,
 				Tools:        a.ast.Tools(),
 				SelfHandle:   a.cfg.IMessageSelfHandle,
 				BypassPhrase: a.cfg.BypassPhrase,

@@ -34,7 +34,6 @@ type Options struct {
 	AlertToken     string
 	Butler         *assistant.Service
 	Store          *store.Store
-	Bridge         http.Handler
 	Voice          *voice.Engine
 	STTModel       string
 	TTSEngine      string
@@ -137,9 +136,9 @@ func New(opts Options) *Server {
 	}
 	s.mux.HandleFunc("/web/", s.handleSPA)
 
-	if opts.Bridge != nil {
-		s.mux.Handle("/", opts.Bridge)
-	}
+	// Security boundary (#57): the iMessage bridge API is NOT mounted here.
+	// It runs on its own listener (IMESSAGE_LISTEN_ADDR) so the public console
+	// ingress can never reach /inbound, /outbound, or /ack.
 	return s
 }
 

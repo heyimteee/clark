@@ -27,15 +27,17 @@ type Config struct {
 	NoNotify     bool     // CLARK_NO_NOTIFY   suppress desktop notifications (headless)
 
 	// iMessage bridge transport. The bridge daemon on the Mac watches
-	// chat.db and polls this transport's HTTP API over the reverse proxy.
+	// chat.db and polls this transport's HTTP API over the network. The API
+	// listens on its own address, separate from the public web console.
 	IMessageEnabled     bool   // IMESSAGE_ENABLED       "true" to serve the bridge API
-	IMessageListenAddr  string // IMESSAGE_LISTEN_ADDR   default ":8090"
-	IMessageBridgeToken string // IMESSAGE_BRIDGE_TOKEN  shared secret for the bridge
+	IMessageListenAddr  string // IMESSAGE_LISTEN_ADDR   default ":8091"
+	IMessageBridgeToken string // IMESSAGE_BRIDGE_TOKEN  shared secret for the bridge (required)
 	IMessageSelfHandle  string // IMESSAGE_SELF_HANDLE   Master's own "+6281111111111"
 
 	// Web console transport. Serves the bento dashboard + chat on :8090.
-	WebEnabled      bool   // WEB_ENABLED   "1"/"true"/"on" to serve the console
-	WebToken        string // WEB_TOKEN     required when WEB_ENABLED
+	WebEnabled      bool   // WEB_ENABLED      "1"/"true"/"on" to serve the console
+	WebListenAddr   string // WEB_LISTEN_ADDR  default ":8090"
+	WebToken        string // WEB_TOKEN        required when WEB_ENABLED
 	AlertToken      string // ALERT_TOKEN   shared secret for monitoring alert webhooks
 	STTEngine       string // STT_ENGINE    "faster-whisper" (default) or "ollama"
 	STTModel        string // STT_MODEL     Ollama model for transcription (default whisper-turbo; STT_ENGINE=ollama only)
@@ -86,13 +88,26 @@ func Load() (*Config, error) {
 
 	listenAddr := os.Getenv("IMESSAGE_LISTEN_ADDR")
 	if listenAddr == "" {
-		listenAddr = ":8090"
+		listenAddr = ":8091"
+	}
+
+	webListenAddr := os.Getenv("WEB_LISTEN_ADDR")
+	if webListenAddr == "" {
+		webListenAddr = ":8090"
 	}
 
 	webEnabled := envOn(os.Getenv("WEB_ENABLED"))
 	webToken := os.Getenv("WEB_TOKEN")
 	if webEnabled && webToken == "" {
 		return nil, fmt.Errorf("WEB_ENABLED=1 requires WEB_TOKEN set in your .env. Generate one with: openssl rand -hex 32")
+	}
+
+	imessageEnabled := envOn(os.Getenv("IMESSAGE_ENABLED"))
+	imessageBridgeToken := os.Getenv("IMESSAGE_BRIDGE_TOKEN")
+	if imessageEnabled && imessageBridgeToken == "" {
+		return nil, fmt.Errorf("IMESSAGE_ENABLED=1 requires IMESSAGE_BRIDGE_TOKEN set in your .env. " +
+			"The bridge API accepts messages and reads the outbound queue, so it must never run unauthenticated. " +
+			"Generate one with: openssl rand -hex 32")
 	}
 
 	sttEngine := os.Getenv("STT_ENGINE")
@@ -161,12 +176,13 @@ func Load() (*Config, error) {
 		InnerCircle:  parsePeople(os.Getenv("INNER_CIRCLE")),
 		NoNotify:     noNotifyOn,
 
-		IMessageEnabled:     envOn(os.Getenv("IMESSAGE_ENABLED")),
+		IMessageEnabled:     imessageEnabled,
 		IMessageListenAddr:  listenAddr,
-		IMessageBridgeToken: os.Getenv("IMESSAGE_BRIDGE_TOKEN"),
+		IMessageBridgeToken: imessageBridgeToken,
 		IMessageSelfHandle:  os.Getenv("IMESSAGE_SELF_HANDLE"),
 
 		WebEnabled:      webEnabled,
+		WebListenAddr:   webListenAddr,
 		WebToken:        webToken,
 		AlertToken:      os.Getenv("ALERT_TOKEN"),
 		STTEngine:       sttEngine,

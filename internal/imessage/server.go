@@ -3,6 +3,7 @@ package imessage
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -13,6 +14,11 @@ import (
 // maxMessageAge is the staleness threshold — messages older than this are
 // silently dropped to prevent spam after bridge restarts or reconnections.
 const maxMessageAge = 5 * time.Minute
+
+// maxBodyBytes caps request bodies (inbound messages, acks) so a runaway or
+// hostile peer cannot exhaust memory with a giant JSON payload. A real text
+// message is orders of magnitude smaller.
+const maxBodyBytes = 256 << 10
 
 // Server exposes the bridge-facing HTTP API: it accepts inbound messages,
 // serves outbound ones for the bridge to deliver, and receives delivery acks.
@@ -59,8 +65,8 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 // handleInbound feeds one bridge-delivered message into the gateway pipeline.
 func (s *Server) handleInbound(w http.ResponseWriter, r *http.Request) {
 	var in InboundMessage
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&in); err != nil {
+		writeBodyError(w, err)
 		return
 	}
 	if in.Handle == "" || in.Text == "" {
@@ -121,8 +127,8 @@ func (s *Server) handleOutbound(w http.ResponseWriter, r *http.Request) {
 // handleAck removes a delivered outbound message from the queue.
 func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 	var ack AckRequest
-	if err := json.NewDecoder(r.Body).Decode(&ack); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&ack); err != nil {
+		writeBodyError(w, err)
 		return
 	}
 	if ack.ID < 1 {
@@ -135,6 +141,17 @@ func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// writeBodyError maps a body-decode failure to a status: an over-limit body is
+// a 413 (the client must not retry it as-is), anything else a 400.
+func writeBodyError(w http.ResponseWriter, err error) {
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
+		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	http.Error(w, "invalid JSON body", http.StatusBadRequest)
 }
 
 // toGateway maps a bridge message to the neutral gateway representation. The

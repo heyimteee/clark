@@ -180,6 +180,22 @@ func TestServerAckInvalid(t *testing.T) {
 	}
 }
 
+// TestServerRejectsOversizedBodies guards against memory exhaustion: inbound
+// and ack bodies beyond maxBodyBytes must be rejected with 413.
+func TestServerRejectsOversizedBodies(t *testing.T) {
+	ts, _ := newTestServer(t, "secret", &fakeOutbound{})
+
+	huge := `{"handle":"+6281267858909","text":"` + strings.Repeat("a", 300<<10) + `"}`
+	if rec := doRequest(ts, "POST", "/inbound", "secret", huge); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized inbound = %d, want 413", rec.Code)
+	}
+
+	hugeAck := `{"id":1,"pad":"` + strings.Repeat("a", 300<<10) + `"}`
+	if rec := doRequest(ts, "POST", "/ack", "secret", hugeAck); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized ack = %d, want 413", rec.Code)
+	}
+}
+
 func TestToGateway(t *testing.T) {
 	in := InboundMessage{ID: "7", Handle: "+6281267858909", Text: "ping", IsSelf: true}
 	msg := toGateway(in)
