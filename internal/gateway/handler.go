@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,8 +19,14 @@ type Handler struct {
 	msgr      Messenger
 	butler    Butler
 	notifier  Notifier
-	commands  []command
 	disp      *dispatcher
+
+	// bypassRe matches the urgent phrase on word boundaries; lastAlert holds
+	// per-chat fire times for the cooldown window.
+	bypassRe    *regexp.Regexp
+	clock       func() time.Time
+	lastAlertMu sync.Mutex
+	lastAlert   map[string]time.Time
 
 	// dedup tracks recently processed message IDs to prevent re-delivery
 	// on bridge restarts. Entries are evicted after dedupTTL.
@@ -31,22 +38,41 @@ type Handler struct {
 // transport in logs (e.g. "WHATSAPP"). bypassPhrase is the command word that
 // triggers an urgent alert; empty falls back to "get him to me".
 func NewHandler(component string, msgr Messenger, butler Butler, notifier Notifier, bypassPhrase string) *Handler {
-	h := &Handler{
-		component: component,
-		msgr:      msgr,
-		butler:    butler,
-		notifier:  notifier,
-		disp:      newDispatcher(component, butler, msgr),
-		dedup:     make(map[string]time.Time),
-	}
 	bypass := strings.TrimSpace(bypassPhrase)
 	if bypass == "" {
-		bypass = "get him to me"
+		bypass = defaultBypassPhrase
 	}
-	h.commands = []command{
-		{phrase: bypass, run: h.alert},
+	h := &Handler{
+		component:  component,
+		msgr:       msgr,
+		butler:     butler,
+		notifier:   notifier,
+		disp:       newDispatcher(component, butler, msgr),
+		dedup:      make(map[string]time.Time),
+		bypassRe:   compileBypass(bypass),
+		clock:      time.Now,
+		lastAlert:  make(map[string]time.Time),
 	}
 	return h
+}
+
+const defaultBypassPhrase = "get him to me"
+
+// bypassCooldown is the minimum spacing between alert cascades from one chat.
+// A VIP repeating the phrase (or a message that happens to contain it) must
+// not machine-gun FaceTime calls and voice alerts at the Master (#60).
+const bypassCooldown = 90 * time.Second
+
+// compileBypass builds a case-insensitive, word-boundary matcher for the
+// phrase so punctuation-suffixed phrases trigger while embedded lookalikes
+// ("get him to meow") do not.
+func compileBypass(phrase string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(phrase) + `\b`)
+}
+
+// bypassMatches reports whether text contains the phrase on word boundaries.
+func bypassMatches(text, phrase string) bool {
+	return compileBypass(phrase).MatchString(text)
 }
 
 // Close stops the background dispatcher and waits for in-flight replies.
@@ -93,12 +119,17 @@ func (h *Handler) Handle(msg Message) {
 	msg.Text = SanitizeInbound(msg.Text)
 
 	ctx := context.Background()
-	lower := strings.ToLower(msg.Text)
-	for _, c := range h.commands {
-		if strings.Contains(lower, c.phrase) {
-			c.run(ctx, msg.Chat, relation)
+	// Urgent command: match on word boundaries and honor the per-chat
+	// cooldown so repeats cannot spam the alert cascade (#60).
+	if h.bypassRe.MatchString(msg.Text) {
+		if !h.alertAllowed(msg.Chat) {
+			if err := h.msgr.Send(ctx, msg.Chat, "_One moment._ I have only just alerted the Master — he has heard you."); err != nil {
+				logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send cooldown reply", "to", msg.Chat, "error", err)
+			}
 			return
 		}
+		h.alert(ctx, msg.Chat, relation)
+		return
 	}
 
 	// Fast path: deterministic commands answered with hardcoded messages.
@@ -239,17 +270,34 @@ func (d *dispatcher) close() {
 func (h *Handler) alert(ctx context.Context, chat, relation string) {
 	title := "Attention Sir!"
 	body := relation + " needs you!"
-	// Prefer the kind-aware alert notifier (delivers to WhatsApp, web chat, and
-	// voice in one shot); fall back to the legacy two-arg Notify + self-chat.
+	// Prefer the kind-aware alert notifier (delivers to WhatsApp, web chat,
+	// and voice in one shot); fall back to the legacy two-arg Notify +
+	// self-chat. A nil notifier (tests, headless wiring) skips desktop
+	// notification but still answers the sender.
 	if an, ok := h.notifier.(AlertNotifier); ok && an != nil {
 		an.Alert(ctx, "bypass", title, body)
 	} else {
-		if err := h.notifier.Notify(title, body); err != nil {
-			logging.Log("CLARK", logging.SevWarn, "NOTIFY", "Notification failed", "error", err)
+		if h.notifier != nil {
+			if err := h.notifier.Notify(title, body); err != nil {
+				logging.Log("CLARK", logging.SevWarn, "NOTIFY", "Notification failed", "error", err)
+			}
 		}
 		h.msgr.SendSelf(ctx, "🚨 "+title+"\n"+body)
 	}
 	h.msgr.Send(ctx, chat, "_One moment._ I've alerted the Master.")
+}
+
+// alertAllowed reports whether chat may fire the alert cascade now, marking
+// the fire when allowed. Chats inside the cooldown window are refused.
+func (h *Handler) alertAllowed(chat string) bool {
+	now := h.clock()
+	h.lastAlertMu.Lock()
+	defer h.lastAlertMu.Unlock()
+	if last, ok := h.lastAlert[chat]; ok && now.Sub(last) < bypassCooldown {
+		return false
+	}
+	h.lastAlert[chat] = now
+	return true
 }
 
 const dedupTTL = 10 * time.Minute

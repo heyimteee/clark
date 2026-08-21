@@ -93,3 +93,49 @@ func clientIP(r *http.Request) string {
 func logAuthFailure(src, detail string) {
 	logging.Log("WEB", logging.SevWarn, "LOGIN", "Failed web login attempt", "source", src, "reason", detail)
 }
+
+// tokenBucket is a minimal rate limiter: burst tokens refilling at rate
+// tokens per minute. Used for webhook endpoints where a flood would cascade
+// into message bombing of the Master (#60).
+type tokenBucket struct {
+	mu     sync.Mutex
+	tokens float64
+	last   time.Time
+	rate   float64 // tokens per second
+	burst  float64
+	now    func() time.Time
+}
+
+func newTokenBucket(perMinute, burst int) *tokenBucket {
+	return &tokenBucket{
+		tokens: float64(burst),
+		last:   time.Now(),
+		rate:   float64(perMinute) / 60,
+		burst:  float64(burst),
+		now:    time.Now,
+	}
+}
+
+// allow consumes one token if available, refilling for elapsed time first.
+func (b *tokenBucket) allow() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	elapsed := now.Sub(b.last).Seconds()
+	if elapsed > 0 {
+		b.tokens = min64(b.burst, b.tokens+elapsed*b.rate)
+		b.last = now
+	}
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func min64(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}

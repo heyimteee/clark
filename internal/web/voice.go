@@ -136,6 +136,11 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bound concurrent transcriptions: whisper is CPU-hungry and shares the
+	// box with Ollama; unbounded concurrency starves everything else (#60).
+	s.sttSlots <- struct{}{}
+	defer func() { <-s.sttSlots }()
+
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	logging.Log("WEB", logging.SevInfo, "STT", "Transcribing", "audio_bytes", len(audio))

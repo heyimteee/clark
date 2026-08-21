@@ -8,6 +8,14 @@ import (
 	"github.com/heyimteee/clark/internal/logging"
 )
 
+// Notify webhook rate limiting: a flood of accepted alerts cascades into
+// WhatsApp/iMessage/voice delivery, so bursts beyond this budget are refused
+// with 429 (#60).
+const (
+	notifyPerMinute = 5
+	notifyBurst     = 5
+)
+
 // handleNotify accepts monitoring/alarm webhooks (Netdata, Uptime Kuma, and the
 // server's bootwatch service) and pushes them to the Master through the shared
 // alert service: WhatsApp, the web console chat, and spoken voice.
@@ -24,6 +32,11 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.alertToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Clark-Alert-Token")), []byte(s.alertToken)) != 1 {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
+	if !s.notifyLimiter.allow() {
+		logging.Log("WEB", logging.SevWarn, "ALERT", "Alert webhook rate limited")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many alerts; slow down"})
 		return
 	}
 	var body struct {

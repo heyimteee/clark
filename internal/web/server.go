@@ -65,7 +65,15 @@ type Server struct {
 	sessions *sessionManager
 	logins   *loginThrottle
 	hub      *chatHub
+
+	// notifyLimiter bounds alert-webhook bursts; sttSlots caps concurrent
+	// whisper transcriptions so CPU-bound STT cannot starve the box (#60).
+	notifyLimiter *tokenBucket
+	sttSlots      chan struct{}
 }
+
+// sttMaxConcurrency is how many transcriptions may run at once.
+const sttMaxConcurrency = 2
 
 // New builds the console server (nothing listens yet; app wires the listener).
 func New(opts Options) *Server {
@@ -78,20 +86,22 @@ func New(opts Options) *Server {
 		maxLife = defaultSessionMaxLife
 	}
 	s := &Server{
-		mux:          http.NewServeMux(),
-		webToken:     opts.WebToken,
-		alertToken:   opts.AlertToken,
-		butler:       opts.Butler,
-		store:        opts.Store,
-		voice:        opts.Voice,
-		sttModel:     opts.STTModel,
-		ttsEngine:    opts.TTSEngine,
-		affirmations: opts.AffirmationDir,
-		listen:       opts.ListenAddr,
-		alerts:       opts.Alerts,
-		sessions:     newSessionManager(ttl, maxLife),
-		logins:       newLoginThrottle(),
-		hub:          newChatHub(),
+		mux:           http.NewServeMux(),
+		webToken:      opts.WebToken,
+		alertToken:    opts.AlertToken,
+		butler:        opts.Butler,
+		store:         opts.Store,
+		voice:         opts.Voice,
+		sttModel:      opts.STTModel,
+		ttsEngine:     opts.TTSEngine,
+		affirmations:  opts.AffirmationDir,
+		listen:        opts.ListenAddr,
+		alerts:        opts.Alerts,
+		sessions:      newSessionManager(ttl, maxLife),
+		logins:        newLoginThrottle(),
+		hub:           newChatHub(),
+		notifyLimiter: newTokenBucket(notifyPerMinute, notifyBurst),
+		sttSlots:      make(chan struct{}, sttMaxConcurrency),
 	}
 	if s.alerts != nil {
 		// Wire the console chat broadcast into the shared alert service so any

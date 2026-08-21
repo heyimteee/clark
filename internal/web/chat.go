@@ -96,7 +96,9 @@ func (s *Server) handleBinaryFrame(ctx context.Context, c *websocket.Conn, data 
 		}
 		sttCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		defer cancel()
+		s.sttSlots <- struct{}{}
 		text, err := s.voice.STT.Transcribe(sttCtx, audio)
+		<-s.sttSlots
 		if err != nil {
 			s.writeBinaryFrame(ctx, c, 0x02, []byte("transcription failed"))
 			return

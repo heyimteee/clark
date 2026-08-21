@@ -126,6 +126,73 @@ func TestHandlerCustomBypassPhraseAlerts(t *testing.T) {
 	}
 }
 
+// TestHandlerBypassWordBoundary guards #60: the phrase must match on word
+// boundaries so punctuation-suffixed phrases trigger but embedded lookalikes
+// do not.
+func TestHandlerBypassWordBoundary(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"get him to me", true},
+		{"Get Him To Me!", true},   // case + trailing punctuation
+		{"please get him to me now", true},
+		{"(get him to me)", true},
+		{"target him to me", false}, // different first word
+		{"get him to meow", false},  // glued suffix must not match
+	}
+	for _, c := range cases {
+		if got := bypassMatches(c.text, "get him to me"); got != c.want {
+			t.Errorf("bypassMatches(%q) = %v, want %v", c.text, got, c.want)
+		}
+	}
+}
+
+// TestHandlerBypassCooldown guards #60: repeated bypass phrases from one chat
+// within the cooldown window must not re-fire the alert cascade.
+func TestHandlerBypassCooldown(t *testing.T) {
+	msgr := &fakeMessenger{}
+	butler := &fakeButler{enabled: true}
+	note := &fakeNotifier{}
+	h := NewHandler("WHATSAPP", msgr, butler, note, "")
+
+	h.Handle(testMsg(testVIP, "get him to me"))
+	h.Handle(testMsg(testVIP, "get him to me"))
+	h.Close()
+
+	if n := len(note.calls); n != 1 {
+		t.Fatalf("alerts delivered = %d, want 1 (cooldown suppressed the repeat)", n)
+	}
+	if msgr.sentSelf != 1 {
+		t.Fatalf("self alerts = %d, want 1 (cooldown suppressed the repeat)", msgr.sentSelf)
+	}
+	// The sender still gets a reply both times — just without re-alerting.
+	if len(msgr.sentTo) != 2 {
+		t.Fatalf("replies = %d, want 2", len(msgr.sentTo))
+	}
+}
+
+// TestHandlerBypassCooldownExpires verifies the window releases.
+func TestHandlerBypassCooldownExpires(t *testing.T) {
+	msgr := &fakeMessenger{}
+	butler := &fakeButler{enabled: true}
+	note := &fakeNotifier{}
+	h := NewHandler("WHATSAPP", msgr, butler, note, "")
+
+	now := time.Now()
+	clock := func() time.Time { return now }
+	h.clock = clock
+
+	h.Handle(testMsg(testVIP, "get him to me"))
+	now = now.Add(bypassCooldown + time.Second)
+	h.Handle(testMsg(testVIP, "get him to me"))
+	h.Close()
+
+	if len(note.calls) != 2 {
+		t.Fatalf("alerts after expiry = %d, want 2", len(note.calls))
+	}
+}
+
 func TestHandlerDisabledVIPIgnored(t *testing.T) {
 	msgr := &fakeMessenger{}
 	butler := &fakeButler{enabled: false}
