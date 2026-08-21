@@ -24,9 +24,9 @@ RUN apt-get update \
 
 RUN mkdir -p /opt/piper/voices \
     && curl -fsSL -o /opt/piper/voices/en_US-ryan-high.onnx \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx \
+        https://huggingface.co/rhasspy/piper-voices/resolve/f5a6e9094787fd865d65cb024472f977f9c542b5/en/en_US/ryan/high/en_US-ryan-high.onnx \
     && curl -fsSL -o /opt/piper/voices/en_US-ryan-high.onnx.json \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx.json
+        https://huggingface.co/rhasspy/piper-voices/resolve/f5a6e9094787fd865d65cb024472f977f9c542b5/en/en_US/ryan/high/en_US-ryan-high.onnx.json
 
 # ---- runtime stage ----
 # bookworm-slim (glibc) because piper's binaries are glibc-linked and fail on
@@ -37,13 +37,14 @@ FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip espeak-ng curl \
-    && pip3 install --no-cache-dir --break-system-packages piper-tts faster-whisper \
+    && pip3 install --no-cache-dir --break-system-packages piper-tts==1.2.0 faster-whisper==1.0.3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the faster-whisper small model (downloaded from HF at build time):
 # multilingual, ~461 MB, noticeably better digit/word accuracy than tiny and
-# still fast on the CPU. Handles long-form speech well.
-RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small', local_dir='/opt/whisper/model')"
+# still fast on the CPU. Handles long-form speech well. Pinned to an immutable
+# revision so a moved ref can never change what ships in the image (#61).
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small', revision='536b0662742c02347bc0e980a01041f333bce120', local_dir='/opt/whisper/model')"
 
 COPY --from=build /out/clark /usr/local/bin/clark
 COPY --from=piper-download /opt/piper /opt/piper

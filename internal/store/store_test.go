@@ -1,6 +1,8 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -425,5 +427,21 @@ func TestClearHistoryScopedToJID(t *testing.T) {
 	}
 	if len(other) != 1 || other[0].Content != "kept" {
 		t.Errorf("other history = %+v, want the untouched 'kept' message", other)
+	}
+}
+
+func TestOpenSetsDBFileMode0600(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perm.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("db mode = %v, want -rw------- (contains WhatsApp session keys)", fi.Mode().Perm())
 	}
 }

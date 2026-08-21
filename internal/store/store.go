@@ -5,9 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/heyimteee/clark/internal/logging"
 )
 
 // Message is a single chat history entry.
@@ -78,7 +82,9 @@ type Store struct {
 	db *sql.DB
 }
 
-// Open opens (creating if needed) the SQLite database at dbPath and runs migrations.
+// Open opens (creating if needed) the SQLite database at dbPath and runs
+// migrations. The file holds WhatsApp session keys and private chat history,
+// so it is tightened to owner-only permissions (#61).
 func Open(dbPath string) (*Store, error) {
 	rawDb, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -88,6 +94,13 @@ func Open(dbPath string) (*Store, error) {
 	if err := rawDb.Ping(); err != nil {
 		rawDb.Close()
 		return nil, fmt.Errorf("fail to ping database: %w", err)
+	}
+
+	// Best-effort hardening: real files only, ignore :memory: and URIs.
+	if !strings.Contains(dbPath, ":") && dbPath != "" {
+		if err := os.Chmod(dbPath, 0o600); err != nil && !os.IsNotExist(err) {
+			logging.Log("STORE", logging.SevWarn, "OPEN", "Could not tighten database permissions", "error", err.Error())
+		}
 	}
 
 	s := &Store{db: rawDb}

@@ -87,6 +87,7 @@ main() {
   echo "Latest release: $tag"
 
   url="https://github.com/${REPO}/releases/download/${tag}/${BIN}_${os_arch}.tar.gz"
+  sums_url="https://github.com/${REPO}/releases/download/${tag}/${BIN}_checksums.txt"
   echo "Downloading $url"
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' EXIT
@@ -95,6 +96,27 @@ main() {
     echo "Download failed: $url" >&2
     echo "Try: brew install heyimteee/tap/clark" >&2
     exit 1
+  fi
+
+  # Verify the release checksum before anything touches the system (#61).
+  if curl -fsSL "$sums_url" -o "$tmpdir/checksums.txt" 2>/dev/null; then
+    expected="$(grep " ${BIN}_${os_arch}.tar.gz\$" "$tmpdir/checksums.txt" | awk '{print $1}')"
+    if [[ -z "$expected" ]]; then
+      echo "Checksum entry for ${BIN}_${os_arch}.tar.gz not found in checksums.txt" >&2
+      exit 1
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual="$(sha256sum "$tmpdir/clark.tar.gz" | awk '{print $1}')"
+    else
+      actual="$(shasum -a 256 "$tmpdir/clark.tar.gz" | awk '{print $1}')"
+    fi
+    if [[ "$actual" != "$expected" ]]; then
+      echo "Checksum mismatch! expected=$expected actual=$actual" >&2
+      exit 1
+    fi
+    echo "Checksum OK"
+  else
+    echo "Warning: checksums.txt unavailable; skipping verification" >&2
   fi
 
   tar -xzf "$tmpdir/clark.tar.gz" -C "$tmpdir"

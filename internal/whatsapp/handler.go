@@ -145,11 +145,11 @@ func logIncoming(v *events.Message, sender types.JID, who string, isVIP bool, co
 		"chat", chatType,
 		"vip", vip,
 		"direction", direction,
-		"msg", content)
+		"msg", logging.Brief(content, 60))
 }
 
 func logReply(toNumber, content string) {
 	logging.Log("WHATSAPP", logging.SevInfo, "SEND", "Message sent",
 		"to", toNumber,
-		"msg", content)
+		"msg", logging.Brief(content, 60))
 }

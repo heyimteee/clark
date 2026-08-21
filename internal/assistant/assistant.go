@@ -852,10 +852,9 @@ func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Messa
 				out = "Error: " + err.Error()
 				logging.Log("TOOLS", logging.SevWarn, "TRIGGER", "Tool failed", "tool", tc.Function.Name, "error", err.Error())
 			} else {
-				preview := out
-				if len(preview) > 200 {
-					preview = preview[:200] + "..."
-				}
+				// Tool results can carry private content (history dumps, search
+				// snippets); keep a short prefix for context only (#61).
+				preview := logging.Brief(out, 80)
 				logging.Log("TOOLS", logging.SevInfo, "TRIGGER", "Tool result", "tool", tc.Function.Name, "result", preview)
 			}
 			ranTools[tc.Function.Name] = true
@@ -1010,10 +1009,9 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 				out = "Error: " + err.Error()
 				logging.Log("TOOLS", logging.SevWarn, "TRIGGER", "Tool failed", "tool", tc.Function.Name, "error", err.Error())
 			} else {
-				preview := out
-				if len(preview) > 200 {
-					preview = preview[:200] + "..."
-				}
+				// Tool results can carry private content (history dumps, search
+				// snippets); keep a short prefix for context only (#61).
+				preview := logging.Brief(out, 80)
 				logging.Log("TOOLS", logging.SevInfo, "TRIGGER", "Tool result", "tool", tc.Function.Name, "result", preview)
 			}
 			ranTools[tc.Function.Name] = true

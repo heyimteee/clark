@@ -305,6 +305,17 @@ func Log(component string, sev Severity, event, msg string, fields ...any) {
 	stdLogger.Log(context.Background(), slogLevel(sev), msg, attrs...)
 }
 
+// Brief truncates s to at most max runes, appending an ellipsis when content
+// was cut. Message bodies are private: logs keep a short prefix for context
+// instead of full conversation text (#61).
+func Brief(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
+}
+
 // Fatalf logs a SYSTEM severity-3 error and terminates the process.
 func Fatalf(event, msg string, fields ...any) {
 	Log("SYSTEM", SevErr, event, formatMessage(msg, fields))

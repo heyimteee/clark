@@ -682,7 +682,7 @@ func pidPath(cfg *config.Config) string {
 }
 
 func writePidFile(cfg *config.Config) error {
-	return os.WriteFile(pidPath(cfg), []byte(strconv.Itoa(os.Getpid())), 0644)
+	return os.WriteFile(pidPath(cfg), []byte(strconv.Itoa(os.Getpid())), 0o600)
 }
 
 func removePidFile(cfg *config.Config) {
