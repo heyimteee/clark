@@ -8,40 +8,41 @@ package alert
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/heyimteee/clark/internal/logging"
 )
 
-// Butler is the model-backed conversational brain used only for the AI
-// fallback of unmapped alert kinds. The web server's *assistant.Service
-// satisfies it.
-type Butler interface {
-	ReplyLLM(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, string, error)
+// Summarizer renders an unmapped alert kind as a short factual message. It is
+// deliberately narrow: implementations must be tool-less and non-persistent,
+// because webhook text is external input that must never reach a privileged
+// agent loop (#58). *assistant.Service implements this via SummarizeAlert.
+type Summarizer interface {
+	SummarizeAlert(ctx context.Context, kind, title, body string) (string, error)
 }
 
 // Service holds the alert templates and the delivery hooks. Hooks are injected
 // by the app so this package has no transport imports.
 type Service struct {
-	butler    Butler
-	hardcoded map[string]string
-	sendWA    func(ctx context.Context, text string) error
-	sendIM    func(ctx context.Context, text string) error
-	broadcast func(text string, speak bool)
-	desktop   func(title, body string) error
-	mode      func() string
-	faceTime  func(number string) error
-	banner    func(title, body string) error
+	summarizer Summarizer
+	hardcoded  map[string]string
+	sendWA     func(ctx context.Context, text string) error
+	sendIM     func(ctx context.Context, text string) error
+	broadcast  func(text string, speak bool)
+	desktop    func(title, body string) error
+	mode       func() string
+	faceTime   func(number string) error
+	banner     func(title, body string) error
 }
 
-// New returns a Service with the default hardcoded alert templates. butler may
-// be nil, in which case unmapped alerts always use the generic fallback.
-func New(butler Butler) *Service {
+// New returns a Service with the default hardcoded alert templates.
+// summarizer may be nil, in which case unmapped alerts always use the generic
+// fallback.
+func New(summarizer Summarizer) *Service {
 	return &Service{
-		butler:    butler,
-		hardcoded: defaultMessages(),
+		summarizer: summarizer,
+		hardcoded:  defaultMessages(),
 	}
 }
 
@@ -147,7 +148,7 @@ func (s *Service) render(ctx context.Context, kind, title, body string) string {
 	if tpl, ok := s.hardcoded[kind]; ok {
 		return fill(tpl, title, body)
 	}
-	if s.butler != nil {
+	if s.summarizer != nil {
 		if txt := s.aiFallback(ctx, kind, title, body); txt != "" {
 			return txt
 		}
@@ -155,21 +156,13 @@ func (s *Service) render(ctx context.Context, kind, title, body string) string {
 	return fill(genericMessage, title, body)
 }
 
-// aiFallback asks the model to summarise the alert factually, in one short
-// message addressed to the Master. It returns "" when the model is unavailable,
-// rate-limited, or returns nothing useful.
+// aiFallback asks the summarizer for a one-line factual description of the
+// alert. It returns "" when the model is unavailable, rate-limited, or returns
+// nothing useful; the caller then uses the generic template.
 func (s *Service) aiFallback(ctx context.Context, kind, title, body string) string {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	prompt := fmt.Sprintf(
-		"An automated monitoring alert just fired. Kind: %q. Title: %q. Details: %q. "+
-			"Write one short, purely factual message for the Master summarising what happened. "+
-			"Do not speculate, do not add advice, do not use markdown.", kind, title, body)
-	reply, _, err := s.butler.ReplyLLM(ctx, "web", prompt, true)
-	if err != nil {
-		return ""
-	}
-	if txt := strings.TrimSpace(reply); txt != "" {
+	if txt, err := s.summarizer.SummarizeAlert(ctx, kind, title, body); err == nil {
 		return txt
 	}
 	return ""

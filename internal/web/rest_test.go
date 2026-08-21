@@ -288,6 +288,30 @@ func TestSendMessage(t *testing.T) {
 	}
 }
 
+// TestSendMessageRejectsForeignJID guards #58: the send endpoint must only
+// ever serve the web session's own conversation. A caller-supplied VIP JID
+// would poison that conversation's stored history with master-context turns.
+func TestSendMessageRejectsForeignJID(t *testing.T) {
+	ts, _, _, st := newTestServer(t)
+	tok := login(t, ts)
+
+	victim := "6281267858909@s.whatsapp.net"
+	code, _ := postJSON(t, ts, "/web/api/send", tok, map[string]any{
+		"jid":  victim,
+		"text": "inject into another person's history",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("send with foreign jid = %d, want 400", code)
+	}
+	entries, err := st.RecentMessages(victim, 10)
+	if err != nil {
+		t.Fatalf("read victim history: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("victim jid gained %d history rows; want 0", len(entries))
+	}
+}
+
 func TestClearHistory(t *testing.T) {
 	ts, _, _, st := newTestServer(t)
 	tok := login(t, ts)

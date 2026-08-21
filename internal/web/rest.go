@@ -348,6 +348,10 @@ func (s *Server) handleClearHistory(w http.ResponseWriter, r *http.Request) {
 // handleSend delivers a message through the full AI path and returns a fresh
 // snapshot. Intended for the web chat session and scripting; the Chat WS is
 // the primary UI channel.
+//
+// Security (#58): only the web session's own conversation may be targeted. A
+// caller-supplied VIP jid would poison that person's stored history with
+// master-context turns, so any other value is rejected outright.
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		JID  string `json:"jid"`
@@ -357,9 +361,13 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "jid and text are required"})
 		return
 	}
+	if body.JID != webJID {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": `jid must be "web"`})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	reply, thinking, err := s.butler.ReplyLLM(ctx, body.JID, body.Text, true)
+	reply, thinking, err := s.butler.ReplyLLM(ctx, webJID, body.Text, true)
 	if err != nil {
 		if errors.Is(err, ollama.ErrRateLimited) {
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "I'm a bit swamped. Try again in a minute or two."})

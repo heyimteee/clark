@@ -12,11 +12,11 @@ type stubButler struct {
 	err   error
 }
 
-func (b *stubButler) ReplyLLM(_ context.Context, _, _ string, _ bool) (string, string, error) {
+func (b *stubButler) SummarizeAlert(_ context.Context, _, _, _ string) (string, error) {
 	if b.err != nil {
-		return "", "", b.err
+		return "", b.err
 	}
-	return b.reply, "", nil
+	return b.reply, nil
 }
 
 type recorder struct {
@@ -30,8 +30,8 @@ type recorder struct {
 	mode     string
 }
 
-func (r *recorder) svc(butler Butler) (*Service, *recorder) {
-	s := New(butler)
+func (r *recorder) svc(summarizer Summarizer) (*Service, *recorder) {
+	s := New(summarizer)
 	s.SetDesktop(func(_, _ string) error { r.desktopN++; return nil })
 	s.SetWASender(func(_ context.Context, t string) error { r.waTexts = append(r.waTexts, t); return nil })
 	s.SetIMessageSender(func(_ context.Context, t string) error { r.imTexts = append(r.imTexts, t); return nil })
@@ -94,6 +94,29 @@ func TestDeliverUnknownKindUsesAI(t *testing.T) {
 	if r.waTexts[0] != "API latency spiked to 900ms." {
 		t.Errorf("wa text = %q, want AI reply", r.waTexts[0])
 	}
+}
+
+// TestSummarizerReceivesAlertFacts guards the summarizer contract: the
+// webhook-derived kind/title/body must be handed to the summarizer verbatim
+// so the implementation can render them as data (never as instructions).
+func TestSummarizerReceivesAlertFacts(t *testing.T) {
+	var gotKind, gotTitle, gotBody string
+	s, _ := (&recorder{}).svc(&factRecorder{fn: func(k, ti, bo string) (string, error) {
+		gotKind, gotTitle, gotBody = k, ti, bo
+		return "summarised.", nil
+	}})
+	s.Deliver(context.Background(), "api_latency", "Latency", "p99 900ms")
+	if gotKind != "api_latency" || gotTitle != "Latency" || gotBody != "p99 900ms" {
+		t.Errorf("summarizer args = (%q,%q,%q)", gotKind, gotTitle, gotBody)
+	}
+}
+
+type factRecorder struct {
+	fn func(kind, title, body string) (string, error)
+}
+
+func (f *factRecorder) SummarizeAlert(_ context.Context, kind, title, body string) (string, error) {
+	return f.fn(kind, title, body)
 }
 
 func TestDeliverUnknownKindAIUnavailableUsesGeneric(t *testing.T) {

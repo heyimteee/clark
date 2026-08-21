@@ -88,6 +88,10 @@ func (h *Handler) Handle(msg Message) {
 		return
 	}
 
+	// Strip Clark's own branding so a sender cannot impersonate him in
+	// stored history (#58).
+	msg.Text = SanitizeInbound(msg.Text)
+
 	ctx := context.Background()
 	lower := strings.ToLower(msg.Text)
 	for _, c := range h.commands {
