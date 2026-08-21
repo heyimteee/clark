@@ -11,6 +11,10 @@ concurrency:
 jobs:
   deploy:
     runs-on: self-hosted
+    # Human approval gate (#62): pushing to main no longer deploys by itself.
+    # The "production" environment requires a required reviewer to approve
+    # the run before the self-hosted steps execute on the server.
+    environment: production
     steps:
       - name: Pull latest code
         run: git -C /home/tristan/clark pull --ff-only

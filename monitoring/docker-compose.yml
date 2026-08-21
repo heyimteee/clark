@@ -31,8 +31,11 @@ services:
     image: louislam/uptime-kuma:1
     container_name: uptime-kuma
     restart: unless-stopped
+    # Loopback only (#62): Kuma stores the clark ALERT_TOKEN in its
+    # notification config, so it must not be reachable from other hosts.
+    # Reach it via an SSH tunnel or an authenticated reverse proxy.
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     volumes:
       - ./uptime-kuma:/app/data
     dns:
