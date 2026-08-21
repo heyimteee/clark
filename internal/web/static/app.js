@@ -163,6 +163,12 @@
   }
 
   function logout() {
+    // Revoke the session server-side first so the token is dead even if it
+    // was copied elsewhere; local cleanup happens regardless of the result.
+    if (token) {
+      fetch("/web/api/logout", { method: "POST", headers: { "Authorization": "Bearer " + token } })
+        .catch(function () { /* best effort */ });
+    }
     token = null;
     sessionStorage.removeItem(SESSION_KEY);
     if (chatWs) { chatWs.close(); chatWs = null; }

@@ -32,7 +32,11 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	if !s.chatAuth(ctx, c) {
+	// Bound how long an unauthenticated socket may sit open waiting to present
+	// credentials (#59); parked sockets are a cheap remote resource leak.
+	authCtx, cancelAuth := context.WithTimeout(ctx, wsAuthDeadline)
+	defer cancelAuth()
+	if !s.chatAuth(authCtx, c) {
 		return
 	}
 

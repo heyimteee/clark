@@ -22,7 +22,10 @@ func (s *Server) handleLogsWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	if !s.chatAuth(ctx, c) {
+	// Bound how long an unauthenticated socket may sit open (#59).
+	authCtx, cancelAuth := context.WithTimeout(ctx, wsAuthDeadline)
+	defer cancelAuth()
+	if !s.chatAuth(authCtx, c) {
 		return
 	}
 

@@ -24,7 +24,12 @@ import (
 
 const (
 	defaultSessionTTL = 12 * time.Hour
-	webJID            = "web"
+	// defaultSessionMaxLife caps a session's total lifetime regardless of
+	// activity. The sliding TTL alone let an actively used token live forever;
+	// the absolute cap bounds the blast radius of a leaked token (#59).
+	defaultSessionMaxLife = 24 * time.Hour
+	wsAuthDeadline        = 10 * time.Second
+	webJID                = "web"
 )
 
 // Options wires the web console to the services it drives.
@@ -39,6 +44,7 @@ type Options struct {
 	TTSEngine      string
 	AffirmationDir string
 	SessionTTL     time.Duration
+	SessionMaxLife time.Duration
 	Alerts         *alert.Service
 }
 
@@ -57,6 +63,7 @@ type Server struct {
 	alerts       *alert.Service
 
 	sessions *sessionManager
+	logins   *loginThrottle
 	hub      *chatHub
 }
 
@@ -65,6 +72,10 @@ func New(opts Options) *Server {
 	ttl := opts.SessionTTL
 	if ttl <= 0 {
 		ttl = defaultSessionTTL
+	}
+	maxLife := opts.SessionMaxLife
+	if maxLife <= 0 {
+		maxLife = defaultSessionMaxLife
 	}
 	s := &Server{
 		mux:          http.NewServeMux(),
@@ -78,7 +89,8 @@ func New(opts Options) *Server {
 		affirmations: opts.AffirmationDir,
 		listen:       opts.ListenAddr,
 		alerts:       opts.Alerts,
-		sessions:     newSessionManager(ttl),
+		sessions:     newSessionManager(ttl, maxLife),
+		logins:       newLoginThrottle(),
 		hub:          newChatHub(),
 	}
 	if s.alerts != nil {
@@ -99,6 +111,7 @@ func New(opts Options) *Server {
 	}
 
 	s.mux.HandleFunc("POST /web/api/login", s.handleLogin)
+	s.mux.HandleFunc("POST /web/api/logout", s.requireAuth(s.handleLogout))
 
 	s.mux.HandleFunc("GET /web/api/state", s.requireAuth(s.handleState))
 	s.mux.HandleFunc("GET /web/api/history", s.requireAuth(s.handleHistory))
@@ -131,8 +144,9 @@ func New(opts Options) *Server {
 	s.mux.Handle("/web/static/", http.StripPrefix("/web/static/", http.FileServer(http.FS(staticSubFS))))
 	if s.affirmations != "" {
 		// Pre-rendered voice clips (wake-word affirmations, "Processing, Sir.").
-		// Served like static assets: tiny, non-sensitive, cacheable.
-		s.mux.Handle("GET /web/affirmations/", http.StripPrefix("/web/affirmations/", http.FileServer(http.Dir(s.affirmations))))
+		// Served like static assets: tiny, non-sensitive, cacheable. Files only
+		// — directory listings are disabled (#59).
+		s.mux.Handle("GET /web/affirmations/", http.StripPrefix("/web/affirmations/", noListingFileServer(http.Dir(s.affirmations))))
 	}
 	s.mux.HandleFunc("/web/", s.handleSPA)
 
@@ -142,8 +156,71 @@ func New(opts Options) *Server {
 	return s
 }
 
-// Handler returns the router the app mounts behind its root mux.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler returns the router the app mounts behind its root mux, wrapped with
+// the security-header and audit middleware (#59).
+func (s *Server) Handler() http.Handler {
+	return withSecurityHeaders(withMutationAudit(s.mux))
+}
+
+// securityHeaders are set on every response. The console is a privileged
+// single-admin surface: a strict CSP plus frame/mime/referrer hardening give
+// defense in depth on top of output escaping.
+func withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "+
+				"media-src 'self'; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; "+
+				"frame-ancestors 'none'")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		// HSTS only makes sense when TLS actually terminated in front of us;
+		// setting it over plain http would poison the browser for LAN hosts.
+		if r.Header.Get("X-Forwarded-Proto") == "https" || r.TLS != nil {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withMutationAudit logs every state-changing API call with method, path,
+// status, and source address — the audit trail for who did what, from where.
+func withMutationAudit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead ||
+			!strings.HasPrefix(r.URL.Path, "/web/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		rec := &auditRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		logging.Log("WEB", logging.SevNotice, "MUTATION", "API mutation served",
+			"method", r.Method, "path", r.URL.Path, "status", rec.status, "source", clientIP(r))
+	})
+}
+
+// auditRecorder captures the response status for the audit log line.
+type auditRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (a *auditRecorder) WriteHeader(code int) {
+	if !a.wroteHeader {
+		a.status = code
+		a.wroteHeader = true
+	}
+	a.ResponseWriter.WriteHeader(code)
+}
+
+func (a *auditRecorder) Write(b []byte) (int, error) {
+	if !a.wroteHeader {
+		a.wroteHeader = true
+	}
+	return a.ResponseWriter.Write(b)
+}
 
 // ListenerAddr is the address app should listen on for this console.
 func (s *Server) ListenerAddr() string { return s.listen }
@@ -158,7 +235,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	srv := &http.Server{
 		Addr:              listen,
-		Handler:           s.mux,
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -187,15 +264,26 @@ func Run(ctx context.Context, opts Options) error {
 	}
 }
 
-// sessionManager issues opaque bearer tokens with a sliding TTL.
+// sessionManager issues opaque bearer tokens with a sliding TTL and an
+// absolute lifetime cap.
 type sessionManager struct {
-	mu       sync.Mutex
-	ttl      time.Duration
-	sessions map[string]time.Time
+	mu      sync.Mutex
+	ttl     time.Duration
+	maxLife time.Duration
+	// expiry is the sliding-TTL deadline, extended on every valid use.
+	expiry map[string]time.Time
+	// created is the issue time; a token is dead once maxLife has passed
+	// regardless of activity.
+	created map[string]time.Time
 }
 
-func newSessionManager(ttl time.Duration) *sessionManager {
-	return &sessionManager{ttl: ttl, sessions: make(map[string]time.Time)}
+func newSessionManager(ttl, maxLife time.Duration) *sessionManager {
+	return &sessionManager{
+		ttl:     ttl,
+		maxLife: maxLife,
+		expiry:  make(map[string]time.Time),
+		created: make(map[string]time.Time),
+	}
 }
 
 func (sm *sessionManager) issue() string {
@@ -204,8 +292,10 @@ func (sm *sessionManager) issue() string {
 		panic(fmt.Sprintf("web: crypto/rand failed: %v", err))
 	}
 	tok := hex.EncodeToString(buf)
+	now := time.Now()
 	sm.mu.Lock()
-	sm.sessions[tok] = time.Now().Add(sm.ttl)
+	sm.expiry[tok] = now.Add(sm.ttl)
+	sm.created[tok] = now
 	sm.mu.Unlock()
 	return tok
 }
@@ -214,22 +304,44 @@ func (sm *sessionManager) valid(tok string) bool {
 	if tok == "" {
 		return false
 	}
+	now := time.Now()
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	exp, ok := sm.sessions[tok]
+	exp, ok := sm.expiry[tok]
 	if !ok {
 		return false
 	}
-	if time.Now().After(exp) {
-		delete(sm.sessions, tok)
+	// Absolute lifetime wins over any amount of sliding activity (#59).
+	if now.Sub(sm.created[tok]) >= sm.maxLife {
+		delete(sm.expiry, tok)
+		delete(sm.created, tok)
+		return false
+	}
+	if now.After(exp) {
+		delete(sm.expiry, tok)
+		delete(sm.created, tok)
 		return false
 	}
 	// Sliding TTL: every authenticated call buys another full window.
-	sm.sessions[tok] = time.Now().Add(sm.ttl)
+	sm.expiry[tok] = now.Add(sm.ttl)
 	return true
 }
 
+// revoke invalidates the token immediately (logout).
+func (sm *sessionManager) revoke(tok string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	delete(sm.expiry, tok)
+	delete(sm.created, tok)
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	src := clientIP(r)
+	if !s.logins.allow(src) {
+		logAuthFailure(src, "locked out after repeated failures")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts; try again later"})
+		return
+	}
 	var body struct {
 		Key string `json:"key"`
 	}
@@ -238,20 +350,33 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Key == "" {
+		logAuthFailure(src, "missing key")
+		s.logins.fail(src)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing key"})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(body.Key), []byte(s.webToken)) != 1 {
-		logging.Log("WEB", logging.SevWarn, "LOGIN", "Failed web login attempt")
+		logAuthFailure(src, "invalid key")
+		s.logins.fail(src)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid key"})
 		return
 	}
+	s.logins.reset(src)
 	tok := s.sessions.issue()
-	logging.Log("WEB", logging.SevInfo, "LOGIN", "Web session opened")
+	logging.Log("WEB", logging.SevInfo, "LOGIN", "Web session opened", "source", src)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":      tok,
 		"expires_in": int(s.sessions.ttl / time.Second),
 	})
+}
+
+// handleLogout revokes the caller's session immediately so a token left in a
+// browser (or copied elsewhere) stops working (#59).
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	s.sessions.revoke(tok)
+	logging.Log("WEB", logging.SevInfo, "LOGOUT", "Web session closed")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -284,4 +409,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 var acceptOptions = &websocket.AcceptOptions{
 	OriginPatterns: []string{"*.studio.lab"},
+}
+
+// noListingFileServer serves files without directory indexes: any request
+// resolving to a directory gets a 404 instead of a listing.
+func noListingFileServer(root http.FileSystem) http.Handler {
+	fs := http.FileServer(root)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		fs.ServeHTTP(w, r)
+	})
 }
