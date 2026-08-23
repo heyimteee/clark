@@ -50,6 +50,7 @@ COPY --from=build /out/clark /usr/local/bin/clark
 COPY --from=piper-download /opt/piper /opt/piper
 COPY docker/whisper_run.py /opt/whisper/run.py
 COPY docker/piper_daemon.py /opt/piper/daemon.py
+COPY docker/piper_compat.py /opt/piper/piper_compat.py
 COPY docker/gen_affirmations.py /opt/piper/gen_affirmations.py
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
