@@ -12,9 +12,12 @@ Usage: piper_daemon.py <voice.onnx>
 import io
 import struct
 import sys
+import os
 import wave
 
-from piper import PiperVoice
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from piper_compat import synth_wav_bytes
 
 
 def read_exact(stream, n):
@@ -31,6 +34,8 @@ def main():
     if len(sys.argv) < 2:
         print("usage: piper_daemon.py <voice.onnx>", file=sys.stderr)
         return 2
+    from piper import PiperVoice
+
     voice = PiperVoice.load(sys.argv[1])
 
     stdin = sys.stdin.buffer
@@ -45,11 +50,7 @@ def main():
         if data is None:
             break
         text = data.decode("utf-8", "replace")
-
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wav_file:
-            voice.synthesize_wav(text, wav_file)
-        wav = buf.getvalue()
+        wav = synth_wav_bytes(voice, text)
 
         stdout.write(struct.pack("<I", len(wav)) + wav)
         stdout.flush()

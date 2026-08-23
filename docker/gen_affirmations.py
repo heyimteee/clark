@@ -5,25 +5,25 @@ plays them instantly with zero server latency.
 
 Usage: gen_affirmations.py <voice.onnx> <outdir>
 """
-import io
+import os
 import sys
-import wave
 
-from piper import PiperVoice
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from piper_compat import synth_wav_bytes
 
 
 def synth(voice, text, out):
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        voice.synthesize_wav(text, w)
     with open(out, "wb") as f:
-        f.write(buf.getvalue())
+        f.write(synth_wav_bytes(voice, text))
 
 
 def main():
     if len(sys.argv) < 3:
         print("usage: gen_affirmations.py <voice.onnx> <outdir>", file=sys.stderr)
         return 2
+    from piper import PiperVoice
+
     voice_path, outdir = sys.argv[1:3]
 
     voice = PiperVoice.load(voice_path)
