@@ -34,7 +34,9 @@ type Options struct {
 // Run connects to WhatsApp, wires the handler, and blocks until ctx is done.
 func Run(ctx context.Context, opts Options) error {
 	dbLog := logging.NewWALogger("Database", logging.SevDebug)
-	container, err := sqlstore.New(ctx, "sqlite3", "file:"+opts.DBPath+"?_foreign_keys=on", dbLog)
+	// Same pragmas as the clark store (store.dsnFor): this pool shares the
+	// SQLite file, so WAL + busy_timeout keep the two handles from fighting.
+	container, err := sqlstore.New(ctx, "sqlite3", "file:"+opts.DBPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on", dbLog)
 	if err != nil {
 		return fmt.Errorf("fail to initiate database container: %v", err)
 	}

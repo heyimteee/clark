@@ -82,11 +82,22 @@ type Store struct {
 	db *sql.DB
 }
 
+// dsnFor wraps a plain file path with the SQLite pragmas clark depends on:
+// WAL journaling (readers never block behind writers), a busy timeout for the
+// rare cross-pool contention with whatsmeow's own handle on the same file,
+// and foreign-key enforcement. Non-file targets (:memory:, URIs) pass through.
+func dsnFor(path string) string {
+	if path == "" || path == ":memory:" || strings.Contains(path, ":") {
+		return path
+	}
+	return "file:" + path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on"
+}
+
 // Open opens (creating if needed) the SQLite database at dbPath and runs
 // migrations. The file holds WhatsApp session keys and private chat history,
 // so it is tightened to owner-only permissions (#61).
 func Open(dbPath string) (*Store, error) {
-	rawDb, err := sql.Open("sqlite3", dbPath)
+	rawDb, err := sql.Open("sqlite3", dsnFor(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("fail to open database: %w", err)
 	}
@@ -148,6 +159,7 @@ func (s *Store) migrate() error {
 			content TEXT,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`},
+		{"chat_history_jid_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_jid ON chat_history(jid, id)`},
 		{"imessage_outbound", `CREATE TABLE IF NOT EXISTS imessage_outbound (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			recipient TEXT NOT NULL,

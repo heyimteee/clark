@@ -1,10 +1,13 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSettingsLifecycle(t *testing.T) {
@@ -443,5 +446,89 @@ func TestOpenSetsDBFileMode0600(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("db mode = %v, want -rw------- (contains WhatsApp session keys)", fi.Mode().Perm())
+	}
+}
+
+func TestOpenEnablesWALAndBusyTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wal.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	mode, err := st.db.Query("PRAGMA journal_mode")
+	if err != nil {
+		t.Fatalf("pragma journal_mode: %v", err)
+	}
+	defer mode.Close()
+	for mode.Next() {
+		var m string
+		if err := mode.Scan(&m); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if m != "wal" {
+			t.Errorf("journal_mode = %q, want wal", m)
+		}
+	}
+}
+
+func TestMigrateCreatesHistoryIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "idx.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	rows, err := st.db.Query(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='chat_history' AND name='idx_chat_history_jid'`)
+	if err != nil {
+		t.Fatalf("query indexes: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("idx_chat_history_jid missing after migration")
+	}
+}
+
+// TestConcurrentReadDuringWrite proves the busy-timeout/WAL setup lets a
+// reader proceed while a write transaction holds the database — the exact
+// contention web history hits during LLM tool-loop persistence.
+func TestConcurrentReadDuringWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conc.db")
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	t.Cleanup(func() { writer.Close() })
+	reader, err := sql.Open("sqlite3", dsnFor(path))
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tx, err := writer.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin write tx: %v", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO chat_history (jid, role, content) VALUES ('w', 'user', 'x')`); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		var n int
+		done <- reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM assistant_setting`).Scan(&n)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("read during open write failed: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("read blocked longer than busy timeout")
 	}
 }
