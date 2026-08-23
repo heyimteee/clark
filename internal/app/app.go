@@ -199,13 +199,6 @@ func (a *App) Run() error {
 		})
 	}()
 
-	if a.cfg.IMessageEnabled {
-		msgr := imessage.NewMessenger(a.st, a.cfg.IMessageSelfHandle)
-		alerts.SetIMessageSender(func(ctx context.Context, text string) error {
-			return msgr.SendSelf(ctx, text)
-		})
-	}
-
 	if a.cfg.WebEnabled {
 		engine := buildVoiceEngine(a.cfg)
 		// Pre-warm any resident TTS daemon (piper, or the failover's piper
@@ -217,24 +210,44 @@ func (a *App) Run() error {
 				logging.Log("VOICE", logging.SevInfo, "TTS", "TTS daemon pre-warmed")
 			}
 		}
-		errCh <- web.Run(ctx, web.Options{
-			ListenAddr:     a.cfg.WebListenAddr,
-			WebToken:       a.cfg.WebToken,
-			AlertToken:     a.cfg.AlertToken,
-			Butler:         a.ast,
-			Store:          a.st,
-			Voice:          engine,
-			STTModel:       a.cfg.STTModel,
-			TTSEngine:      a.cfg.TTSEngine,
-			AffirmationDir: a.cfg.AffirmationDir,
-			Alerts:         alerts,
-		})
 	}
 
-	// The iMessage bridge API always runs on its own listener (default :8091),
-	// never inside the public console mux (#57). The macOS bridge daemon is
-	// the only intended client.
+	// Both transports run concurrently and independently (#57): the console
+	// must never gate the bridge API or vice versa.
+	err = a.runConsoles(ctx, alerts)
+	stop()
+	return err
+}
+
+// runConsoles serves the web console and the iMessage bridge API in parallel,
+// each on its own listener, and returns when the first one stops. Regression
+// guard for #57: web.Run is blocking, so it must run in its own goroutine or
+// a combined deployment would never reach the bridge.
+func (a *App) runConsoles(ctx context.Context, alerts *alert.Service) error {
+	errCh := make(chan error, 2)
+
+	if a.cfg.WebEnabled {
+		go func() {
+			errCh <- web.Run(ctx, web.Options{
+				ListenAddr:     a.cfg.WebListenAddr,
+				WebToken:       a.cfg.WebToken,
+				AlertToken:     a.cfg.AlertToken,
+				Butler:         a.ast,
+				Store:          a.st,
+				Voice:          buildVoiceEngine(a.cfg),
+				STTModel:       a.cfg.STTModel,
+				TTSEngine:      a.cfg.TTSEngine,
+				AffirmationDir: a.cfg.AffirmationDir,
+				Alerts:         alerts,
+			})
+		}()
+	}
+
 	if a.cfg.IMessageEnabled {
+		msgr := imessage.NewMessenger(a.st, a.cfg.IMessageSelfHandle)
+		alerts.SetIMessageSender(func(ctx context.Context, text string) error {
+			return msgr.SendSelf(ctx, text)
+		})
 		go func() {
 			errCh <- imessage.Run(ctx, imessage.Options{
 				Out:          a.st,
@@ -250,9 +263,7 @@ func (a *App) Run() error {
 		}()
 	}
 
-	err = <-errCh
-	stop()
-	return err
+	return <-errCh
 }
 
 // buildVoiceEngine assembles the STT/TTS seam. Engines are only wired when

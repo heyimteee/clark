@@ -1,9 +1,14 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/heyimteee/clark/internal/assistant"
+	"github.com/heyimteee/clark/internal/ollama"
+	"github.com/heyimteee/clark/internal/store"
 
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/voice"
@@ -138,4 +143,26 @@ func TestBuildTTSEngineKokoroRemoteFallsBackToPiperWhenNoURL(t *testing.T) {
 	if _, ok := engine.(*voice.PiperTTS); !ok {
 		t.Fatalf("TTS engine = %T, want *voice.PiperTTS (piper fallback)", engine)
 	}
+}
+
+// newTestAssistant builds a Service over an in-memory store for wiring tests.
+func newTestAssistant(t *testing.T, st *store.Store) *assistant.Service {
+	t.Helper()
+	llm := &stubLLM{}
+	ast, err := assistant.New(&config.Config{DBPath: ":memory:", OllamaModel: "test-model"}, st, llm)
+	if err != nil {
+		t.Fatalf("assistant.New: %v", err)
+	}
+	return ast
+}
+
+// stubLLM satisfies assistant.LLM without touching a model server.
+type stubLLM struct{}
+
+func (s *stubLLM) SetThink(bool) {}
+func (s *stubLLM) Chat(_ context.Context, _ []ollama.Message, _ []ollama.Tool) (*ollama.ChatResult, error) {
+	return &ollama.ChatResult{Content: "ok"}, nil
+}
+func (s *stubLLM) ChatStream(ctx context.Context, m []ollama.Message, tools []ollama.Tool, fn func(string)) (*ollama.ChatResult, error) {
+	return s.Chat(ctx, m, tools)
 }
