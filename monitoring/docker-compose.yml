@@ -12,6 +12,12 @@ services:
       - SYS_ADMIN
     security_opt:
       - apparmor:unconfined
+    # Hard ceiling (#66): netdata's collectors must never dominate the i5.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
     volumes:
       - netdataconfig:/etc/netdata
       - netdatalib:/var/lib/netdata

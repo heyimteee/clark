@@ -249,6 +249,15 @@ func Run(ctx context.Context, opts Options) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	if pprofEnabled() {
+		// Diagnostics only: bound to loopback so it is unreachable from any
+		// network interface (#66). Never expose this through a proxy.
+		go func() {
+			logging.Log("WEB", logging.SevNotice, "PPROF", "pprof listening", "addr", "127.0.0.1:6060")
+			_ = http.ListenAndServe("127.0.0.1:6060", nil)
+		}()
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		logging.Log("WEB", logging.SevNotice, "SERVER", "Console listening", "addr", listen)

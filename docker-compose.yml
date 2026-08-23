@@ -50,6 +50,10 @@ services:
       # Headless container: no desktop notifications.
       - CLARK_NO_NOTIFY=1
       - TZ=${TZ:-Asia/Jakarta}
+      # Soft GC ceiling so whisper spikes cannot balloon the heap (#66).
+      - GOMEMLIMIT=${GOMEMLIMIT:-768MiB}
+      # Set CLARK_PPROF=1 to serve /debug/pprof on 127.0.0.1:6060 (diagnostics).
+      - CLARK_PPROF=${CLARK_PPROF:-}
     volumes:
       # Persists the SQLite database (WhatsApp session + settings + history).
       - ./data:/data
