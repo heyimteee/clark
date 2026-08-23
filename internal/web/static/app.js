@@ -1573,7 +1573,7 @@
   }, 30000);
 
   setInterval(function () {
-    if (mode === "bento" && token) refreshHistory();
+    if (!document.hidden && mode === "bento" && token) refreshHistory();
   }, 15000);
 
   window.addEventListener("beforeunload", function () {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // --- OllamaWhisper ---
@@ -291,4 +292,55 @@ func u16(b []byte) uint16 {
 
 func u32(b []byte) uint32 {
 	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+}
+
+// TestPiperFailingHelperProcess is the daemon stub that dies instantly.
+func TestPiperFailingHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_PIPER_FAIL") != "1" {
+		return
+	}
+	os.Exit(3)
+}
+
+// TestPiperDaemonCrashBacksOff guards respawn storms: after a daemon death,
+// immediate retries must be refused until a doubling backoff elapses
+// (5s, 10s, 20s … capped at 60s), and a successful start resets it.
+func TestPiperDaemonCrashBacksOff(t *testing.T) {
+	execMu.Lock()
+	calls := 0
+	execCommand = func(_ context.Context, _ string, _ ...string) *exec.Cmd {
+		calls++
+		cmd := exec.Command(os.Args[0], "-test.run=TestPiperFailingHelperProcess")
+		cmd.Env = append(os.Environ(), "GO_WANT_PIPER_FAIL=1")
+		return cmd
+	}
+	execMu.Unlock()
+	defer func() { execCommand = exec.CommandContext }()
+
+	p := NewPiper("/opt/piper/daemon.py", "/opt/piper/voices/en_US-ryan-high.onnx")
+	now := time.Now()
+	p.now = func() time.Time { return now }
+
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, err := p.Synthesize(ctx, "x"); err == nil {
+			t.Fatalf("attempt %d: expected failure from dying daemon", i+1)
+		}
+	}
+
+	before := calls
+	if _, err := p.Synthesize(ctx, "blocked"); err == nil || !strings.Contains(err.Error(), "backing off") {
+		t.Fatalf("immediate retry error = %v, want backing-off refusal", err)
+	}
+	if calls != before {
+		t.Fatalf("respawn attempted during backoff (spawns=%d)", calls)
+	}
+
+	now = now.Add(6 * time.Second) // first backoff window (5s) elapsed
+	if _, err := p.Synthesize(ctx, "retry"); err == nil {
+		t.Fatal("expected failure after backoff window too (helper still dying)")
+	}
+	if calls != before+1 {
+		t.Fatalf("spawns = %d, want %d (one fresh attempt post-backoff)", calls, before+1)
+	}
 }

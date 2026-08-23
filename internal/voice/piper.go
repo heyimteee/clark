@@ -22,12 +22,22 @@ type PiperTTS struct {
 
 	mu sync.Mutex
 	d  *ttsDaemon
+
+	// Respawn backoff: a crash-looping daemon must not hammer ONNX reloads.
+	now        func() time.Time
+	nextSpawn  time.Time
+	curBackoff time.Duration
 }
+
+const (
+	piperBackoffBase = 5 * time.Second
+	piperBackoffMax  = 60 * time.Second
+)
 
 // NewPiper returns a TTS engine that runs the daemon script at binPath with
 // the voice model at voicePath.
 func NewPiper(binPath, voicePath string) *PiperTTS {
-	return &PiperTTS{binPath: binPath, voicePath: voicePath}
+	return &PiperTTS{binPath: binPath, voicePath: voicePath, now: time.Now}
 }
 
 // Start launches the daemon now (pre-warm) instead of lazily on first call.
@@ -41,6 +51,9 @@ func (p *PiperTTS) Start(ctx context.Context) error {
 func (p *PiperTTS) startLocked(ctx context.Context) error {
 	if p.d != nil {
 		return nil
+	}
+	if now := p.now(); now.Before(p.nextSpawn) {
+		return fmt.Errorf("piper daemon backing off until %s", p.nextSpawn.Format("15:04:05"))
 	}
 	cmd := execCommand(ctx, "python3", p.binPath, p.voicePath)
 	stdin, err := cmd.StdinPipe()
@@ -56,6 +69,8 @@ func (p *PiperTTS) startLocked(ctx context.Context) error {
 		return fmt.Errorf("piper daemon start: %w", err)
 	}
 	p.d = &ttsDaemon{cmd: cmd, stdin: stdin, stdout: stdout}
+	p.curBackoff = 0
+	p.nextSpawn = time.Time{}
 	return nil
 }
 
@@ -76,18 +91,34 @@ func (p *PiperTTS) Synthesize(ctx context.Context, text string) ([]byte, error) 
 
 	if _, err := p.d.stdin.Write(frameBytes(text)); err != nil {
 		p.d = nil
+		p.scheduleRespawnBackoff()
 		return nil, fmt.Errorf("piper daemon write: %w", err)
 	}
 
 	out, err := p.readFrame(ctx)
 	if err != nil {
 		p.d = nil
+		p.scheduleRespawnBackoff()
 		return nil, err
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("piper returned empty audio")
 	}
 	return out, nil
+}
+
+// scheduleRespawnBackoff doubles the cooldown before the next daemon spawn
+// (5s → 60s cap), reset on any successful start, so a crash-looping daemon
+// cannot hammer ONNX reloads.
+func (p *PiperTTS) scheduleRespawnBackoff() {
+	p.curBackoff *= 2
+	if p.curBackoff < piperBackoffBase {
+		p.curBackoff = piperBackoffBase
+	}
+	if p.curBackoff > piperBackoffMax {
+		p.curBackoff = piperBackoffMax
+	}
+	p.nextSpawn = p.now().Add(p.curBackoff)
 }
 
 // readFrame reads one [u32 length][WAV bytes] frame from the daemon with a

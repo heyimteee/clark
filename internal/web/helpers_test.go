@@ -262,3 +262,32 @@ func wsReadJSON(t *testing.T, c *websocket.Conn) map[string]any {
 	}
 	return out
 }
+
+// testServerBundle pairs the httptest server with the *Server for tests that
+// poke internals (hub, sessions).
+type testServerBundle struct {
+	ts  *httptest.Server
+	ast *assistant.Service
+	llm *stubLLM
+	st  *store.Store
+	s   *Server
+}
+
+func newTestServerWithServer(t *testing.T) (testServerBundle, *assistant.Service, *stubLLM, *store.Store) {
+	t.Helper()
+	b := testServerBundle{}
+	b.st = testStore(t)
+	b.llm = &stubLLM{}
+	b.ast = newAssistant(t, b.st, b.llm)
+	b.s = New(Options{
+		ListenAddr: ":0",
+		WebToken:   testWebToken,
+		Butler:     b.ast,
+		Store:      b.st,
+		STTModel:   "whisper-turbo",
+		TTSEngine:  "kokoro-remote",
+		Voice:      &voice.Engine{},
+	})
+	b.ts = newServerFor(t, b.s)
+	return b, b.ast, b.llm, b.st
+}

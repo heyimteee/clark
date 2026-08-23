@@ -36,8 +36,9 @@ func (h *chatHub) remove(c *websocket.Conn) {
 	h.mu.Unlock()
 }
 
-// broadcast sends a frame to every connected chat socket. Slow or closed
-// clients are dropped without blocking the others.
+// broadcast sends a frame to every connected chat socket. Each client is
+// written concurrently with its own deadline, so a stalled console can never
+// delay alert delivery to the others.
 func (h *chatHub) broadcast(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -50,14 +51,37 @@ func (h *chatHub) broadcast(v any) {
 	}
 	h.mu.Unlock()
 
-	for _, c := range clients {
+	// Fire-and-forget: callers (alert delivery, state pushes) must never wait
+	// on the slowest console's write deadline.
+	go h.fanOut(clients, data, func(c *websocket.Conn, data []byte) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := c.Write(ctx, websocket.MessageText, data)
-		cancel()
-		if err != nil {
-			h.remove(c)
-		}
+		defer cancel()
+		return c.Write(ctx, websocket.MessageText, data)
+	}, 5*time.Second)
+}
+
+// fanOut writes data to every client in its own goroutine; a writer exceeding
+// timeout is simply abandoned (its goroutine returns when the ctx fires) and
+// dropped from the hub.
+func (h *chatHub) fanOut(clients []*websocket.Conn, data []byte, write func(*websocket.Conn, []byte) error, timeout time.Duration) {
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		wg.Add(1)
+		go func(c *websocket.Conn) {
+			defer wg.Done()
+			done := make(chan error, 1)
+			go func() { done <- write(c, data) }()
+			select {
+			case err := <-done:
+				if err != nil {
+					h.remove(c)
+				}
+			case <-time.After(timeout):
+				h.remove(c)
+			}
+		}(c)
 	}
+	wg.Wait()
 }
 
 // broadcastChatAlert pushes an alert message to every open web console, where

@@ -563,10 +563,17 @@ func (s *Service) HistoryLimit() int {
 	return s.historyLimit
 }
 
+// maxHistoryLimit caps the per-turn window on every path (CLI, REST, tool,
+// natural language): larger values bloat prompts and token cost directly.
+const maxHistoryLimit = 50
+
 // SetHistoryLimit configures the per-turn history window and persists it.
 func (s *Service) SetHistoryLimit(n int) error {
 	if n < 1 {
 		return fmt.Errorf("the history limit must be at least 1, Sir")
+	}
+	if n > maxHistoryLimit {
+		return fmt.Errorf("the history limit may not exceed %d, Sir", maxHistoryLimit)
 	}
 	if err := s.settings.Set("history_limit", strconv.Itoa(n)); err != nil {
 		return err

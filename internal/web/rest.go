@@ -203,8 +203,8 @@ func (s *Server) handleSetHistoryLimit(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Limit *int `json:"limit"`
 	}
-	if err := decodeBody(w, r, &body); err != nil || body.Limit == nil || *body.Limit < 1 || *body.Limit > 30 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "limit must be between 1 and 30"})
+	if err := decodeBody(w, r, &body); err != nil || body.Limit == nil || *body.Limit < 1 || *body.Limit > 50 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "limit must be between 1 and 50"})
 		return
 	}
 	if err := s.butler.SetHistoryLimit(*body.Limit); err != nil {

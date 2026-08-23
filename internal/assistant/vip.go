@@ -85,10 +85,14 @@ func (v *VIP) Lookup(input string) (string, bool) {
 	return "", false
 }
 
+// nonDigitRe strips everything but digits; package-level so the hot inbound
+// path never recompiles it.
+var nonDigitRe = regexp.MustCompile(`[^0-9]`)
+
 // digitsOnly keeps the digits of a phone-ish string, dropping +, spaces, and
 // punctuation, so "0821-7450-0836" and "+62 821-7450-0836" both yield digits.
 func digitsOnly(s string) string {
-	return regexp.MustCompile(`[^0-9]`).ReplaceAllString(s, "")
+	return nonDigitRe.ReplaceAllString(s, "")
 }
 
 // Check resolves a jid to its "Name (Relation)" label.
