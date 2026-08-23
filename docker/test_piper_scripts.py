@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Unit tests for the piper-tts 1.2.0 compat layer and its callers.
 
-Runs with the stdlib only: PiperVoice is stubbed, so no model download is
-required. Validates that gen_affirmations.synth and piper_daemon produce
-parseable WAV files from chunked synthesis.
+Runs with the stdlib only: PiperVoice is stubbed with the real 1.2.0
+synthesis contract — synthesize(text, wav_file) writes into an open wave
+writer — so no model download is required.
 """
 import importlib.util
 import io
@@ -25,37 +25,19 @@ def load(name):
 compat = load("piper_compat")
 
 
-class StubChunk:
-    def __init__(self, pcm=b"\x01\x00", rate=22050):
-        self.audio_int16_bytes = pcm
-        self.sample_rate = rate
-
-
-class StubVoiceModern:
-    """Mimics piper-tts 1.2.0: synthesize() yields AudioChunks."""
+class StubVoice:
+    """Mimics piper-tts 1.2.0: synthesize(text, wav_file) writes WAV."""
 
     def __init__(self, rate=22050):
         self.rate = rate
+        self.received_text = None
 
-    def synthesize(self, text):
-        yield StubChunk(b"\x01\x00\x02\x00", self.rate)
-        yield StubChunk(b"\x03\x00\x04\x00", self.rate)
-
-
-class StubVoiceConfigRate:
-    """Variant where the rate hides on synthesis_config (point-release drift)."""
-
-    class _Cfg:
-        sample_rate = 16000
-
-    def __init__(self):
-        self.rate = 16000
-
-    def synthesize(self, text):
-        c = StubChunk(b"\x05\x00")
-        c.sample_rate = None
-        c.synthesis_config = self._Cfg()
-        yield c
+    def synthesize(self, text, wav_file):
+        self.received_text = text
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(self.rate)
+        wav_file.writeframes(b"\x01\x00\x02\x00\x03\x00\x04\x00")
 
 
 def parse_wav(data):
@@ -67,22 +49,23 @@ def parse_wav(data):
 
 class TestCompat(unittest.TestCase):
     def test_wav_shape(self):
-        data = compat.synth_wav_bytes(StubVoiceModern(), "Sir.")
+        v = StubVoice()
+        data = compat.synth_wav_bytes(v, "Sir.")
+        self.assertEqual(v.received_text, "Sir.")
         ch, width, rate, frames = parse_wav(data)
         self.assertEqual((ch, width), (1, 2))
         self.assertEqual(rate, 22050)
         self.assertEqual(frames, 4)
 
-    def test_rate_from_synthesis_config(self):
-        data = compat.synth_wav_bytes(StubVoiceConfigRate(), "hello")
-        self.assertEqual(parse_wav(data)[2], 16000)
-
-    def test_unknown_chunk_raises(self):
-        class Bad:
-            pass
-        v = type("V", (), {"synthesize": lambda s, t: iter([Bad()])})()
-        with self.assertRaises(AttributeError):
-            compat.synth_wav_bytes(v, "x")
+    def test_missing_wav_arg_signature_caught(self):
+        # Guards the exact regression that broke the build: a stub whose
+        # synthesize lacks the wav_file parameter must fail loudly here,
+        # not silently at image-build time.
+        class Old:
+            def synthesize(self, text):
+                pass
+        with self.assertRaises(TypeError):
+            compat.synth_wav_bytes(Old(), "x")
 
 
 class TestCallersUseCompatLayer(unittest.TestCase):
@@ -90,7 +73,7 @@ class TestCallersUseCompatLayer(unittest.TestCase):
         gen = load("gen_affirmations")
         out = DOCKER / "_tmp_test.wav"
         try:
-            gen.synth(StubVoiceModern(), "Yes, Sir?", str(out))
+            gen.synth(StubVoice(), "Yes, Sir?", str(out))
             self.assertEqual(parse_wav(out.read_bytes())[3], 4)
         finally:
             out.unlink(missing_ok=True)
