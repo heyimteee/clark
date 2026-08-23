@@ -274,6 +274,10 @@ func Run(ctx context.Context, opts Options) error {
 	}
 }
 
+// sessionPruneThreshold is the map size that triggers an eager purge of
+// expired sessions on the next issue().
+const sessionPruneThreshold = 4096
+
 // sessionManager issues opaque bearer tokens with a sliding TTL and an
 // absolute lifetime cap.
 type sessionManager struct {
@@ -304,6 +308,14 @@ func (sm *sessionManager) issue() string {
 	tok := hex.EncodeToString(buf)
 	now := time.Now()
 	sm.mu.Lock()
+	if len(sm.expiry) > sessionPruneThreshold {
+		for k, created := range sm.created {
+			if now.Sub(created) >= sm.maxLife || now.After(sm.expiry[k]) {
+				delete(sm.expiry, k)
+				delete(sm.created, k)
+			}
+		}
+	}
 	sm.expiry[tok] = now.Add(sm.ttl)
 	sm.created[tok] = now
 	sm.mu.Unlock()

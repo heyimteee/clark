@@ -38,10 +38,22 @@ func newLoginThrottle() *loginThrottle {
 	return &loginThrottle{fails: make(map[string]*failWindow)}
 }
 
+// loginPruneThreshold is the map size at which expired windows are swept
+// eagerly: sources that failed once and never returned would otherwise
+// accumulate for the life of the process.
+const loginPruneThreshold = 1024
+
 // allow reports whether src may attempt a login right now.
 func (t *loginThrottle) allow(src string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(t.fails) > loginPruneThreshold {
+		for k, w := range t.fails {
+			if time.Since(w.windowStart) >= loginLockoutWindow {
+				delete(t.fails, k)
+			}
+		}
+	}
 	w, ok := t.fails[src]
 	if !ok {
 		return true
@@ -57,6 +69,13 @@ func (t *loginThrottle) allow(src string) bool {
 func (t *loginThrottle) fail(src string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(t.fails) > loginPruneThreshold {
+		for k, w2 := range t.fails {
+			if time.Since(w2.windowStart) >= loginLockoutWindow {
+				delete(t.fails, k)
+			}
+		}
+	}
 	w, ok := t.fails[src]
 	if !ok || time.Since(w.windowStart) >= loginLockoutWindow {
 		t.fails[src] = &failWindow{count: 1, windowStart: time.Now()}

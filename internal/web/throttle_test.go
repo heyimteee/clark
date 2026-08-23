@@ -70,3 +70,32 @@ func TestClientIPPrefersForwardedFor(t *testing.T) {
 		t.Errorf("clientIP fallback = %q, want RemoteAddr host", got)
 	}
 }
+
+func TestLoginThrottlePrunesWhenLarge(t *testing.T) {
+	th := newLoginThrottle()
+	// Exceed the pruning threshold with sources whose windows are expired.
+	for i := 0; i < loginPruneThreshold+10; i++ {
+		th.fail(string(rune('a'+i%26)) + string(rune(i)))
+	}
+	th.mu.Lock()
+	sizeBefore := len(th.fails)
+	th.mu.Unlock()
+	if sizeBefore < loginPruneThreshold {
+		t.Fatalf("precondition: %d entries", sizeBefore)
+	}
+
+	// Age every window past expiry, then trigger a sweep via another failure.
+	th.mu.Lock()
+	for _, w := range th.fails {
+		w.windowStart = time.Now().Add(-loginLockoutWindow - time.Minute)
+	}
+	th.mu.Unlock()
+	th.fail("trigger-source")
+
+	th.mu.Lock()
+	sizeAfter := len(th.fails)
+	th.mu.Unlock()
+	if sizeAfter != 1 {
+		t.Errorf("entries after sweep = %d, want 1", sizeAfter)
+	}
+}

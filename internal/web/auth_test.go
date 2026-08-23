@@ -116,3 +116,25 @@ func TestSessionAbsoluteLifetime(t *testing.T) {
 		t.Fatalf("state after absolute lifetime = %d, want 401", code)
 	}
 }
+
+func TestSessionManagerPurgesExpired(t *testing.T) {
+	sm := newSessionManager(time.Hour, 2*time.Hour)
+	t1 := sm.issue()
+	t2 := sm.issue()
+
+	// Age both sessions past their absolute lifetime, then force a purge by
+	// exceeding the threshold on issue().
+	sm.mu.Lock()
+	past := time.Now().Add(-3 * time.Hour)
+	for k := range sm.created {
+		sm.created[k] = past
+	}
+	sm.mu.Unlock()
+	for i := 0; i < sessionPruneThreshold+2; i++ {
+		sm.issue()
+	}
+
+	if sm.valid(t1) || sm.valid(t2) {
+		t.Error("expired sessions survived purge")
+	}
+}

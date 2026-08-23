@@ -180,6 +180,9 @@ type inbound struct {
 
 // dispatcher runs one serial worker goroutine per sender so replies arrive in
 // order, while never blocking the transport event loop on a slow generation.
+// Idle workers retire after dispatcherIdleIdleTimeout with an empty queue and
+// are recreated on the sender's next message, so goroutines track active
+// conversations rather than every sender ever seen.
 type dispatcher struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -190,7 +193,11 @@ type dispatcher struct {
 	component string
 	butler    Butler
 	msgr      Messenger
+	idle      time.Duration // worker idle retirement; 0 = defaultDispatcherIdle
+	now       func() time.Time
 }
+
+const defaultDispatcherIdle = 10 * time.Minute
 
 func newDispatcher(component string, butler Butler, msgr Messenger) *dispatcher {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -201,11 +208,16 @@ func newDispatcher(component string, butler Butler, msgr Messenger) *dispatcher 
 		component: component,
 		butler:    butler,
 		msgr:      msgr,
+		idle:      defaultDispatcherIdle,
+		now:       time.Now,
 	}
 }
 
-// enqueue hands a message to its sender's worker, creating the worker on first
-// use. It blocks only while that sender's queue is full (bounded at 16).
+// enqueue hands a message to its sender's worker, creating the worker on
+// first use or after idle retirement. The lookup and send happen atomically
+// under the mutex so a retiring worker can never orphan an in-flight send;
+// when a sender's queue is full the message is dropped with a warning rather
+// than stalling the transport event loop (dedup + user retry cover it).
 func (d *dispatcher) enqueue(in inbound) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -217,19 +229,43 @@ func (d *dispatcher) enqueue(in inbound) {
 		ch = make(chan inbound, 16)
 		d.queues[in.senderJID] = ch
 		d.wg.Add(1)
-		go d.worker(ch)
+		go d.worker(in.senderJID, ch)
 	}
-
 	select {
 	case ch <- in:
-	case <-d.ctx.Done():
+	default:
+		logging.Log(d.component, logging.SevWarn, "DISPATCH", "Sender queue full; message dropped",
+			"sender", in.senderJID)
 	}
 }
 
-func (d *dispatcher) worker(ch <-chan inbound) {
+// worker drains one sender's queue serially and retires itself after the idle
+// timeout with nothing pending.
+func (d *dispatcher) worker(sender string, ch chan inbound) {
 	defer d.wg.Done()
-	for in := range ch {
-		d.process(in)
+	idle := d.idle
+	if idle <= 0 {
+		idle = defaultDispatcherIdle
+	}
+	for {
+		timer := time.NewTimer(idle)
+		select {
+		case in, ok := <-ch:
+			timer.Stop()
+			if !ok {
+				return
+			}
+			d.process(in)
+		case <-timer.C:
+			d.mu.Lock()
+			if len(ch) == 0 && d.queues[sender] == ch && !d.closed {
+				delete(d.queues, sender)
+				d.mu.Unlock()
+				return
+			}
+			d.mu.Unlock()
+			// Work arrived during retirement or queue was replaced; loop.
+		}
 	}
 }
 
