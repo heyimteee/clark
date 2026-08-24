@@ -37,7 +37,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip espeak-ng curl \
-    && pip3 install --no-cache-dir --break-system-packages piper-tts==1.2.0 faster-whisper==1.0.3 \
+    && pip3 install --no-cache-dir --break-system-packages piper-tts==1.2.0 faster-whisper==1.0.3 requests \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the faster-whisper small model (downloaded from HF at build time):
