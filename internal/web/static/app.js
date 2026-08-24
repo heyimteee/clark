@@ -40,6 +40,7 @@
   let disarming = false; // true while disarmVoice triggered stopRecording -> onRecordingStop
   let clarkSpeaking = false; // true while Clark is playing audio (TTS/affirmation/processing)
   let activeClips = new Set(); // HTMLAudioElements for affirmations/processing
+  let playChain = Promise.resolve(); // serial playback, fetches concurrent
 
   const $ = function (sel, root) {
     return (root || document).querySelector(sel);
@@ -454,21 +455,22 @@
   function renderVoiceMeta() {
     const v = state || {};
     $("#voice-stt").textContent = v.sttModel || "\u2014";
-    $("#voice-tts").textContent = v.ttsEngine || "\u2014";
-    $("#voice-voice").textContent = v.ttsVoice || "\u2014";
     const avail = !!v.ttsEngine;
+    // When neither kokoro nor piper is detected, show not detected (instead of kokoro/piper or dash)
+    $("#voice-tts").textContent = v.ttsEngine ? v.ttsEngine : "not detected";
+    $("#voice-voice").textContent = v.ttsVoice ? v.ttsVoice : (avail ? "\u2014" : "not detected");
     const st = $("#voice-status");
     const toggle = $("#voice-toggle");
-    if (!avail && !voiceOn) {
-      st.textContent = "voice disabled on server";
-      toggle.disabled = true;
+    if (!avail) {
+      if (st) st.textContent = "voice not detected";
+      if (toggle) { toggle.disabled = true; toggle.checked = false; }
     } else if (!voiceOn) {
-      st.textContent = "voice off \u2014 flip the toggle";
-      toggle.disabled = false;
+      if (st) st.textContent = "voice off \u2014 flip the toggle";
+      if (toggle) { toggle.disabled = false; toggle.checked = false; }
     } else {
       // voiceOn — keep status meaningful instead of leaving the stale "voice off" text
       if (st && !recording && !clarkSpeaking) st.textContent = "say \u201cclark\u201d";
-      if (toggle) toggle.disabled = false;
+      if (toggle) { toggle.disabled = false; toggle.checked = true; }
     }
     const amt = $("#alert-mode-toggle");
     if (amt) amt.checked = (v.alertMode !== "silent"); // ON = voice alerts
@@ -1264,6 +1266,7 @@
     clarkSpeaking = false;
     activeClips.forEach(function (a) { try { a.pause(); a.src = ""; } catch (e) {} });
     activeClips.clear();
+    playChain = Promise.resolve();
     if (speechSource) {
       try { speechSource.stop(); } catch (e) {}
       speechSource = null;
@@ -1312,9 +1315,7 @@
   // is appended to playChain so each sentence only PLAYS after the previous one
   // finishes. This keeps latency low (Clark talks on the first sentence) while
   // preventing overlap/garble. stopSpeech() bumps speechGen so stale chain links
-  // are skipped.
-  let playChain = Promise.resolve();
-
+  // are skipped. playChain is declared with the other voice globals above.
   function enqueueSpeech(text, gen) {
     if (!text || !voiceOn) return;
     if (gen !== speechGen) return; // stale (voice off / superseded by newer turn)
@@ -1325,7 +1326,13 @@
       if (gen !== speechGen) return; // dropped by stopSpeech()
       const buf = await fetchPromise;
       if (gen !== speechGen) return;
-      if (buf) await playBuffer(buf);
+      if (buf) {
+        await playBuffer(buf);
+      } else {
+        // No audio (fetch failed or empty) — ensure wake can resume
+        clarkSpeaking = false;
+        if (voiceOn && !recording && !wakeHeld && !wakeRecognition) startWake();
+      }
     });
   }
 

@@ -350,6 +350,9 @@ label.field .lbl {
 
 .switch input:checked + .track { background: var(--ok-ink); }
 .switch input:checked + .track + .knob { transform: translateX(16px); }
+.switch input:disabled { cursor: not-allowed; }
+.switch input:disabled + .track { background: var(--line-strong); opacity: 0.5; }
+.switch input:disabled + .track + .knob { opacity: 0.7; }
 
 #config-form { margin-top: var(--space-2); }
 

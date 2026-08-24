@@ -210,6 +210,14 @@ func (a *App) Run() error {
 				logging.Log("VOICE", logging.SevInfo, "TTS", "TTS daemon pre-warmed")
 			}
 		}
+		// Pre-warm STT daemon so the first transcription is fast (accept ~8s added to boot).
+		if s, ok := engine.STT.(interface{ Start(context.Context) error }); ok {
+			if err := s.Start(ctx); err != nil {
+				logging.Log("VOICE", logging.SevWarn, "STT", "STT daemon pre-warm failed; will retry on demand", "error", err.Error())
+			} else {
+				logging.Log("VOICE", logging.SevInfo, "STT", "STT daemon pre-warmed")
+			}
+		}
 	}
 
 	// Both transports run concurrently and independently (#57): the console
