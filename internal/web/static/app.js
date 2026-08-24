@@ -1048,18 +1048,31 @@
     const status = $("#voice-status");
     if (status) status.textContent = "speaking\u2026";
     try {
+      ensureAudioCtx();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
       const d = await api("/web/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: "Hello, I\u2019m Clark. Voice is working." }),
       });
       if (!d || !d.audio) throw new Error("no audio");
-      const a = new Audio("data:audio/wav;base64," + d.audio);
-      a.onended = function () {
+      var binary = atob(d.audio);
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      var buf = await audioCtx.decodeAudioData(bytes.buffer);
+      clarkSpeaking = true;
+      try { stopWake(); } catch (e) {}
+      var src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(audioCtx.destination);
+      speechSource = src;
+      src.onended = function () {
+        speechSource = null;
+        clarkSpeaking = false;
         if (status) status.textContent = voiceOn ? "say \u201cclark\u201d" : "voice off \u2014 flip the toggle";
+        if (voiceOn && !recording && !wakeHeld) startWake();
       };
-      a.onerror = function () { if (status) status.textContent = "playback failed"; };
-      a.play();
+      src.start();
     } catch (e) {
       if (status) status.textContent = e.message;
     }
@@ -1214,9 +1227,13 @@
       body: JSON.stringify({ text: text }),
     }).then(function (d) {
       if (!d || !d.audio) return null;
-      return fetch("data:audio/wav;base64," + d.audio)
-        .then(function (r) { return r.arrayBuffer(); })
-        .then(function (buf) { return audioCtx.decodeAudioData(buf); });
+      var resume = audioCtx.state === "suspended" ? audioCtx.resume() : Promise.resolve();
+      return resume.then(function () {
+        var binary = atob(d.audio);
+        var bytes = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return audioCtx.decodeAudioData(bytes.buffer);
+      });
     }).catch(function () { return null; });
   }
 
