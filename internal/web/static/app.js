@@ -92,11 +92,13 @@
   }
 
   function renderState() {
+    // Deliberately does NOT touch the chat transcript — server state pushes
+    // fire on any setting change (any tab/device), and reseeding here would
+    // wipe a live conversation. The greeting is seeded once at boot.
     captureState();
     renderVoiceMeta();
     renderVips();
     renderAccess();
-    renderChatMeta();
   }
 
   /* ---------------- toast ---------------- */
@@ -305,6 +307,7 @@
     try {
       await api("/web/api/state");
       renderState();
+      renderChatMeta();
       connectChat();
       connectLogs();
       refreshHistory();
