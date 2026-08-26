@@ -890,3 +890,64 @@ label.field .lbl {
 @media (max-width: 1080px) {
   .tile-config, .tile-voice, .tile-access { grid-column: span 12; }
 }
+
+/* ---------- narrow viewports ---------- */
+
+@media (max-width: 640px) {
+  .container { width: min(1280px, 100% - 32px); }
+
+  #header .container {
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    padding-top: var(--space-2);
+    padding-bottom: var(--space-2);
+  }
+
+  #header .wordmark { font-size: 20px; }
+  #header .env-tag { display: none; }
+
+  #live { font-size: 10px; gap: 5px; }
+
+  .mode-switch button { padding: 7px 10px; font-size: 12px; }
+
+  .vip-form { grid-template-columns: 1fr 1fr; }
+  .vip-form .btn.primary { grid-column: span 2; margin-bottom: 0; }
+
+  /* time+who collapse onto one line above the message text */
+  .hist-row {
+    grid-template-columns: auto 52px;
+    grid-template-areas:
+      "time who"
+      "text text";
+    row-gap: 3px;
+  }
+  .hist-time { grid-area: time; }
+  .hist-who { grid-area: who; justify-self: end; }
+  .hist-text { grid-area: text; }
+
+  #logs-head { padding: 8px var(--space-4); }
+  #logs-body { padding: 0 var(--space-4) 12px; }
+
+  #bento { padding-top: var(--space-4); padding-bottom: var(--space-4); }
+}
+
+/* ---------- touch targets ---------- */
+
+@media (pointer: coarse) {
+  /* iOS-scale toggle: 46x28 hit box (knob travel = 46 - 22 - 2*3 = 18px) */
+  .switch { width: 46px; height: 28px; }
+  .switch .knob { width: 22px; height: 22px; }
+  .switch input:checked + .track + .knob { transform: translateX(18px); }
+
+  .btn { min-height: 44px; }
+
+  .mode-switch button,
+  .scope-tabs button,
+  .sort-tabs button { min-height: 44px; }
+
+  #quick-msgs .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
