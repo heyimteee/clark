@@ -106,7 +106,7 @@
   function toast(msg) {
     let t = $("#toast");
     if (!t) {
-      t = el('<div id="toast"></div>');
+      t = el('<div id="toast" role="status"></div>');
       document.body.appendChild(t);
     }
     t.textContent = msg;
@@ -190,8 +190,8 @@
           '<div class="spacer"></div>' +
           '<div id="live" title="live link"><span class="dot"></span>live</div>' +
           '<div class="mode-switch">' +
-            '<button id="mode-bento" class="active">bento</button>' +
-            '<button id="mode-chat">chat</button>' +
+            '<button id="mode-bento" class="active" aria-pressed="true">bento</button>' +
+            '<button id="mode-chat" aria-pressed="false">chat</button>' +
           "</div>" +
           '<button id="btn-logout" class="btn">lock</button>' +
         "</div></header>" +
@@ -250,7 +250,7 @@
                 "</div>" +
               "</div>" +
               '<table id="vip-table"><thead>' +
-                '<tr><th>number</th><th>name</th><th>relation</th><th title="whether clark responds to this person">active</th><th>access</th><th></th></tr>' +
+                '<tr><th scope="col">number</th><th scope="col">name</th><th scope="col">relation</th><th scope="col" title="whether clark responds to this person">active</th><th scope="col">access</th><th scope="col"></th></tr>' +
               "</thead><tbody></tbody></table>" +
             "</div>" +
             '<div class="card tile-history"><h2>History</h2><p class="sub">recent turns</p>' +
@@ -280,7 +280,7 @@
               '<button class="chip" data-msg="Send a WhatsApp message to myself saying testing">send msg</button>' +
             '</div>' +
             '<div id="chat-input-bar">' +
-              '<textarea id="chat-input" rows="1" placeholder="message clark…"></textarea>' +
+              '<textarea id="chat-input" rows="1" placeholder="message clark…" aria-label="message clark"></textarea>' +
               '<button id="chat-send" class="btn primary">send</button>' +
             "</div>" +
           "</section>" +
@@ -328,6 +328,8 @@
     mode = m;
     $("#mode-bento").classList.toggle("active", m === "bento");
     $("#mode-chat").classList.toggle("active", m === "chat");
+    $("#mode-bento").setAttribute("aria-pressed", String(m === "bento"));
+    $("#mode-chat").setAttribute("aria-pressed", String(m === "chat"));
     $("#bento").classList.toggle("hidden", m !== "bento");
     $("#chat").classList.toggle("hidden", m !== "chat");
     if (m === "chat") $("#chat-input").focus();
@@ -1014,17 +1016,43 @@
     const body = $("#logs-body");
     const pin = $("#logs-pin");
 
-    head.addEventListener("click", function (e) {
-      if (e.target.closest("#logs-pin")) return;
+    function toggleOpen() {
       logsOpen = !logsOpen;
       body.classList.toggle("hidden", !logsOpen);
+      head.setAttribute("aria-expanded", String(logsOpen));
       if (logsOpen) body.scrollTop = body.scrollHeight;
+    }
+
+    // The strip header and pin are div/span for layout freedom; give them
+    // button semantics so keyboard users can operate the log console.
+    head.setAttribute("role", "button");
+    head.tabIndex = 0;
+    head.setAttribute("aria-expanded", "false");
+    head.addEventListener("click", function (e) {
+      if (e.target.closest("#logs-pin")) return;
+      toggleOpen();
     });
-    pin.addEventListener("click", function () {
+    head.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      toggleOpen();
+    });
+
+    function togglePin() {
       logsPinned = !logsPinned;
       pin.style.textDecoration = logsPinned ? "underline" : "";
-      if (logsPinned) body.classList.add("paused");
-      else body.classList.remove("paused");
+      pin.setAttribute("aria-pressed", String(logsPinned));
+      body.classList.toggle("paused", logsPinned);
+    }
+    pin.setAttribute("role", "switch");
+    pin.tabIndex = 0;
+    pin.setAttribute("aria-pressed", "false");
+    pin.addEventListener("click", togglePin);
+    pin.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      e.stopPropagation(); // keep the head's keydown from also toggling open
+      togglePin();
     });
     body.addEventListener("mouseenter", function () {
       if (!logsPinned) { logsPaused = true; body.classList.add("paused"); }

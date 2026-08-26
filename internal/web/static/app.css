@@ -3,7 +3,7 @@
   --surface: #ffffff;
   --ink: #2a2a28;
   --ink-soft: #6b6a66;
-  --ink-faint: #9b9a95;
+  --ink-faint: #71706a;
   --line: #e7e6e1;
   --line-strong: #d4d3cd;
   --accent: #2f2f2c;
@@ -73,6 +73,17 @@ button, input, textarea, select {
 button { cursor: pointer; }
 
 .hidden { display: none !important; }
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* text fields signal focus through border-color instead of an outline */
+.input:focus-visible,
+#chat-input:focus-visible {
+  outline: none;
+}
 
 /* ---------- shared ---------- */
 
@@ -886,6 +897,20 @@ label.field .lbl {
 }
 
 #toast.show { opacity: 1; transform: translateX(-50%); }
+
+/* ---------- reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  /* swap the bouncing dots for a calm opacity pulse — no movement */
+  .typing-dots span { animation: pulse 1.2s infinite ease-in-out; }
+
+  #toast { transform: translateX(-50%); transition: opacity 160ms ease; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
 
 @media (max-width: 1080px) {
   .tile-config, .tile-voice, .tile-access { grid-column: span 12; }
