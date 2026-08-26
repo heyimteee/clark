@@ -7,6 +7,7 @@
   --line: #e7e6e1;
   --line-strong: #d4d3cd;
   --accent: #2f2f2c;
+  --accent-strong: #1b1b19;
   --on-accent: #f6f5f1;
   --ok-bg: #eef3ec;
   --ok-ink: #3a6b3f;
@@ -133,7 +134,7 @@ button { cursor: pointer; }
   color: var(--on-accent);
 }
 
-.btn.primary:hover { background: #000; border-color: #000; }
+.btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 
 .btn:disabled { opacity: 0.45; cursor: default; }
 
@@ -197,6 +198,8 @@ label.field .lbl {
   gap: 8px;
   margin-top: var(--space-3);
 }
+
+#login .form-row .btn { flex: 1; }
 
 #login .err {
   margin: var(--space-3) 0 0;
@@ -355,7 +358,7 @@ label.field .lbl {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--surface);
   transition: transform 120ms ease;
 }
 
@@ -514,6 +517,31 @@ label.field .lbl {
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 
 .btn.mini { padding: 4px 10px; font-size: 12px; }
+
+.btn.mini.armed {
+  background: var(--err-bg);
+  color: var(--err-ink);
+  border-color: var(--err-ink);
+}
+
+/* vip tile header row (sort tabs) */
+.vip-head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: var(--space-3) 0 var(--space-4);
+}
+
+/* history "show more turns" checkbox */
+.check-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+#cfg-limit { width: 70px; }
 
 /* history tile */
 
@@ -707,7 +735,7 @@ label.field .lbl {
 .msg .meta {
   display: block;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-faint);
   margin-top: 4px;
 }

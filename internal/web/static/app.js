@@ -9,6 +9,8 @@
   let mode = "bento";
   let chatWs = null;
   let logsWs = null;
+  let chatBackoff = 1000;
+  let logsBackoff = 1000;
   let logsOpen = false;
   let logsPaused = false;
   let logsPinned = false;
@@ -126,7 +128,7 @@
         '<div class="card">' +
         '<label class="field"><span class="lbl">access key</span>' +
         '<input id="login-key" class="input" type="password" placeholder="&#183;&#183;&#183;&#183;&#183;&#183;&#183;&#183;" autocomplete="current-password" autofocus></label>' +
-        '<div class="form-row"><button id="login-btn" class="btn primary" style="flex:1">unlock</button></div>' +
+        '<div class="form-row"><button id="login-btn" class="btn primary">unlock</button></div>' +
         '<p class="err hidden"></p>' +
         "</div>" +
         "</div>"
@@ -203,7 +205,7 @@
               '<div class="toggle-row"><div><div class="t-lbl">thinking</div><div class="t-desc">show reasoning steps</div></div>' +
                 '<label class="switch"><input type="checkbox" id="cfg-thinking"><span class="track"></span><span class="knob"></span></label></div>' +
               '<div class="toggle-row"><div><div class="t-lbl">history limit</div><div class="t-desc">turns remembered per chat</div></div>' +
-                '<input id="cfg-limit" class="input" type="number" min="1" max="30" style="width:70px"></div>' +
+                '<input id="cfg-limit" class="input" type="number" min="1" max="30"></div>' +
               '<form id="config-form">' +
                 '<label class="field"><span class="lbl">context</span>' +
                 '<textarea id="cfg-ctx" class="input" rows="3"></textarea></label>' +
@@ -230,7 +232,7 @@
               '<div id="access-list"></div>' +
             "</div>" +
             '<div class="card tile-vips"><h2>VIPs</h2><p class="sub">people who reach clark</p>' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;margin:var(--space-3) 0 var(--space-4)">' +
+              '<div class="vip-head-row">' +
                 '<div class="sort-tabs" id="vip-sort">' +
                   '<button data-sort="default" class="active">default</button>' +
                   '<button data-sort="az">A→Z</button>' +
@@ -261,8 +263,8 @@
               "</div>" +
               '<div id="hist-meta">' +
                 '<select id="hist-vip" class="input hidden"></select>' +
-                '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-soft)">' +
-                '<input type="checkbox" id="hist-all"> show more</label>' +
+                '<label class="check-label">' +
+                '<input type="checkbox" id="hist-all"> show more turns</label>' +
                 '<div class="spacer"></div>' +
                 '<button class="btn mini" id="hist-refresh">refresh</button>' +
               "</div>" +
@@ -412,6 +414,17 @@
       const jid = btn.dataset.vip;
       const act = btn.dataset.vipAction;
       if (act === "del") {
+        // Two-step guard: first click arms ("sure?"), second click deletes.
+        // Any re-render disarms — fail-safe by default.
+        if (!btn.classList.contains("armed")) {
+          btn.classList.add("armed");
+          btn.textContent = "sure?";
+          setTimeout(function () {
+            btn.classList.remove("armed");
+            btn.textContent = "delete";
+          }, 3000);
+          return;
+        }
         mutate("/web/api/vip/delete", { jid: jid }, "deleted " + jid);
       } else if (act === "on") {
         mutate("/web/api/vip/status", { jid: jid, enabled: true });
@@ -451,7 +464,7 @@
   async function addVIPBulk() {
     const entries = $("#vip-bulk").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
     if (!entries.length) { toast("paste lines first"); return; }
-    await mutate("/web/api/vip/add-bulk", { entries: entries }, entries.length + " vip\u2019s added");
+    await mutate("/web/api/vip/add-bulk", { entries: entries }, entries.length + " vips added");
     $("#vip-bulk").value = "";
   }
 
@@ -487,7 +500,7 @@
     let vips = (state && state.vips) || [];
     if (vipSort === "az") vips = vips.slice().sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
     if (!vips.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty">no vip\u2019s yet \u2014 add one above</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">no vips yet \u2014 add one above</td></tr>';
     } else {
       tbody.innerHTML = vips.map(function (v) {
         const chips = (v.access || []).map(function (t) {
@@ -578,6 +591,9 @@
         list.innerHTML = '<div id="hist-empty">no history yet</div>';
         return;
       }
+      // The 15s auto-refresh swaps innerHTML; keep the reader's scroll
+      // position so the list doesn't jump back to the top mid-read.
+      const keepScroll = list.scrollTop;
       list.innerHTML = entries.map(function (e) {
         const who = e.role === "user" ? "you" : "clark";
         const t = e.time || "";
@@ -587,6 +603,7 @@
           '<span class="hist-text">' + esc(e.content) + "</span>" +
           "</div>";
       }).join("");
+      list.scrollTop = keepScroll;
     } catch (e) {
       if (e.message !== "session expired") toast(e.message);
     } finally {
@@ -657,12 +674,17 @@
     const ws = new WebSocket(proto + "//" + location.host + "/web/api/chat");
     chatWs = ws;
     ws.onopen = function () {
+      chatBackoff = 1000;
       sendFrame("auth", { token: token });
       markLive(true);
     };
     ws.onclose = function () {
       markLive(false);
-      if (ws === chatWs) setTimeout(connectChat, 3000);
+      // Exponential retry (1s doubling to an 8s cap) so a dead server isn't
+      // hammered; resets on the next successful open.
+      const delay = chatBackoff;
+      chatBackoff = Math.min(chatBackoff * 2, 8000);
+      if (ws === chatWs) setTimeout(connectChat, delay);
     };
     ws.onerror = function () { ws.close(); };
     let streamBubble = null;
@@ -960,6 +982,7 @@
     logsWs = ws;
     const body = $("#logs-body");
     ws.onopen = function () {
+      logsBackoff = 1000;
       sendFrame("auth", { token: token }, ws);
       const h = $("#logs-hint");
       if (h) h.textContent = "streaming\u2026";
@@ -967,7 +990,9 @@
     ws.onclose = function () {
       const h = $("#logs-hint");
       if (h) h.textContent = "offline \u2014 retrying";
-      if (ws === logsWs) setTimeout(connectLogs, 3000);
+      const delay = logsBackoff;
+      logsBackoff = Math.min(logsBackoff * 2, 8000);
+      if (ws === logsWs) setTimeout(connectLogs, delay);
     };
     ws.onmessage = function (ev) {
       let f;
