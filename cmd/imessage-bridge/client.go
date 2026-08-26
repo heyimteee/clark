@@ -111,6 +111,31 @@ func (c *Client) NextOutbound(ctx context.Context) (store.OutboundMessage, bool,
 	return msg, true, nil
 }
 
+// Identity fetches the configured master self-handle from clark.
+func (c *Client) Identity(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/identity", nil)
+	if err != nil {
+		return "", err
+	}
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return "", fmt.Errorf("identity request failed with status %d", resp.StatusCode)
+	}
+	var body struct {
+		SelfHandle string `json:"self_handle"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("fail to decode identity: %w", err)
+	}
+	return body.SelfHandle, nil
+}
+
 // Ack confirms delivery of one outbound message.
 func (c *Client) Ack(ctx context.Context, id int64) error {
 	body, err := json.Marshal(imessage.AckRequest{ID: id})

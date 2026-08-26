@@ -25,10 +25,19 @@ func (s *Store) EnqueueIMessage(recipient, text string) (int64, error) {
 }
 
 // NextIMessageOutbound claims the oldest pending iMessage (marks it picked) and
-// returns it. ok is false when the queue is empty.
+// returns it. ok is false when the queue is empty. It first does a cheap
+// read-only check so empty-queue polls do not take a write lock every 10s.
 func (s *Store) NextIMessageOutbound() (OutboundMessage, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	var pending int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM imessage_outbound WHERE status = 'pending'`).Scan(&pending); err != nil {
+		return OutboundMessage{}, false, fmt.Errorf("fail to check pending iMessages: %w", err)
+	}
+	if pending == 0 {
+		return OutboundMessage{}, false, nil
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

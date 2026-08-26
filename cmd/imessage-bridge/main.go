@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/signal"
@@ -72,6 +73,32 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+// resolveOwnHandle returns the master's iMessage handle. Order:
+//  1. IMESSAGE_OWN_HANDLE env (explicit override)
+//  2. server GET /identity (single source of truth)
+//  3. heuristic detectOwnHandle (loud warning — easy to mis-detect)
+func resolveOwnHandle(ctx context.Context, cfg bridgeConfig, client *Client, db *sql.DB) string {
+	if cfg.ownHandle != "" {
+		return cfg.ownHandle
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if h, err := client.Identity(fetchCtx); err == nil && h != "" {
+		return h
+	} else if err != nil {
+		logging.Log("BRIDGE", logging.SevWarn, "CONFIG", "Failed to fetch server identity, falling back to heuristic", "error", err)
+	}
+	h, err := detectOwnHandle(db)
+	if err != nil {
+		logging.Log("BRIDGE", logging.SevWarn, "CONFIG", "Heuristic own-handle detection failed", "error", err)
+		return ""
+	}
+	if h != "" {
+		logging.Log("BRIDGE", logging.SevWarn, "CONFIG", "Own handle guessed via heuristic; set IMESSAGE_SELF_HANDLE on server to make it durable", "handle", h)
+	}
+	return h
+}
+
 func main() {
 	cfg, err := loadBridgeConfig()
 	if err != nil {
@@ -111,22 +138,16 @@ func main() {
 	}
 	defer db.Close()
 
-	ownHandle := cfg.ownHandle
-	if ownHandle == "" {
-		ownHandle, err = detectOwnHandle(db)
-		if err != nil {
-			logging.Fatalf("DB", "Cannot detect own handle: %v", err)
-		}
-	}
-	if ownHandle == "" {
-		logging.Log("BRIDGE", logging.SevWarn, "CONFIG", "No own handle known; self-chat bootstrap disabled", "hint", "set IMESSAGE_OWN_HANDLE")
-	} else {
-		logging.Log("BRIDGE", logging.SevInfo, "CONFIG", "Own handle resolved", "handle", ownHandle)
-	}
-
 	client, err := NewClient(cfg.baseURL, cfg.token, cfg.rootCA)
 	if err != nil {
 		logging.Fatalf("CLIENT", "Cannot build bridge client: %v", err)
+	}
+
+	ownHandle := resolveOwnHandle(ctx, cfg, client, db)
+	if ownHandle == "" {
+		logging.Log("BRIDGE", logging.SevWarn, "CONFIG", "No own handle known; self-chat bootstrap disabled", "hint", "set IMESSAGE_SELF_HANDLE on server")
+	} else {
+		logging.Log("BRIDGE", logging.SevInfo, "CONFIG", "Own handle resolved", "handle", ownHandle)
 	}
 
 	watcher := NewWatcher(db, cfg.statePath, ownHandle, client, cfg.pollInterval)

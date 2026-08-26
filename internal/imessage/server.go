@@ -44,7 +44,17 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /inbound", s.handleInbound)
 	mux.HandleFunc("GET /outbound", s.handleOutbound)
 	mux.HandleFunc("POST /ack", s.handleAck)
+	mux.HandleFunc("GET /identity", s.handleIdentity)
 	return s.requireToken(mux)
+}
+
+// handleIdentity returns the configured master self-handle so the bridge can
+// fetch its single source of truth at boot instead of heuristically guessing.
+func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]string{"self_handle": s.selfHandle}); err != nil {
+		logging.Log("IMESSAGE", logging.SevErr, "IDENTITY", "Failed to encode identity", "error", err)
+	}
 }
 
 func (s *Server) requireToken(next http.Handler) http.Handler {
