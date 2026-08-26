@@ -110,6 +110,16 @@ func (h *Handler) Handle(msg Message) {
 		"from", msg.Sender, "self", msg.IsSelf, "group", msg.IsGroup)
 
 	if msg.Text == "" {
+		if msg.MediaType != "" {
+			// Has media but no caption — acknowledge instead of ghosting.
+			ctx := context.Background()
+			reply := mediaAckMessage(msg.MediaType)
+			if err := h.msgr.Send(ctx, msg.Chat, reply); err != nil {
+				logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send media ack", "to", msg.Chat, "error", err)
+			}
+			logging.Log(h.component, logging.SevInfo, "MESSAGE", "Media message acked", "media", msg.MediaType, "from", msg.Sender)
+			return
+		}
 		logging.Log(h.component, logging.SevWarn, "MESSAGE", "Message discarded", "reason", "no text content")
 		return
 	}
@@ -169,6 +179,23 @@ const (
 	// model throttles the request; clark switches himself off at the same time.
 	rateLimitMasterMessage = "🚨 Attention Sir!\n\nI have been silenced: the model is rate-limiting my requests. I have turned myself *Off* to stay reliable. Say _wake up buddy_ when you need me again."
 )
+
+func mediaAckMessage(mediaType string) string {
+	switch mediaType {
+	case "image":
+		return "_My apologies — I can only read text at the moment._ If you add a caption I can reply to that, Sir."
+	case "video":
+		return "_My apologies — video needs a caption for me to reply at the moment, Sir._"
+	case "document":
+		return "_My apologies — files need a caption for me to reply at the moment, Sir._"
+	case "audio":
+		return "_My apologies — I cannot transcribe audio yet, Sir._"
+	case "sticker":
+		return "_Noted, Sir._ — I cannot read stickers, but I am here for your message."
+	default:
+		return "_My apologies — I can only read text at the moment, Sir._"
+	}
+}
 
 // inbound is one message awaiting a slow, model-backed reply.
 type inbound struct {

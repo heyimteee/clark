@@ -5,6 +5,7 @@ import (
 
 	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -76,12 +77,7 @@ func (h *Handler) toGateway(v *events.Message) (gateway.Message, bool) {
 	senderStr := sender.String()
 	relation, isVIP := h.butler.Relation(senderStr)
 
-	var userMsg string
-	if conversation := v.Message.GetConversation(); conversation != "" {
-		userMsg = conversation
-	} else if extendedMessage := v.Message.GetExtendedTextMessage(); extendedMessage != nil {
-		userMsg = extendedMessage.GetText()
-	}
+	userMsg, mediaType := extractTextAndMedia(v)
 
 	who := "Unknown"
 	if isVIP {
@@ -94,13 +90,72 @@ func (h *Handler) toGateway(v *events.Message) (gateway.Message, bool) {
 	}
 
 	return gateway.Message{
-		ID:      string(v.Info.ID),
-		Sender:  senderStr,
-		Chat:    v.Info.Chat.String(),
-		Text:    userMsg,
-		IsSelf:  isSelf,
-		IsGroup: v.Info.IsGroup,
+		ID:        string(v.Info.ID),
+		Sender:    senderStr,
+		Chat:      v.Info.Chat.String(),
+		Text:      userMsg,
+		MediaType: mediaType,
+		IsSelf:    isSelf,
+		IsGroup:   v.Info.IsGroup,
 	}, true
+}
+
+// extractTextAndMedia returns the user-visible text and a media classification.
+// Captions from image/video/document messages are treated as text so Clark
+// can answer; uncaptioned media still reports its kind for a polite ack.
+func extractTextAndMedia(v *events.Message) (string, string) {
+	if v == nil || v.Message == nil {
+		return "", ""
+	}
+	if t := v.Message.GetConversation(); t != "" {
+		return t, ""
+	}
+	if em := v.Message.GetExtendedTextMessage(); em != nil {
+		if t := em.GetText(); t != "" {
+			return t, ""
+		}
+	}
+	msg := unwrapMessage(v.Message)
+	if m := msg.GetImageMessage(); m != nil {
+		return m.GetCaption(), "image"
+	}
+	if m := msg.GetVideoMessage(); m != nil {
+		return m.GetCaption(), "video"
+	}
+	if m := msg.GetDocumentMessage(); m != nil {
+		return m.GetCaption(), "document"
+	}
+	if m := msg.GetAudioMessage(); m != nil {
+		return "", "audio"
+	}
+	if m := msg.GetStickerMessage(); m != nil {
+		return "", "sticker"
+	}
+	// Reactions and other non-text system messages stay silent.
+	return "", ""
+}
+
+// unwrapMessage peels ephemeral/view-once wrappers to reach the inner payload.
+func unwrapMessage(m *waE2E.Message) *waE2E.Message {
+	if m == nil {
+		return nil
+	}
+	for {
+		if em := m.GetEphemeralMessage(); em != nil && em.GetMessage() != nil {
+			m = em.GetMessage()
+			continue
+		}
+		if vom := m.GetViewOnceMessage(); vom != nil && vom.GetMessage() != nil {
+			m = vom.GetMessage()
+			continue
+		}
+		if v2 := m.GetViewOnceMessageV2(); v2 != nil && v2.GetMessage() != nil {
+			m = v2.GetMessage()
+			continue
+		}
+		break
+	}
+	return m
 }
 
 // filterMessage reports whether a message must be dropped, and why.

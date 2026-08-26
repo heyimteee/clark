@@ -62,6 +62,26 @@ type Message struct {
 	IsSelf bool
 	// IsGroup reports whether this arrived in a group conversation.
 	IsGroup bool
+	// MediaType classifies non-text content when Text is empty: image, video,
+	// document, audio, sticker. Empty for text or unclassified messages.
+	MediaType string
+	// Media holds downloaded bytes for vision-capable handling (nil when not
+	// downloaded or vision is disabled). Capped at 10 MiB per attachment.
+	Media []MediaAttachment
+}
+
+// MediaAttachment is one downloaded media blob.
+type MediaAttachment struct {
+	Type string
+	MIME string
+	Data []byte
+}
+
+// MediaDescriber is an optional capability the Butler may implement to
+// describe image media locally (e.g. via a vision model) before the main
+// chat model crafts the persona reply.
+type MediaDescriber interface {
+	Describe(ctx context.Context, mime string, data []byte) (string, error)
 }
 
 // Messenger delivers replies through a transport.
