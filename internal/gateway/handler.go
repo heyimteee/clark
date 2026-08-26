@@ -110,8 +110,11 @@ func (h *Handler) Handle(msg Message) {
 		"from", msg.Sender, "self", msg.IsSelf, "group", msg.IsGroup)
 
 	if msg.Text == "" {
-		if msg.MediaType != "" {
-			// Has media but no caption — acknowledge instead of ghosting.
+		if len(msg.Media) > 0 {
+			// Has downloadable media for vision — let dispatcher describe it;
+			// fall through to normal flow (process will prepend description).
+		} else if msg.MediaType != "" {
+			// Has media kind but no bytes (or not downloadable) — acknowledge instead of ghosting.
 			ctx := context.Background()
 			reply := mediaAckMessage(msg.MediaType)
 			if err := h.msgr.Send(ctx, msg.Chat, reply); err != nil {
@@ -119,9 +122,10 @@ func (h *Handler) Handle(msg Message) {
 			}
 			logging.Log(h.component, logging.SevInfo, "MESSAGE", "Media message acked", "media", msg.MediaType, "from", msg.Sender)
 			return
+		} else {
+			logging.Log(h.component, logging.SevWarn, "MESSAGE", "Message discarded", "reason", "no text content")
+			return
 		}
-		logging.Log(h.component, logging.SevWarn, "MESSAGE", "Message discarded", "reason", "no text content")
-		return
 	}
 
 	// Strip Clark's own branding so a sender cannot impersonate him in
@@ -167,6 +171,7 @@ func (h *Handler) Handle(msg Message) {
 		senderJID: msg.Sender,
 		userMsg:   msg.Text,
 		isSelf:    msg.IsSelf,
+		media:     msg.Media,
 	})
 }
 
@@ -203,6 +208,7 @@ type inbound struct {
 	senderJID string
 	userMsg   string
 	isSelf    bool
+	media     []MediaAttachment
 }
 
 // dispatcher runs one serial worker goroutine per sender so replies arrive in
@@ -297,7 +303,36 @@ func (d *dispatcher) worker(sender string, ch chan inbound) {
 }
 
 func (d *dispatcher) process(in inbound) {
-	reply, err := d.butler.Reply(d.ctx, in.senderJID, in.userMsg, in.isSelf)
+	userMsg := in.userMsg
+	if len(in.media) > 0 {
+		if describer, ok := d.butler.(MediaDescriber); ok {
+			for _, m := range in.media {
+				desc, err := describer.Describe(d.ctx, m.MIME, m.Data)
+				if err != nil {
+					logging.Log(d.component, logging.SevWarn, "VISION", "Vision describe failed; falling back to ack", "error", err)
+					if userMsg == "" {
+						_ = d.msgr.Send(d.ctx, in.chat, mediaAckMessage(m.Type))
+						return
+					}
+					continue
+				}
+				if strings.TrimSpace(userMsg) == "" {
+					userMsg = "[image: " + strings.TrimSpace(desc) + "]"
+				} else {
+					userMsg += "\n[image: " + strings.TrimSpace(desc) + "]"
+				}
+			}
+		} else if strings.TrimSpace(userMsg) == "" {
+			// Vision not configured — acknowledge instead of ghosting.
+			_ = d.msgr.Send(d.ctx, in.chat, mediaAckMessage(in.media[0].Type))
+			return
+		}
+	}
+	if strings.TrimSpace(userMsg) == "" {
+		logging.Log(d.component, logging.SevWarn, "MESSAGE", "Message discarded after vision", "reason", "no text content")
+		return
+	}
+	reply, err := d.butler.Reply(d.ctx, in.senderJID, userMsg, in.isSelf)
 	if err != nil {
 		if errors.Is(err, ollama.ErrRateLimited) {
 			logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Model rate limited; master alerted and clark switched off", "error", err)

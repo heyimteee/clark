@@ -18,6 +18,7 @@ type Message struct {
 	Role      string     `json:"role"`
 	Content   string     `json:"content"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Images    []string   `json:"images,omitempty"`
 }
 
 // ToolCall is a request to invoke a tool, as emitted by the model.

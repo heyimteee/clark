@@ -1,6 +1,8 @@
 package whatsapp
 
 import (
+	"context"
+	"os"
 	"time"
 
 	"github.com/heyimteee/clark/internal/gateway"
@@ -79,6 +81,20 @@ func (h *Handler) toGateway(v *events.Message) (gateway.Message, bool) {
 
 	userMsg, mediaType := extractTextAndMedia(v)
 
+	// For uncaptioned images, attach bytes for local vision describer so the
+	// cloud model stays text-only (free-tier friendly: gemma4:e4b describes,
+	// gemma4:cloud answers).
+	var media []gateway.MediaAttachment
+	if userMsg == "" && os.Getenv("OLLAMA_VISION_MODEL") != "" && (mediaType == "image" || mediaType == "document") {
+		dctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if data, mime, err := h.msgr.DownloadMedia(dctx, v); err == nil && len(data) > 0 {
+			media = []gateway.MediaAttachment{{Type: mediaType, MIME: mime, Data: data}}
+		} else if err != nil {
+			logging.Log("WHATSAPP", logging.SevWarn, "MEDIA", "Failed to download media for vision", "error", err)
+		}
+		cancel()
+	}
+
 	who := "Unknown"
 	if isVIP {
 		who = relation
@@ -95,6 +111,7 @@ func (h *Handler) toGateway(v *events.Message) (gateway.Message, bool) {
 		Chat:      v.Info.Chat.String(),
 		Text:      userMsg,
 		MediaType: mediaType,
+		Media:     media,
 		IsSelf:    isSelf,
 		IsGroup:   v.Info.IsGroup,
 	}, true

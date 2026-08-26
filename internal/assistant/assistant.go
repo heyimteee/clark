@@ -4,6 +4,7 @@ package assistant
 import (
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,18 +109,20 @@ type pendingIter struct {
 
 // Service is the assistant's orchestration layer. It satisfies whatsapp.Butler.
 type Service struct {
-	settings  store.Settings
-	history   store.HistoryStore
-	access    store.AccessStore
-	vip       *VIP
-	tools     *tools.Registry
-	llm       LLM
-	model     string
-	name      string
-	status    bool
-	context   string
-	think     bool
-	alertMode string // "voice" (default) or "silent"
+	settings    store.Settings
+	history     store.HistoryStore
+	access      store.AccessStore
+	vip         *VIP
+	tools       *tools.Registry
+	llm         LLM
+	visionLLM   LLM
+	model       string
+	visionModel string
+	name        string
+	status      bool
+	context     string
+	think       bool
+	alertMode   string // "voice" (default) or "silent"
 
 	historyLimit int
 
@@ -150,20 +153,24 @@ type Service struct {
 // New loads persisted state and returns a ready Service.
 func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 	s := &Service{
-		settings: st,
-		history:  st,
-		access:   st,
-		vip:      NewVIP(st),
-		tools:    tools.NewRegistry(),
-		llm:      llm,
-		model:    cfg.OllamaModel,
-		pending:  make(map[string]*pendingIter),
+		settings:    st,
+		history:     st,
+		access:      st,
+		vip:         NewVIP(st),
+		tools:       tools.NewRegistry(),
+		llm:         llm,
+		model:       cfg.OllamaModel,
+		visionModel: cfg.OllamaVisionModel,
+		pending:     make(map[string]*pendingIter),
 
 		masterName:        orDefault(cfg.MasterName, "the Master"),
 		protocolName:      orDefault(cfg.ProtocolName, "Butler"),
 		palaceName:        orDefault(cfg.PalaceName, "Palace"),
 		bypassPhrase:      orDefault(cfg.BypassPhrase, "get him to me"),
 		exceptionVisitors: formatExceptionVisitors(cfg.InnerCircle),
+	}
+	if cfg.OllamaVisionModel != "" {
+		s.visionLLM = ollama.New(cfg.OllamaURL, cfg.OllamaVisionModel)
 	}
 
 	if err := s.vip.Load(); err != nil {
@@ -174,6 +181,34 @@ func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 	}
 	s.registerManagementTools()
 	return s, nil
+}
+
+// Describe returns a factual, concise description of the image bytes via the
+// configured local vision model (OLLAMA_VISION_MODEL). Implements gateway.MediaDescriber.
+func (s *Service) Describe(ctx context.Context, mime string, data []byte) (string, error) {
+	if s.visionLLM == nil {
+		return "", errors.New("vision not configured")
+	}
+	if len(data) == 0 {
+		return "", errors.New("empty image")
+	}
+	// Cap at 10 MiB — WhatsApp images are far smaller.
+	if len(data) > 10<<20 {
+		return "", errors.New("image too large")
+	}
+	b64 := base64.StdEncoding.EncodeToString(data)
+	msgs := []ollama.Message{{
+		Role:    "user",
+		Content: "Describe this image factually and concisely for a butler who must respond to its sender. Be brief, neutral, and objective.",
+		Images:  []string{b64},
+	}}
+	dctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	res, err := s.visionLLM.Chat(dctx, msgs, nil)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(res.Content), nil
 }
 
 // load reads persisted scalars into the cache. Called once at startup.

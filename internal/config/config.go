@@ -11,10 +11,11 @@ import (
 
 // Config holds clark's runtime configuration.
 type Config struct {
-	OllamaURL    string
-	OllamaModel  string
-	DBPath       string
-	TavilyAPIKey string
+	OllamaURL         string
+	OllamaModel       string
+	OllamaVisionModel string
+	DBPath            string
+	TavilyAPIKey      string
 
 	// Persona shapes the butler's identity. Every field is optional and can be
 	// overridden in .env or via the environment so users can run clark without
@@ -164,10 +165,11 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		OllamaURL:    ollamaURL,
-		OllamaModel:  model,
-		DBPath:       dbPath,
-		TavilyAPIKey: os.Getenv("TAVILY_API_KEY"),
+		OllamaURL:         ollamaURL,
+		OllamaModel:       model,
+		OllamaVisionModel: os.Getenv("OLLAMA_VISION_MODEL"),
+		DBPath:            dbPath,
+		TavilyAPIKey:      os.Getenv("TAVILY_API_KEY"),
 
 		MasterName:   os.Getenv("MASTER_NAME"),
 		ProtocolName: os.Getenv("PROTOCOL_NAME"),
