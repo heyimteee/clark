@@ -59,6 +59,7 @@ type Client struct {
 	model   string
 	http    *http.Client
 	think   bool
+	temp    float64 // sampling temperature; negative means "server default"
 }
 
 // New returns a Client for the given base URL and model.
@@ -67,18 +68,36 @@ func New(baseURL, model string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
 		http:    &http.Client{Timeout: 5 * time.Minute},
+		temp:    -1,
 	}
 }
 
 // SetThink enables or disables reasoning tokens for subsequent chats.
 func (c *Client) SetThink(on bool) { c.think = on }
 
+// SetTemperature pins the sampling temperature for subsequent chats (e.g.
+// 0.2 for fidelity-critical digest passes). Negative restores the default.
+func (c *Client) SetTemperature(t float64) { c.temp = t }
+
+type chatOptions struct {
+	Temperature float64 `json:"temperature"`
+}
+
 type chatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Tools    []Tool    `json:"tools,omitempty"`
-	Stream   bool      `json:"stream"`
-	Think    bool      `json:"think"`
+	Model    string       `json:"model"`
+	Messages []Message    `json:"messages"`
+	Tools    []Tool       `json:"tools,omitempty"`
+	Stream   bool         `json:"stream"`
+	Think    bool         `json:"think"`
+	Options  *chatOptions `json:"options,omitempty"`
+}
+
+// options renders the per-request sampler options, nil when defaulted.
+func (c *Client) options() *chatOptions {
+	if c.temp < 0 {
+		return nil
+	}
+	return &chatOptions{Temperature: c.temp}
 }
 
 type chatResponse struct {
@@ -102,6 +121,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (*C
 		Tools:    tools,
 		Stream:   false,
 		Think:    c.think,
+		Options:  c.options(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode request: %w", err)
@@ -158,6 +178,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		Tools:    tools,
 		Stream:   true,
 		Think:    c.think,
+		Options:  c.options(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode request: %w", err)

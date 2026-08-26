@@ -70,18 +70,35 @@ type Message struct {
 	Media []MediaAttachment
 }
 
-// MediaAttachment is one downloaded media blob.
+// MediaAttachment is one downloaded media blob. For frame-based media
+// (video/GIF/animated sticker) each attachment is one extracted frame and
+// several share the same Type; describers receive them in order.
 type MediaAttachment struct {
-	Type string
+	Type string // audio | image | video | gif | document | sticker
+	Name string // original filename when the transport provides one
 	MIME string
 	Data []byte
 }
 
 // MediaDescriber is an optional capability the Butler may implement to
-// describe image media locally (e.g. via a vision model) before the main
-// chat model crafts the persona reply.
+// describe visual media locally (e.g. via a vision model) before the main
+// chat model crafts the persona reply. Items are passed in order so a
+// multi-frame clip is described as one sequence.
 type MediaDescriber interface {
-	Describe(ctx context.Context, mime string, data []byte) (string, error)
+	Describe(ctx context.Context, items []MediaAttachment) (string, error)
+}
+
+// AudioTranscriber is an optional capability the Butler may implement to
+// turn voice-note audio into text (e.g. via the resident whisper daemon).
+type AudioTranscriber interface {
+	TranscribeVoice(ctx context.Context, mime string, data []byte) (string, error)
+}
+
+// DocDigester is an optional capability the Butler may implement to compact a
+// document's extracted text into an efficient digest that stands in for the
+// full document when the main chat model answers.
+type DocDigester interface {
+	DigestDocument(ctx context.Context, name, text string) (string, error)
 }
 
 // Messenger delivers replies through a transport.

@@ -10,6 +10,7 @@ import (
 	"github.com/heyimteee/clark/internal/alert"
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/store"
+	"github.com/heyimteee/clark/internal/voice"
 )
 
 // TestRunConsolesStartsWebAndBridgeTogether is the regression test for the
@@ -50,7 +51,7 @@ func TestRunConsolesStartsWebAndBridgeTogether(t *testing.T) {
 	t.Cleanup(cancel)
 
 	done := make(chan error, 1)
-	go func() { done <- a.runConsoles(ctx, alert.New(nil)) }()
+	go func() { done <- a.runConsoles(ctx, alert.New(nil), &voice.Engine{}) }()
 
 	waitDialable(t, cfg.WebListenAddr)
 	waitDialable(t, cfg.IMessageListenAddr)

@@ -115,57 +115,77 @@ func (m *WAMessenger) resolvePhone(jid types.JID) types.JID {
 	return jid
 }
 
-// DownloadMedia downloads image/document bytes for vision. Returns nil when not
-// downloadable or vision is not applicable (e.g. video/sticker). Caller caps size.
-func (m *WAMessenger) DownloadMedia(ctx context.Context, v *events.Message) ([]byte, string, error) {
+// DownloadMedia downloads media bytes for local processing. kind selects the
+// payload: "image", "document", "audio", "video", or "sticker". Returns
+// (nil, "", "", nil) when nothing downloadable matches. Caller caps size.
+func (m *WAMessenger) DownloadMedia(ctx context.Context, v *events.Message, kind string) ([]byte, string, string, error) {
 	if v == nil || v.Message == nil || m.client == nil {
-		return nil, "", nil
+		return nil, "", "", nil
 	}
-	msg := v.Message
-	// Unwrap ephemeral/view-once wrappers.
-	for {
-		if em := msg.GetEphemeralMessage(); em != nil && em.GetMessage() != nil {
-			msg = em.GetMessage()
+	msg := unwrapEventMessage(v.Message)
+	var dl func() ([]byte, error)
+	var mime, name string
+	switch kind {
+	case "image":
+		if im := msg.GetImageMessage(); im != nil {
+			mime = im.GetMimetype()
+			dl = func() ([]byte, error) { return m.client.Download(ctx, im) }
+		}
+	case "document":
+		if dm := msg.GetDocumentMessage(); dm != nil {
+			mime = dm.GetMimetype()
+			name = dm.GetFileName()
+			dl = func() ([]byte, error) { return m.client.Download(ctx, dm) }
+		}
+	case "audio":
+		if am := msg.GetAudioMessage(); am != nil {
+			mime = am.GetMimetype()
+			dl = func() ([]byte, error) { return m.client.Download(ctx, am) }
+		}
+	case "video":
+		if vm := msg.GetVideoMessage(); vm != nil {
+			mime = vm.GetMimetype()
+			dl = func() ([]byte, error) { return m.client.Download(ctx, vm) }
+		}
+	case "sticker":
+		if sm := msg.GetStickerMessage(); sm != nil {
+			mime = sm.GetMimetype()
+			dl = func() ([]byte, error) { return m.client.Download(ctx, sm) }
+		}
+	}
+	if dl == nil {
+		return nil, "", "", nil
+	}
+	data, err := dl()
+	if err != nil {
+		return nil, "", "", err
+	}
+	const capBytes = 50 << 20
+	if len(data) > capBytes {
+		data = data[:capBytes]
+	}
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	return data, mime, name, nil
+}
+
+// unwrapEventMessage peels ephemeral/view-once wrappers to reach the payload.
+func unwrapEventMessage(m *waE2E.Message) *waE2E.Message {
+	for m != nil {
+		if em := m.GetEphemeralMessage(); em != nil && em.GetMessage() != nil {
+			m = em.GetMessage()
 			continue
 		}
-		if vom := msg.GetViewOnceMessage(); vom != nil && vom.GetMessage() != nil {
-			msg = vom.GetMessage()
+		if vom := m.GetViewOnceMessage(); vom != nil && vom.GetMessage() != nil {
+			m = vom.GetMessage()
 			continue
 		}
-		if v2 := msg.GetViewOnceMessageV2(); v2 != nil && v2.GetMessage() != nil {
-			msg = v2.GetMessage()
+		if v2 := m.GetViewOnceMessageV2(); v2 != nil && v2.GetMessage() != nil {
+			m = v2.GetMessage()
 			continue
 		}
 		break
 	}
-	var dl func() ([]byte, error)
-	var mime string
-	if im := msg.GetImageMessage(); im != nil {
-		mime = im.GetMimetype()
-		dl = func() ([]byte, error) { return m.client.Download(ctx, im) }
-	} else if dm := msg.GetDocumentMessage(); dm != nil {
-		// Only download documents that are images (e.g. forwarded photos as files).
-		mime = dm.GetMimetype()
-		if len(mime) >= 6 && mime[:6] == "image/" {
-			dl = func() ([]byte, error) { return m.client.Download(ctx, dm) }
-		} else {
-			return nil, "", nil
-		}
-	} else {
-		return nil, "", nil
-	}
-	if dl == nil {
-		return nil, "", nil
-	}
-	data, err := dl()
-	if err != nil {
-		return nil, "", err
-	}
-	if len(data) > 10<<20 {
-		data = data[:10<<20]
-	}
-	if mime == "" {
-		mime = "image/jpeg"
-	}
-	return data, mime, nil
+	return m
 }

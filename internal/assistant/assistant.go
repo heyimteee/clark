@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/heyimteee/clark/internal/config"
+	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
+	"github.com/heyimteee/clark/internal/media"
 	"github.com/heyimteee/clark/internal/ollama"
 	"github.com/heyimteee/clark/internal/store"
 	"github.com/heyimteee/clark/internal/tools"
@@ -109,13 +111,16 @@ type pendingIter struct {
 
 // Service is the assistant's orchestration layer. It satisfies whatsapp.Butler.
 type Service struct {
-	settings    store.Settings
-	history     store.HistoryStore
-	access      store.AccessStore
-	vip         *VIP
-	tools       *tools.Registry
-	llm         LLM
-	visionLLM   LLM
+	settings  store.Settings
+	history   store.HistoryStore
+	access    store.AccessStore
+	vip       *VIP
+	tools     *tools.Registry
+	llm       LLM
+	visionLLM LLM
+	stt       interface {
+		Transcribe(ctx context.Context, audioWAV []byte) (string, error)
+	}
 	model       string
 	visionModel string
 	name        string
@@ -183,32 +188,149 @@ func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 	return s, nil
 }
 
-// Describe returns a factual, concise description of the image bytes via the
-// configured local vision model (OLLAMA_VISION_MODEL). Implements gateway.MediaDescriber.
-func (s *Service) Describe(ctx context.Context, mime string, data []byte) (string, error) {
+// AttachSTT wires the resident speech-to-text engine so voice notes can be
+// transcribed locally. Safe to call once during app wiring.
+func (s *Service) AttachSTT(stt interface {
+	Transcribe(ctx context.Context, audioWAV []byte) (string, error)
+}) {
+	s.stt = stt
+}
+
+// Describe returns a factual, concise description of one or more ordered
+// image frames via the configured local vision model (OLLAMA_VISION_MODEL).
+// Implements gateway.MediaDescriber.
+func (s *Service) Describe(ctx context.Context, items []gateway.MediaAttachment) (string, error) {
 	if s.visionLLM == nil {
 		return "", errors.New("vision not configured")
 	}
-	if len(data) == 0 {
-		return "", errors.New("empty image")
+	if len(items) == 0 {
+		return "", errors.New("no image data")
 	}
-	// Cap at 10 MiB — WhatsApp images are far smaller.
-	if len(data) > 10<<20 {
-		return "", errors.New("image too large")
+	msgs := make([]ollama.Message, 1)
+	if len(items) == 1 {
+		msgs[0] = ollama.Message{
+			Role:    "user",
+			Content: "Describe this image factually and concisely for a butler who must respond to its sender. Be brief, neutral, and objective.",
+			Images:  []string{base64.StdEncoding.EncodeToString(items[0].Data)},
+		}
+	} else {
+		images := make([]string, 0, len(items))
+		for _, it := range items {
+			images = append(images, base64.StdEncoding.EncodeToString(it.Data))
+		}
+		msgs[0] = ollama.Message{
+			Role:    "user",
+			Content: "These are chronological frames of ONE short video clip, in order. Describe factually and concisely what happens across the sequence for a butler who must respond to its sender. Be brief, neutral, objective.",
+			Images:  images,
+		}
 	}
-	b64 := base64.StdEncoding.EncodeToString(data)
-	msgs := []ollama.Message{{
-		Role:    "user",
-		Content: "Describe this image factually and concisely for a butler who must respond to its sender. Be brief, neutral, and objective.",
-		Images:  []string{b64},
-	}}
-	dctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	dctx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	res, err := s.visionLLM.Chat(dctx, msgs, nil)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(res.Content), nil
+}
+
+// TranscribeVoice converts a voice-note blob to WAV and runs the resident
+// whisper daemon. Implements gateway.AudioTranscriber.
+func (s *Service) TranscribeVoice(ctx context.Context, mime string, data []byte) (string, error) {
+	if s.stt == nil {
+		return "", errors.New("stt not configured")
+	}
+	tctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	wav, err := media.ToWav16k(tctx, data)
+	if err != nil {
+		return "", err
+	}
+	return s.stt.Transcribe(tctx, wav)
+}
+
+// digestPrompt is the opencode-style compaction prompt: the digest is the
+// ONLY surviving context, so completeness of facts outranks brevity.
+const digestPrompt = `You are compacting a document so work can continue from your output alone.
+This digest is the ONLY context available going forward.
+
+RULES:
+1. NEVER generalize away specifics. Exact names, dates, amounts, paths, URLs,
+   IDs, error messages, version numbers — copy them verbatim.
+2. Preserve ALL asks made of the reader and all commitments made by the author.
+3. Preserve decisions with their reasons; open questions; deadlines.
+4. Bullets only. No prose padding. Compress wording, never facts.
+5. Anything not fitting a section goes under "Other notable details".
+   Nothing may be silently dropped.
+
+OUTPUT SECTIONS (markdown):
+## Purpose
+## Key entities
+## Numbers & dates
+## Decisions & recommendations
+## Asks / action items
+## Open questions
+## Other notable details
+
+If the input text was cut off anywhere, append on the last line: TRUNCATED:<where>`
+
+// DigestDocument compacts extracted document text into an efficient,
+// lossless-intent digest via the local vision/text model. Long inputs are
+// map-reduced: per-chunk compaction, then a merge pass. Implements
+// gateway.DocDigester.
+func (s *Service) DigestDocument(ctx context.Context, name, text string) (string, error) {
+	if s.visionLLM == nil {
+		return "", errors.New("vision not configured")
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", errors.New("empty document text")
+	}
+	const chunkSize = 8000
+	const overlap = 400
+	dctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
+	defer cancel()
+
+	compact := func(body string) (string, error) {
+		cc, cancel := context.WithTimeout(dctx, 120*time.Second)
+		defer cancel()
+		res, err := s.visionLLM.Chat(cc, []ollama.Message{{
+			Role:    "user",
+			Content: digestPrompt + "\n\nDOCUMENT:\n" + body,
+		}}, nil)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(res.Content), nil
+	}
+
+	if len(text) <= 12000 {
+		return compact(text)
+	}
+
+	// MAP over overlapping chunks.
+	var digests []string
+	for start := 0; start < len(text); start += chunkSize - overlap {
+		end := start + chunkSize
+		if end > len(text) {
+			end = len(text)
+		}
+		part, err := compact(text[start:end])
+		if err != nil {
+			return "", err
+		}
+		digests = append(digests, fmt.Sprintf("### Chunk %d\n%s", len(digests)+1, part))
+		if end == len(text) {
+			break
+		}
+	}
+
+	// REDUCE: merge the chunk digests through the same schema.
+	merged, err := compact(fmt.Sprintf(
+		"These are sequential section digests of one document (%q). Merge them into ONE final digest following the same rules and sections. Resolve duplicates; keep every unique fact.\n\n%s",
+		name, strings.Join(digests, "\n\n")))
+	if err != nil {
+		return "", err
+	}
+	return merged, nil
 }
 
 // load reads persisted scalars into the cache. Called once at startup.

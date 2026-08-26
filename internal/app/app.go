@@ -199,8 +199,12 @@ func (a *App) Run() error {
 		})
 	}()
 
+	// One voice engine serves everything: web console STT/TTS and the
+	// local media brain (voice-note transcription) via the assistant.
+	engine := buildVoiceEngine(a.cfg)
+	a.ast.AttachSTT(engine.STT)
+
 	if a.cfg.WebEnabled {
-		engine := buildVoiceEngine(a.cfg)
 		// Pre-warm any resident TTS daemon (piper, or the failover's piper
 		// backup) so the model is loaded before first use.
 		if w, ok := engine.TTS.(interface{ Start(context.Context) error }); ok {
@@ -222,7 +226,7 @@ func (a *App) Run() error {
 
 	// Both transports run concurrently and independently (#57): the console
 	// must never gate the bridge API or vice versa.
-	err = a.runConsoles(ctx, alerts)
+	err = a.runConsoles(ctx, alerts, engine)
 	stop()
 	return err
 }
@@ -231,7 +235,7 @@ func (a *App) Run() error {
 // each on its own listener, and returns when the first one stops. Regression
 // guard for #57: web.Run is blocking, so it must run in its own goroutine or
 // a combined deployment would never reach the bridge.
-func (a *App) runConsoles(ctx context.Context, alerts *alert.Service) error {
+func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *voice.Engine) error {
 	errCh := make(chan error, 2)
 
 	if a.cfg.WebEnabled {
@@ -242,7 +246,7 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service) error {
 				AlertToken:     a.cfg.AlertToken,
 				Butler:         a.ast,
 				Store:          a.st,
-				Voice:          buildVoiceEngine(a.cfg),
+				Voice:          engine,
 				STTModel:       a.cfg.STTModel,
 				TTSEngine:      a.cfg.TTSEngine,
 				AffirmationDir: a.cfg.AffirmationDir,

@@ -302,34 +302,109 @@ func (d *dispatcher) worker(sender string, ch chan inbound) {
 	}
 }
 
+// processMedia converts each attachment into a bracketed context line using
+// the Butler's optional local-processing capabilities. Returns the context
+// lines, and the first attachment that could not be processed — nil when
+// everything succeeded or nothing needed processing.
+func (d *dispatcher) processMedia(in inbound) (lines []string, failed *MediaAttachment) {
+	var audio, docs, visual []MediaAttachment
+	for i := range in.media {
+		switch in.media[i].Type {
+		case "audio":
+			audio = append(audio, in.media[i])
+		case "document":
+			docs = append(docs, in.media[i])
+		default:
+			visual = append(visual, in.media[i])
+		}
+	}
+
+	addLine := func(prefix, body string) {
+		lines = append(lines, "["+prefix+": "+strings.TrimSpace(body)+"]")
+	}
+	fail := func(stage string, m MediaAttachment, err error, capability string) *MediaAttachment {
+		logging.Log(d.component, logging.SevErr, "MEDIA",
+			"LOCAL MEDIA PROCESSING FAILED — degrading message to caption-only fallback",
+			"stage", stage, "type", m.Type, "mime", m.MIME,
+			"capability", capability, "has_caption", strings.TrimSpace(in.userMsg) != "", "error", err)
+		return &m
+	}
+
+	if len(audio) > 0 {
+		tr, ok := d.butler.(AudioTranscriber)
+		for _, m := range audio {
+			if !ok {
+				return lines, fail("capability-missing", m, errLocalProcessorUnavailable, "AudioTranscriber")
+			}
+			text, err := tr.TranscribeVoice(d.ctx, m.MIME, m.Data)
+			if err != nil {
+				return lines, fail("transcribe", m, err, "AudioTranscriber")
+			}
+			addLine("voice note", text)
+		}
+	}
+
+	if len(docs) > 0 {
+		dg, ok := d.butler.(DocDigester)
+		for _, m := range docs {
+			if !ok {
+				return lines, fail("capability-missing", m, errLocalProcessorUnavailable, "DocDigester")
+			}
+			digest, err := dg.DigestDocument(d.ctx, m.Name, string(m.Data))
+			if err != nil {
+				return lines, fail("digest", m, err, "DocDigester")
+			}
+			addLine("document "+m.Name+" | compacted", digest)
+		}
+	}
+
+	if len(visual) > 0 {
+		de, ok := d.butler.(MediaDescriber)
+		if !ok {
+			return lines, fail("capability-missing", visual[0], errLocalProcessorUnavailable, "MediaDescriber")
+		}
+		desc, err := de.Describe(d.ctx, visual)
+		if err != nil {
+			return lines, fail("describe", visual[0], err, "MediaDescriber")
+		}
+		prefix := visual[0].Type
+		if prefix == "" || prefix == "image" && len(visual) > 1 {
+			prefix = "image"
+		}
+		addLine(prefix, desc)
+	}
+	return lines, nil
+}
+
+// errLocalProcessorUnavailable marks a missing local capability distinctly
+// from a runtime failure in logs.
+var errLocalProcessorUnavailable = errors.New("local processor not configured")
+
 func (d *dispatcher) process(in inbound) {
 	userMsg := in.userMsg
 	if len(in.media) > 0 {
-		if describer, ok := d.butler.(MediaDescriber); ok {
-			for _, m := range in.media {
-				desc, err := describer.Describe(d.ctx, m.MIME, m.Data)
-				if err != nil {
-					logging.Log(d.component, logging.SevWarn, "VISION", "Vision describe failed; falling back to ack", "error", err)
-					if userMsg == "" {
-						_ = d.msgr.Send(d.ctx, in.chat, mediaAckMessage(m.Type))
-						return
-					}
-					continue
-				}
-				if strings.TrimSpace(userMsg) == "" {
-					userMsg = "[image: " + strings.TrimSpace(desc) + "]"
-				} else {
-					userMsg += "\n[image: " + strings.TrimSpace(desc) + "]"
-				}
+		lines, failed := d.processMedia(in)
+		if failed != nil {
+			caption := strings.TrimSpace(userMsg)
+			if caption == "" {
+				// No caption to fall back on — acknowledge with kind text.
+				_ = d.msgr.Send(d.ctx, in.chat, mediaAckMessage(failed.Type))
+				return
 			}
-		} else if strings.TrimSpace(userMsg) == "" {
-			// Vision not configured — acknowledge instead of ghosting.
-			_ = d.msgr.Send(d.ctx, in.chat, mediaAckMessage(in.media[0].Type))
-			return
+			// Caption fallback: answer from the caption but explicitly tell
+			// the sender their asset could not be processed right now.
+			note := "_My apologies — I could not process your " + failed.Type + " due to internal issues just now._ I will answer based on your caption alone."
+			if err := d.msgr.Send(d.ctx, in.chat, note); err != nil {
+				logging.Log(d.component, logging.SevWarn, "SEND", "Failed to send asset-failure notice", "to", in.chat, "error", err)
+			}
 		}
+		for _, l := range lines {
+			userMsg += "\n" + l
+		}
+		userMsg = strings.TrimSpace(userMsg)
 	}
-	if strings.TrimSpace(userMsg) == "" {
-		logging.Log(d.component, logging.SevWarn, "MESSAGE", "Message discarded after vision", "reason", "no text content")
+	if userMsg == "" {
+		logging.Log(d.component, logging.SevWarn, "MESSAGE", "Message discarded after media", "reason", "no text content")
 		return
 	}
 	reply, err := d.butler.Reply(d.ctx, in.senderJID, userMsg, in.isSelf)
