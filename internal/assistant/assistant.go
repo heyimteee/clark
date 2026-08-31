@@ -940,9 +940,17 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	available := s.toolsForSender(senderJID, isSelf)
 	relation, _ := s.vip.Check(senderJID)
 
-	// Greet only on a genuine first message; a follow-up must stay on-topic.
+	// Disclosure for VIPs on their first message since status became ON
+	// takes precedence over the generic first-message greeting.
 	task := followUpTask
-	if len(history) == 1 {
+	needsDisclosure := false
+	if !isSelf && s.EnabledFor(senderJID) {
+		needsDisclosure = s.needsContextDisclosure(senderJID)
+	}
+	if needsDisclosure {
+		relation2, _ := s.vip.Check(senderJID)
+		task = fmt.Sprintf("A VIP (%s) has sent their first message while the Master is away (status ON). The Master's context is %q. CRITICAL: Your FIRST sentence MUST briefly convey this context verbatim alongside your welcome — e.g. starting with \"_The Master is %s — \" or \"_Master is away: %s_ — \" — then immediately answer what they actually said, conversationally. Do NOT omit the context. After this turn you will resume normal chat without repeating it.", relation2, s.context, s.context, s.context)
+	} else if len(history) == 1 {
 		if isSelf {
 			task = masterFirstTurnTask
 		} else {
@@ -1031,7 +1039,14 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	available := s.toolsForSender(senderJID, isSelf)
 	relation, _ := s.vip.Check(senderJID)
 	task := followUpTask
-	if len(history) == 1 {
+	needsDisclosure := false
+	if !isSelf && s.EnabledFor(senderJID) {
+		needsDisclosure = s.needsContextDisclosure(senderJID)
+	}
+	if needsDisclosure {
+		relation2, _ := s.vip.Check(senderJID)
+		task = fmt.Sprintf("A VIP (%s) has sent their first message while the Master is away (status ON). The Master's context is %q. CRITICAL: Your FIRST sentence MUST briefly convey this context verbatim alongside your welcome — e.g. starting with \"_The Master is %s — \" or \"_Master is away: %s_ — \" — then immediately answer what they actually said, conversationally. Do NOT omit the context. After this turn you will resume normal chat without repeating it.", relation2, s.context, s.context, s.context)
+	} else if len(history) == 1 {
 		if isSelf {
 			task = masterFirstTurnTask
 		} else {
@@ -1152,6 +1167,7 @@ func (s *Service) saveReply(senderJID, reply string) (string, error) {
 type promptData struct {
 	ButlerName        string
 	MasterName        string
+	Context           string
 	MasterStatus      string
 	ButlerStatus      string
 	InnerCircle       string
@@ -1182,9 +1198,12 @@ func (s *Service) handleModelError(err error) error {
 // renderPrompt fills the prompt template with the current turn's context.
 // butlerStatus is the effective status for this sender (override or global).
 func (s *Service) renderPrompt(name, masterStatus, butlerStatus, visitor, toolsList, task string) (string, error) {
+	// masterStatus is the Master's Current Context (s.context); keep it in both
+	// MasterStatus (legacy) and Context (new explicit bullet) for the template.
 	data := promptData{
 		ButlerName:        name,
 		MasterName:        s.masterName,
+		Context:           masterStatus,
 		MasterStatus:      masterStatus,
 		ButlerStatus:      butlerStatus,
 		InnerCircle:       s.vip.list(),
@@ -1558,6 +1577,30 @@ func statusLabel(on bool) string {
 		return "On"
 	}
 	return "Off"
+}
+
+// needsContextDisclosure reports whether the VIP's first message since status
+// became ON should disclose the Master's context. It scans recent history for
+// the context substring; if already disclosed, it returns false.
+func (s *Service) needsContextDisclosure(jid string) bool {
+	s.cacheMu.RLock()
+	on := s.status
+	ctx := strings.TrimSpace(s.context)
+	s.cacheMu.RUnlock()
+	if !on || ctx == "" {
+		return false
+	}
+	hist, err := s.history.RecentMessages(jid, 30)
+	if err != nil {
+		return true
+	}
+	needle := strings.ToLower(ctx)
+	for _, m := range hist {
+		if m.Role == "assistant" && strings.Contains(strings.ToLower(m.Content), needle) {
+			return false
+		}
+	}
+	return true
 }
 
 type viewKind int

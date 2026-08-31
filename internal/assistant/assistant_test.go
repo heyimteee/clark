@@ -1721,6 +1721,7 @@ func TestPromptPersonaConfigured(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	fake.always = &ollama.ChatResult{Content: "Welcome."}
+	_ = s.SetStatus(false)
 
 	jid := "6281234567890@s.whatsapp.net"
 	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
@@ -1784,6 +1785,7 @@ func systemPromptOf(fake *fakeLLM) string {
 func TestServiceFirstTurnGreetsVisitor(t *testing.T) {
 	s, _, fake := newService(t)
 	fake.always = &ollama.ChatResult{Content: "Welcome."}
+	_ = s.SetStatus(false)
 	jid := "6281234567890@s.whatsapp.net"
 	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
 		t.Fatalf("AddVIP: %v", err)
