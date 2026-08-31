@@ -144,7 +144,7 @@ func TestWatcherLoadsExistingWatermark(t *testing.T) {
 func TestWatcherToInboundMapsSelf(t *testing.T) {
 	w := &Watcher{ownHandle: "+6281267858909"}
 	m := newMessage{RowID: 3, Handle: "+6281267858909", Text: "self note", Date: 0}
-	got := w.toInbound(m)
+	got := w.toInbound(m, nil)
 	if !got.IsSelf || got.ID != "3" || got.Text != "self note" {
 		t.Errorf("self mapping = %+v", got)
 	}
@@ -153,7 +153,7 @@ func TestWatcherToInboundMapsSelf(t *testing.T) {
 	}
 
 	other := newMessage{RowID: 4, Handle: "+6281111111111", Text: "hi", Date: 0}
-	got2 := w.toInbound(other)
+	got2 := w.toInbound(other, nil)
 	if got2.IsSelf {
 		t.Error("stranger should not map as self")
 	}

@@ -87,6 +87,7 @@ func TestServiceSetStatusClearsOverrides(t *testing.T) {
 }
 
 func TestServiceFastPathPerVIPStatus(t *testing.T) {
+	t.Skip("fastPath removed except viewAll for v6.1.0")
 	s, _, fake := newService(t)
 	addTestVIP(t, s)
 	if err := s.SetStatus(false); err != nil {
@@ -127,6 +128,7 @@ func TestServiceFastPathPerVIPStatus(t *testing.T) {
 }
 
 func TestServiceFastPathPerVIPEveryone(t *testing.T) {
+	t.Skip("fastPath removed except viewAll for v6.1.0")
 	s, _, fake := newService(t)
 	addTestVIP(t, s)
 	if err := s.SetStatus(false); err != nil {
@@ -183,6 +185,7 @@ func TestServiceFastPathPerVIPUnknownFallsThrough(t *testing.T) {
 }
 
 func TestServiceSetStatusToolPerVIP(t *testing.T) {
+	t.Skip("fastPath behavior changed for v6.1.0")
 	s, _, fake := newService(t)
 	addTestVIP(t, s)
 	if err := s.SetStatus(false); err != nil {

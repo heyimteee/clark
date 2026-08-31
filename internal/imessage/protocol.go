@@ -9,11 +9,21 @@ import "time"
 // already filtered outbound self-messages and non-text rows, so this is the
 // raw handle as it appears in chat.db.
 type InboundMessage struct {
-	ID        string    `json:"id"`
-	Handle    string    `json:"handle"`
-	Text      string    `json:"text"`
-	IsSelf    bool      `json:"is_self"`
-	Timestamp time.Time `json:"timestamp"`
+	ID        string         `json:"id"`
+	Handle    string         `json:"handle"`
+	Text      string         `json:"text"`
+	IsSelf    bool           `json:"is_self"`
+	Timestamp time.Time      `json:"timestamp"`
+	MediaType string         `json:"media_type,omitempty"`
+	Media     []InboundMedia `json:"media,omitempty"`
+}
+
+// InboundMedia is one attachment for an inbound message.
+type InboundMedia struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+	MIME string `json:"mime"`
+	Data []byte `json:"data"`
 }
 
 // AckRequest is the bridge's POST /ack body confirming delivery of one

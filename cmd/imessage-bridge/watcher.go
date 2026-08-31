@@ -95,7 +95,9 @@ func (w *Watcher) scanOnce(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := w.client.PostInbound(ctx, w.toInbound(m)); err != nil {
+		media := collectIMessageMedia(w.db, m)
+		inbound := w.toInbound(m, media)
+		if err := w.client.PostInbound(ctx, inbound); err != nil {
 			logging.Log("BRIDGE", logging.SevErr, "SCAN", "Failed to forward message", "row", m.RowID, "error", err)
 			return
 		}
@@ -117,12 +119,18 @@ func (w *Watcher) persist(ctx context.Context) error {
 // toInbound maps a chat.db row to the clark inbound protocol. The handle may
 // be empty when the message has no handle row; clark drops such messages, but
 // the watermark still advances so a broken row cannot wedge the poller.
-func (w *Watcher) toInbound(m newMessage) imessage.InboundMessage {
+func (w *Watcher) toInbound(m newMessage, media []imessage.InboundMedia) imessage.InboundMessage {
+	mediaType := ""
+	if len(media) > 0 {
+		mediaType = media[0].Type
+	}
 	return imessage.InboundMessage{
 		ID:        strconv.FormatInt(m.RowID, 10),
 		Handle:    m.Handle,
 		Text:      m.Text,
 		IsSelf:    m.Handle != "" && m.Handle == w.ownHandle,
 		Timestamp: messageTime(m.Date),
+		MediaType: mediaType,
+		Media:     media,
 	}
 }

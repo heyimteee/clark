@@ -182,6 +182,22 @@ func (a *App) Run() error {
 		return macAction(a.cfg, map[string]any{"type": "banner", "title": title, "body": body})
 	})
 
+	// VIP → Master relay and away digests both use the same dual-channel
+	// fan-out (WA + iMessage + web) as alerts, but with custom Clark text.
+	a.ast.SetRelayFunc(func(ctx context.Context, fromJID, text string) error {
+		relation, _ := a.ast.Relation(fromJID)
+		prefix := ""
+		if relation != "" {
+			prefix = relation + ": "
+		}
+		alerts.Relay(ctx, prefix+text)
+		return nil
+	})
+	a.ast.SetAwaySender(func(ctx context.Context, text string) error {
+		alerts.Relay(ctx, text)
+		return nil
+	})
+
 	errCh := make(chan error, 3)
 	go func() {
 		errCh <- whatsapp.Run(ctx, whatsapp.Options{

@@ -10,18 +10,19 @@ import (
 // The bridge never writes to it: it polls for new messages by ROWID and tracks
 // its own watermark in a separate state file.
 
-// newMessagesQuery selects only inbound, non-system, text DMs newer than the
-// watermark. Reactions (associated_message_type != 0) and group chatter
-// (chat_identifier contains ';') are excluded. The LEFT JOIN keeps message rows
-// whose handle row is missing or whose sender is clark's own device.
+// newMessagesQuery selects inbound, non-system DMs newer than the watermark.
+// Reactions and group chatter are excluded. Media-only messages (empty text
+// but with an attachment) are now included so images/gif/video can be
+// processed like WhatsApp.
 const newMessagesQuery = `
-SELECT message.ROWID, message.guid, message.text, message.is_from_me,
-       handle.id, message.date, message.service
+SELECT message.ROWID, message.guid, COALESCE(message.text,''), message.is_from_me,
+       handle.id, message.date, message.service,
+       COALESCE(message.cache_has_attachments,0)
 FROM message
 LEFT JOIN handle ON handle.ROWID = message.handle_id
 WHERE message.ROWID > ?
   AND message.is_from_me = 0
-  AND message.text IS NOT NULL AND message.text != ''
+  AND ( (message.text IS NOT NULL AND message.text != '') OR COALESCE(message.cache_has_attachments,0) = 1 )
   AND COALESCE(message.associated_message_type, 0) = 0
   AND COALESCE(message.is_system_message, 0) = 0
   AND COALESCE(message.error, 0) = 0
@@ -46,14 +47,32 @@ ORDER BY message.ROWID DESC LIMIT 1`
 
 // newMessage is one row from newMessagesQuery.
 type newMessage struct {
-	RowID    int64
-	GUID     string
-	Text     string
-	IsFromMe bool
-	Handle   string
-	Date     int64
-	Service  string
+	RowID          int64
+	GUID           string
+	Text           string
+	IsFromMe       bool
+	Handle         string
+	Date           int64
+	Service        string
+	HasAttachments bool
 }
+
+// attachmentRow is one row from the attachment table for a message.
+type attachmentRow struct {
+	RowID        int64
+	Filename     string
+	MimeType     string
+	UTI          string
+	TransferName string
+	TotalBytes   int64
+}
+
+const attachmentQuery = `
+SELECT a.ROWID, a.filename, COALESCE(a.mime_type,''), COALESCE(a.uti,''), COALESCE(a.transfer_name,''), COALESCE(a.total_bytes,0)
+FROM attachment a
+JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID
+WHERE maj.message_id = ?
+ORDER BY a.ROWID ASC`
 
 // openChatDB opens chat.db strictly read-only with a busy timeout so a
 // concurrent Messages.app write never wedges the poller.
@@ -104,10 +123,30 @@ func queryNewMessages(db *sql.DB, after int64) ([]newMessage, error) {
 	var out []newMessage
 	for rows.Next() {
 		var m newMessage
-		if err := rows.Scan(&m.RowID, &m.GUID, &m.Text, &m.IsFromMe, &m.Handle, &m.Date, &m.Service); err != nil {
+		var hasAtt int
+		if err := rows.Scan(&m.RowID, &m.GUID, &m.Text, &m.IsFromMe, &m.Handle, &m.Date, &m.Service, &hasAtt); err != nil {
 			return nil, fmt.Errorf("fail to scan message: %w", err)
 		}
+		m.HasAttachments = hasAtt != 0
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// queryAttachments returns the attachments for a message, if any.
+func queryAttachments(db *sql.DB, messageID int64) ([]attachmentRow, error) {
+	rows, err := db.Query(attachmentQuery, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("fail to query attachments: %w", err)
+	}
+	defer rows.Close()
+	var out []attachmentRow
+	for rows.Next() {
+		var a attachmentRow
+		if err := rows.Scan(&a.RowID, &a.Filename, &a.MimeType, &a.UTI, &a.TransferName, &a.TotalBytes); err != nil {
+			return nil, fmt.Errorf("fail to scan attachment: %w", err)
+		}
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

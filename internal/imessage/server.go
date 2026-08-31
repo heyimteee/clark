@@ -1,6 +1,7 @@
 package imessage
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -9,16 +10,17 @@ import (
 
 	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
+	clarkmedia "github.com/heyimteee/clark/internal/media"
 )
 
 // maxMessageAge is the staleness threshold — messages older than this are
 // silently dropped to prevent spam after bridge restarts or reconnections.
 const maxMessageAge = 5 * time.Minute
 
-// maxBodyBytes caps request bodies (inbound messages, acks) so a runaway or
-// hostile peer cannot exhaust memory with a giant JSON payload. A real text
-// message is orders of magnitude smaller.
+// maxBodyBytes caps request bodies for acks; inbound messages with media
+// may be larger (base64 images).
 const maxBodyBytes = 256 << 10
+const maxInboundBytes = 55 << 20
 
 // Server exposes the bridge-facing HTTP API: it accepts inbound messages,
 // serves outbound ones for the bridge to deliver, and receives delivery acks.
@@ -75,12 +77,12 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 // handleInbound feeds one bridge-delivered message into the gateway pipeline.
 func (s *Server) handleInbound(w http.ResponseWriter, r *http.Request) {
 	var in InboundMessage
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&in); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxInboundBytes)).Decode(&in); err != nil {
 		writeBodyError(w, err)
 		return
 	}
-	if in.Handle == "" || in.Text == "" {
-		http.Error(w, "handle and text are required", http.StatusBadRequest)
+	if in.Handle == "" || (in.Text == "" && len(in.Media) == 0 && in.MediaType == "") {
+		http.Error(w, "handle and text or media required", http.StatusBadRequest)
 		return
 	}
 	// The Master's own iMessage self-chat is not a control surface: management
@@ -100,6 +102,16 @@ func (s *Server) handleInbound(w http.ResponseWriter, r *http.Request) {
 			"handle", in.Handle, "age", time.Since(in.Timestamp).Round(time.Second))
 		w.WriteHeader(http.StatusOK)
 		return
+	}
+	// Normalize media for local vision (video/gif -> frames, etc.) so the
+	// gateway can treat iMessage exactly like WhatsApp.
+	if len(in.Media) > 0 {
+		mctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		in.Media = normalizeIMessageMedia(mctx, in.Media)
+		cancel()
+		if len(in.Media) > 0 {
+			in.MediaType = in.Media[0].Type
+		}
 	}
 	s.gw.Handle(toGateway(in))
 	w.WriteHeader(http.StatusOK)
@@ -164,13 +176,53 @@ func writeBodyError(w http.ResponseWriter, err error) {
 	http.Error(w, "invalid JSON body", http.StatusBadRequest)
 }
 
+func normalizeIMessageMedia(ctx context.Context, media []InboundMedia) []InboundMedia {
+	var out []InboundMedia
+	for _, m := range media {
+		switch m.Type {
+		case "video", "gif":
+			frames, err := clarkmedia.ExtractFrames(ctx, m.Data, 4, 768)
+			if err != nil {
+				logging.Log("IMESSAGE", logging.SevWarn, "MEDIA", "Failed to extract frames", "type", m.Type, "error", err)
+				continue
+			}
+			for _, f := range frames {
+				out = append(out, InboundMedia{Type: m.Type, Name: m.Name, MIME: "image/jpeg", Data: f})
+			}
+		case "sticker":
+			// Try to determine if animated by MIME; if video/* treat as frames.
+			if m.MIME == "video/mp4" || m.MIME == "image/webp" && len(m.Data) > 100*1024 {
+				frames, err := clarkmedia.ExtractFrames(ctx, m.Data, 3, 768)
+				if err == nil && len(frames) > 0 {
+					for _, f := range frames {
+						out = append(out, InboundMedia{Type: "sticker", Name: m.Name, MIME: "image/jpeg", Data: f})
+					}
+					continue
+				}
+			}
+			png, err := clarkmedia.ToPNG(ctx, m.Data)
+			if err == nil && len(png) > 0 {
+				out = append(out, InboundMedia{Type: "sticker", Name: m.Name, MIME: "image/png", Data: png})
+			} else {
+				out = append(out, m)
+			}
+		default:
+			out = append(out, m)
+		}
+	}
+	if len(out) == 0 && len(media) > 0 {
+		return media
+	}
+	return out
+}
+
 // toGateway maps a bridge message to the neutral gateway representation. The
 // sender is the canonical identity (a phone handle maps to its WhatsApp JID so
 // a person on both transports shares one VIP entry). iMessage is direct-to-
 // device, so the chat a reply must reach is always the sender itself.
 func toGateway(in InboundMessage) gateway.Message {
 	sender := canonicalSender(in.Handle)
-	return gateway.Message{
+	msg := gateway.Message{
 		ID:        in.ID,
 		Sender:    sender,
 		Chat:      sender,
@@ -178,5 +230,18 @@ func toGateway(in InboundMessage) gateway.Message {
 		Timestamp: in.Timestamp,
 		IsSelf:    in.IsSelf,
 		IsGroup:   false,
+		MediaType: in.MediaType,
 	}
+	for _, m := range in.Media {
+		msg.Media = append(msg.Media, gateway.MediaAttachment{
+			Type: m.Type,
+			Name: m.Name,
+			MIME: m.MIME,
+			Data: m.Data,
+		})
+		if msg.MediaType == "" {
+			msg.MediaType = m.Type
+		}
+	}
+	return msg
 }

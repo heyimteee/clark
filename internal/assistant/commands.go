@@ -37,112 +37,21 @@ func (s *Service) perVIPStatusOffReply(recipient string) string {
 	return "*Status Updated*\n\n_" + recipient + "_ has been personally silenced, Sir."
 }
 
-// fastPath handles deterministic commands synchronously: hardcoded views and,
-// for the Master only, mutations of status, context, the inner circle, and
-// tool access. Returns a ready-to-send message and true when the request was
-// consumed without needing the model.
+// fastPath now only serves "show me everything" (viewAll). Every other
+// former hardcoded view or Master-only mutation goes through the LLM + tools
+// so the model owns the behavior. Returns true only for that one view.
 func (s *Service) fastPath(senderJID, userMsg string, isSelf bool) (string, bool, error) {
 	if view := s.viewRequest(userMsg); view != viewNone {
-		text, err := s.renderView(view, senderJID, isSelf)
-		if err != nil {
-			return "", false, err
+		if view == viewAll {
+			text, err := s.renderView(view, senderJID, isSelf)
+			if err != nil {
+				return "", false, err
+			}
+			return text, true, nil
 		}
-		return text, true, nil
-	}
-
-	if !isSelf {
+		// Explicit tools / VIP-list views and all other deterministic commands
+		// are now LLM-mediated.
 		return "", false, nil
-	}
-
-	switch {
-	case isThinkingCommand(userMsg):
-		on, toggle, _ := parseThinkingCommand(userMsg)
-		if toggle {
-			if err := s.ToggleThinking(); err != nil {
-				return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-			}
-		} else if err := s.SetThinking(on); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return thinkingReply(s.Thinking()), true, nil
-
-	case isHistoryLimitCommand(userMsg):
-		limit, _ := parseHistoryLimitCommand(userMsg)
-		if err := s.SetHistoryLimit(limit); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return historyLimitReply(limit), true, nil
-
-	case s.isPerVIPStatusCommand(userMsg):
-		recipient, on, everyone, _ := s.parsePerVIPStatusCommand(userMsg)
-		if everyone {
-			if err := s.SetStatus(on); err != nil {
-				return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-			}
-			if on {
-				return s.statusOnReply(), true, nil
-			}
-			return s.statusOffReply(), true, nil
-		}
-		if err := s.SetVIPStatus(recipient, on); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		if on {
-			return s.perVIPStatusOnReply(recipient), true, nil
-		}
-		return s.perVIPStatusOffReply(recipient), true, nil
-
-	case isStatusCommand(userMsg):
-		if err := s.applyStatusCommand(userMsg); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		if s.status {
-			return s.statusOnReply(), true, nil
-		}
-		return s.statusOffReply(), true, nil
-
-	case isContextCommand(userMsg):
-		text, _ := parseContextCommand(userMsg)
-		if err := s.SetContext(text); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return contextUpdatedReply(text), true, nil
-
-	case isClearContextCommand(userMsg):
-		if err := s.SetContext(""); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return clearContextReply, true, nil
-
-	case isAddVIPCommand(userMsg):
-		payload, _ := parseAddVIPCommand(userMsg)
-		if err := s.AddVIP(payload); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return vipAddedReply(payload), true, nil
-
-	case isDeleteVIPCommand(userMsg):
-		payload, _ := parseDeleteVIPCommand(userMsg)
-		if err := s.deleteVIP(payload); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return vipDeletedReply, true, nil
-
-	case isClearVIPsCommand(userMsg):
-		if err := s.ClearVIPs(); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return clearVIPsReply, true, nil
-
-	case isGuidanceCommand(userMsg):
-		return s.guidanceText(), true, nil
-
-	case isAccessCommand(userMsg):
-		recipient, tool, enabled, _ := parseAccessCommand(userMsg)
-		if err := s.mutateAccess(recipient, tool, enabled); err != nil {
-			return fmt.Sprintf(commandErrorTmpl, err.Error()), true, nil
-		}
-		return accessReply(recipient, tool, enabled), true, nil
 	}
 
 	return "", false, nil

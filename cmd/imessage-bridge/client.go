@@ -50,7 +50,7 @@ func NewClient(baseURL, token, rootCA string) (*Client, error) {
 		baseURL: baseURL,
 		token:   token,
 		http: &http.Client{
-			Timeout:   10 * time.Second,
+			Timeout:   45 * time.Second,
 			Transport: &http.Transport{TLSClientConfig: tlsCfg},
 		},
 	}, nil

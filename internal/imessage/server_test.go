@@ -180,14 +180,15 @@ func TestServerAckInvalid(t *testing.T) {
 	}
 }
 
-// TestServerRejectsOversizedBodies guards against memory exhaustion: inbound
-// and ack bodies beyond maxBodyBytes must be rejected with 413.
+// TestServerRejectsOversizedBodies guards against memory exhaustion: ack bodies
+// beyond maxBodyBytes must be rejected with 413. Inbound now allows up to
+// 55 MiB for base64 media, so a 300 KiB text payload is accepted.
 func TestServerRejectsOversizedBodies(t *testing.T) {
 	ts, _ := newTestServer(t, "secret", &fakeOutbound{})
 
 	huge := `{"handle":"+6281267858909","text":"` + strings.Repeat("a", 300<<10) + `"}`
-	if rec := doRequest(ts, "POST", "/inbound", "secret", huge); rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("oversized inbound = %d, want 413", rec.Code)
+	if rec := doRequest(ts, "POST", "/inbound", "secret", huge); rec.Code != http.StatusOK {
+		t.Fatalf("inbound 300 KiB = %d, want 200 (media cap is 55 MiB)", rec.Code)
 	}
 
 	hugeAck := `{"id":1,"pad":"` + strings.Repeat("a", 300<<10) + `"}`

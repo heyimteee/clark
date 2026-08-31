@@ -200,7 +200,7 @@
         '<main class="container" id="main">' +
           '<section id="bento">' +
             '<div class="card tile-config"><h2>Config</h2><p class="sub">runtime settings</p>' +
-              '<div class="toggle-row"><div><div class="t-lbl">clark awake</div><div class="t-desc">responds to messages</div></div>' +
+              '<div class="toggle-row"><div><div class="t-lbl">clark status</div><div class="t-desc">responds to messages</div></div>' +
                 '<label class="switch"><input type="checkbox" id="cfg-status"><span class="track"></span><span class="knob"></span></label></div>' +
               '<div class="toggle-row"><div><div class="t-lbl">thinking</div><div class="t-desc">show reasoning steps</div></div>' +
                 '<label class="switch"><input type="checkbox" id="cfg-thinking"><span class="track"></span><span class="knob"></span></label></div>' +

@@ -47,6 +47,19 @@ CREATE TABLE chat_message_join (
 	message_id INTEGER NOT NULL,
 	message_date INTEGER,
 	PRIMARY KEY (chat_id, message_id)
+);
+CREATE TABLE attachment (
+	ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
+	filename TEXT,
+	mime_type TEXT,
+	uti TEXT,
+	transfer_name TEXT,
+	total_bytes INTEGER
+);
+CREATE TABLE message_attachment_join (
+	message_id INTEGER NOT NULL,
+	attachment_id INTEGER NOT NULL,
+	PRIMARY KEY (message_id, attachment_id)
 );`
 
 func openSynthDB(t *testing.T) *sql.DB {

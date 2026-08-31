@@ -33,10 +33,11 @@ var promptTemplate string
 var promptTmpl = template.Must(template.New("prompt").Parse(promptTemplate))
 
 // maxToolRounds bounds how many model round-trips a single iteration may take.
-const maxToolRounds = 8
+// Raised from 8 to allow sequenced knowledge-gathering (e.g. news → follow-up searches).
+const maxToolRounds = 16
 
 // maxNudges bounds how many times the loop may push a narrating model to act.
-const maxNudges = 2
+const maxNudges = 3
 
 // maxTurnDuration caps the wall-clock time of a single iteration so a stalled
 // or looping model can never block the WhatsApp pipeline indefinitely.
@@ -48,8 +49,9 @@ const defaultHistoryLimit = 10
 
 // defaultVIPGrants are the tools every VIP may invoke without an explicit
 // grant. web_search covers research; view_history lets a VIP recall their own
-// conversation (and lets clark honour the history-first rule mid-chat).
-var defaultVIPGrants = []string{"web_search", "view_history"}
+// conversation (and lets clark honour the history-first rule mid-chat);
+// relay_to_master lets a VIP ask Clark to pass a message to the Master.
+var defaultVIPGrants = []string{"web_search", "view_history", "relay_to_master"}
 
 // iterationLimitMessage is returned when a genuine tool chain exhausts its
 // iteration budget while tools were still running.
@@ -121,6 +123,8 @@ type Service struct {
 	stt       interface {
 		Transcribe(ctx context.Context, audioWAV []byte) (string, error)
 	}
+	relayFn     func(ctx context.Context, fromJID, text string) error
+	awaySender  func(ctx context.Context, text string) error
 	model       string
 	visionModel string
 	name        string
@@ -331,6 +335,88 @@ func (s *Service) DigestDocument(ctx context.Context, name, text string) (string
 		return "", err
 	}
 	return merged, nil
+}
+
+// SetRelayFunc wires the dual-channel relay (VIP → Master) used by the
+// relay_to_master tool. It registers the tool so VIP grants can gate it.
+func (s *Service) SetRelayFunc(fn func(ctx context.Context, fromJID, text string) error) {
+	s.relayFn = fn
+	s.tools.RegisterFunc("relay_to_master",
+		"Relay a message from you (a VIP) to the Master through Clark. Use when the VIP says 'tell him …', 'let him know …', 'pass a message to him', 'tell the master …', etc. The message will be delivered to the Master via both WhatsApp and iMessage as a custom Clark relay. Only VIPs may use this.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"message": map[string]any{"type": "string", "description": "The message to relay to the Master, as the VIP phrased it (or a concise paraphrase preserving intent)"},
+			},
+			"required": []string{"message"},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if s.relayFn == nil {
+				return "", errors.New("relay not configured")
+			}
+			msg, _ := args["message"].(string)
+			msg = strings.TrimSpace(msg)
+			if msg == "" {
+				return "", errors.New("message is required")
+			}
+			fromJID := tools.Sender(ctx)
+			if err := s.relayFn(ctx, fromJID, msg); err != nil {
+				return "", err
+			}
+			return "Relayed to the Master.", nil
+		},
+	)
+}
+
+// SetAwaySender wires the dual-channel sender for away digests (system → Master).
+func (s *Service) SetAwaySender(fn func(ctx context.Context, text string) error) {
+	s.awaySender = fn
+}
+
+// triggerAwayDigest runs a tool-backed LLM summarization of what happened
+// while status was ON (away). It lets the model call view_all_history /
+// view_history to gather evidence, then delivers the digest dual-channel.
+func (s *Service) triggerAwayDigest(since time.Time) {
+	if s.awaySender == nil {
+		logging.Log("CLARK", logging.SevWarn, "AWAY", "No away sender wired; digest dropped")
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+
+		// Build a Master-privileged prompt that forces the model to use the
+		// existing history tools rather than hallucinating.
+		available := s.toolsForSender("master@master", true)
+		systemPrompt := "You are Clark summarizing the away period for the Master. " +
+			"Use view_all_history and view_history tools to gather what VIPs said while status was ON. " +
+			"Group by VIP, keep exact quotes of important asks, and note time. " +
+			"If no messages exist in the window, clearly state that no one reached out while you were away."
+
+		userMsg := fmt.Sprintf("Master was away (status ON) from %s until %s. Summarize what happened, grouped by VIP. Call the history tools to gather evidence before answering.",
+			since.Format(time.RFC3339), time.Now().Format(time.RFC3339))
+
+		msgs := []ollama.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userMsg},
+		}
+
+		reply, _, _, err := s.runToolLoop(ctx, msgs, userMsg, available, true)
+		if err != nil {
+			logging.Log("CLARK", logging.SevWarn, "AWAY", "Digest generation failed", "error", err)
+			_ = s.awaySender(ctx, "While you were away, I tried to summarize but encountered an error: "+err.Error())
+			return
+		}
+		reply = strings.TrimSpace(reply)
+		if reply == "" {
+			reply = "No one reached out while you were away (status was ON since " + since.Format("15:04 Jan 2") + ")."
+		}
+		if err := s.awaySender(ctx, reply); err != nil {
+			logging.Log("CLARK", logging.SevWarn, "AWAY", "Failed to deliver digest", "error", err)
+		} else {
+			logging.Log("CLARK", logging.SevInfo, "AWAY", "Digest delivered", "since", since)
+		}
+	}()
 }
 
 // load reads persisted scalars into the cache. Called once at startup.
@@ -618,6 +704,10 @@ func (s *Service) Toggle() error {
 // the global status resets every per-VIP override: a global command speaks for
 // the whole butler, so personal carve-outs are wiped.
 func (s *Service) SetStatus(on bool) error {
+	s.cacheMu.RLock()
+	wasOn := s.status
+	s.cacheMu.RUnlock()
+
 	if err := s.settings.Set("status", fmt.Sprintf("%v", on)); err != nil {
 		return err
 	}
@@ -629,6 +719,22 @@ func (s *Service) SetStatus(on bool) error {
 	s.status = on
 	s.cacheMu.Unlock()
 	logging.Log("CLARK", logging.SevInfo, "STATUS", "Assistant status changed", "enabled", s.status)
+
+	// Away tracking: ON = away (tending to VIPs), OFF = available (wants summary).
+	if !wasOn && on {
+		_ = s.settings.Set("away_since", time.Now().Format(time.RFC3339))
+	} else if wasOn && !on {
+		if sinceStr, err := s.settings.Get("away_since"); err == nil && sinceStr != "" {
+			if since, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+				s.triggerAwayDigest(since)
+			}
+			_ = s.settings.Set("away_since", "")
+		} else {
+			// No recorded away window — still deliver a best-effort digest.
+			s.triggerAwayDigest(time.Now().Add(-24 * time.Hour))
+		}
+	}
+
 	s.notifyState()
 	return nil
 }
@@ -854,6 +960,9 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	for _, m := range history {
 		messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
 	}
+	if hints := s.guessTools(userMsg, available); len(hints) > 0 {
+		messages = append(messages, ollama.Message{Role: "system", Content: "Tool hints for this turn (use them if relevant, ignore otherwise): " + strings.Join(hints, ", ")})
+	}
 
 	logging.Log("OLLAMA", logging.SevInfo, "REQUEST", "Generating response", "model", s.model)
 	start := time.Now()
@@ -937,6 +1046,9 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	messages = append(messages, ollama.Message{Role: "system", Content: systemPrompt})
 	for _, m := range history {
 		messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
+	}
+	if hints := s.guessTools(userMsg, available); len(hints) > 0 {
+		messages = append(messages, ollama.Message{Role: "system", Content: "Tool hints for this turn (use them if relevant, ignore otherwise): " + strings.Join(hints, ", ")})
 	}
 
 	logging.Log("OLLAMA", logging.SevInfo, "REQUEST", "Generating response (streaming)", "model", s.model)
@@ -1285,6 +1397,14 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 		return true, "web_search"
 	}
 
+	// Thin-answer heuristic: for knowledge-heavy prompts a short answer without
+	// tool evidence is nudged to search more, even without an explicit refusal.
+	if hasTool("web_search") &&
+		hasAny(userMsg, "current", "latest", "today", "news", "weather", "score", "tell me about", "what happened", "price", "latest on") &&
+		len(strings.Fields(reply)) < 80 {
+		return true, "web_search"
+	}
+
 	return false, ""
 }
 
@@ -1305,12 +1425,57 @@ func manageHint(userMsg string) string {
 	return "the appropriate management tool"
 }
 
+// guessTools returns an initial, non-enforced hint of which tools the turn
+// will likely need, derived from the user message and available tools. It
+// runs before the LLM loop (after STT) so the model is biased toward the
+// right families without being forced.
+func (s *Service) guessTools(userMsg string, available []tools.Tool) []string {
+	hasTool := func(names ...string) bool {
+		for _, t := range available {
+			for _, n := range names {
+				if t.Definition.Name == n {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	m := strings.ToLower(userMsg)
+	var hints []string
+	if hasTool("web_search") && hasAny(m, "current", "latest", "today", "news", "price", "weather", "score", "google", "look up", "find out", "search", "what happened", "tell me about") {
+		hints = append(hints, "web_search")
+	}
+	if (hasTool("send_message") || hasTool("send_imessage") || hasTool("relay_to_master")) && hasAny(m, "tell him", "tell her", "let him know", "let her know", "relay", "forward", "pass.*message", "message him", "message her") && s.hasVIPTarget(userMsg) {
+		if hasTool("relay_to_master") {
+			hints = append(hints, "relay_to_master")
+		} else {
+			hints = append(hints, "send_message")
+		}
+	}
+	if h := manageHint(userMsg); h != "the appropriate management tool" && hasTool("set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state") {
+		// manageHint maps to a specific tool; expose it as a hint when available.
+		for _, n := range strings.Split(h, " or ") {
+			n = strings.TrimSpace(n)
+			if hasTool(n) {
+				hints = append(hints, n)
+				break
+			}
+		}
+	}
+	if hasTool("view_history", "view_all_history") && hasAny(m, "what did", "show.*history", "past messages", "what has been said") {
+		hints = append(hints, "view_history")
+	}
+	return hints
+}
+
 // hintSatisfied reports whether the tool category a hint names already ran in
 // this iteration, in which case a follow-up summary should not be nudged.
 func hintSatisfied(hint string, ran map[string]bool) bool {
 	switch hint {
 	case "send_message":
-		return ran["send_message"] || ran["send_imessage"]
+		return ran["send_message"] || ran["send_imessage"] || ran["relay_to_master"]
+	case "relay_to_master":
+		return ran["relay_to_master"] || ran["send_message"] || ran["send_imessage"]
 	case "web_search":
 		return ran["web_search"]
 	case "set_status":

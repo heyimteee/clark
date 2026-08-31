@@ -89,6 +89,29 @@ func (s *Service) Alert(ctx context.Context, kind, title, body string) {
 	s.Deliver(ctx, kind, title, body)
 }
 
+// Relay delivers a VIP→Master relay as a custom Clark message to every wired
+// channel (WhatsApp, iMessage, web console, desktop). Unlike Deliver it does
+// not render a template — the caller supplies the final text.
+func (s *Service) Relay(ctx context.Context, text string) {
+	if s.desktop != nil {
+		_ = s.desktop("Message relayed", text)
+	}
+	if s.sendWA != nil {
+		if err := s.sendWA(ctx, text); err != nil {
+			logf("ALERT", "relay whatsapp failed: %v", err)
+		}
+	}
+	if s.sendIM != nil {
+		if err := s.sendIM(ctx, text); err != nil {
+			logf("ALERT", "relay imessage failed: %v", err)
+		}
+	}
+	if s.broadcast != nil {
+		s.broadcast(text, false)
+	}
+	logf("ALERT", "relay delivered", "text", text)
+}
+
 // Deliver renders the message for kind and pushes it to every wired channel.
 // Voice mode: desktop, WhatsApp, iMessage, and web console (spoken aloud).
 // Silent mode: desktop, WhatsApp, iMessage, web console (shown, not spoken),
