@@ -191,6 +191,8 @@ func mediaAckMessage(mediaType string) string {
 		return "_My apologies — I can only read text at the moment._ If you add a caption I can reply to that, Sir."
 	case "video":
 		return "_My apologies — video needs a caption for me to reply at the moment, Sir._"
+	case "gif":
+		return "_My apologies — GIFs need a caption for me to reply at the moment, Sir._"
 	case "document":
 		return "_My apologies — files need a caption for me to reply at the moment, Sir._"
 	case "audio":

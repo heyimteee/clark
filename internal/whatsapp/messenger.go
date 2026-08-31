@@ -160,9 +160,12 @@ func (m *WAMessenger) DownloadMedia(ctx context.Context, v *events.Message, kind
 	if err != nil {
 		return nil, "", "", err
 	}
-	const capBytes = 50 << 20
+	capBytes := 50 << 20
+	if kind == "sticker" {
+		capBytes = 5 << 20
+	}
 	if len(data) > capBytes {
-		data = data[:capBytes]
+		return nil, "", "", fmt.Errorf("media %s size %d exceeds cap %d", kind, len(data), capBytes)
 	}
 	if mime == "" {
 		mime = "application/octet-stream"

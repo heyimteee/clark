@@ -211,8 +211,8 @@ func (h *Handler) collectMedia(v *events.Message, mediaType string) []gateway.Me
 			if perr == nil && len(png) > 0 {
 				return []gateway.MediaAttachment{mk("sticker", "image/png", png)}
 			}
-			logging.Log("WHATSAPP", logging.SevWarn, "MEDIA", "Sticker PNG conversion failed; sending raw bytes to describer", "error", perr)
-			return []gateway.MediaAttachment{mk("sticker", mime, data)}
+			logging.Log("WHATSAPP", logging.SevWarn, "MEDIA", "Sticker PNG conversion failed; acking without vision", "mime", mime, "size", len(data), "error", perr)
+			return nil
 		}
 		frames, ferr := media.ExtractFrames(dctx, data, 3, 768)
 		if ferr != nil {
