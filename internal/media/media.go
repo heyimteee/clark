@@ -23,9 +23,10 @@ const (
 	MaxPDFChars     = 100_000  // extracted text chars before TRUNCATED flagging
 )
 
-// ffCtx builds an exec.Cmd bound to ctx with stdin/stdout/stderr pipes wired.
-func runFF(ctx context.Context, args ...string) ([]byte, error) {
+// runFF builds an exec.Cmd bound to ctx with stdin/stdout/stderr pipes wired.
+func runFF(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "ffmpeg", append([]string{"-hide_banner", "-loglevel", "error"}, args...)...)
+	cmd.Stdin = bytes.NewReader(input)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
@@ -62,7 +63,7 @@ func ToPNG(ctx context.Context, img []byte) ([]byte, error) {
 	if len(img) == 0 || len(img) > MaxStickerBytes {
 		return nil, fmt.Errorf("image size %d out of bounds", len(img))
 	}
-	return runFF(ctx, "-i", "pipe:0", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1")
+	return runFF(ctx, img, "-i", "pipe:0", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1")
 }
 
 // ExtractFrames pulls n evenly spaced frames from a video clip as JPEGs,
@@ -75,7 +76,7 @@ func ExtractFrames(ctx context.Context, video []byte, n, maxWidth int) ([][]byte
 	for i := 0; i < n; i++ {
 		// Seek to (i + 0.5)/n of the stream so frames land inside segments.
 		at := (float64(i) + 0.5) / float64(n)
-		blob, err := runFF(ctx,
+		blob, err := runFF(ctx, video,
 			"-i", "pipe:0",
 			"-ss", strconv.FormatFloat(at, 'f', -1, 64),
 			"-frames:v", "1",
