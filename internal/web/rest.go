@@ -161,9 +161,10 @@ func (s *Server) handleTodos(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"todos": todos})
 	case http.MethodPost:
 		var body struct {
-			Text     string `json:"text"`
-			Priority *int   `json:"priority"`
-			Due      string `json:"due"`
+			Text        string `json:"text"`
+			Description string `json:"description"`
+			Priority    *int   `json:"priority"`
+			Due         string `json:"due"`
 		}
 		if err := decodeBody(w, r, &body); err != nil || body.Text == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "text is required"})
@@ -179,7 +180,7 @@ func (s *Server) handleTodos(w http.ResponseWriter, r *http.Request) {
 				dueAt = &t
 			}
 		}
-		id, err := s.store.AddTodo(webJID, body.Text, priority, dueAt)
+		id, err := s.store.AddTodo(webJID, body.Text, body.Description, priority, dueAt)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to add todo"})
 			return

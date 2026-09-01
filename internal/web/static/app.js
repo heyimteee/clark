@@ -279,6 +279,7 @@
               "</div>" +
               '<form id="todo-form" class="todo-form">' +
                 '<input id="todo-input" class="input" placeholder="Add a todo — e.g. Review Tiara’s deck by Friday" aria-label="Add todo">' +
+                '<textarea id="todo-desc" class="input" placeholder="Optional description" rows="2" aria-label="Description"></textarea>' +
                 '<button class="btn primary" type="submit">add</button>' +
               "</form>" +
               '<div class="todo-list" id="todo-list"></div>' +
@@ -313,7 +314,7 @@
             '<div class="kanban-board">' +
               '<div class="kanban-col" data-status="open"><h3>Open</h3><div class="kanban-list" id="kanban-open"></div></div>' +
               '<div class="kanban-col" data-status="in_progress"><h3>In Progress</h3><div class="kanban-list" id="kanban-doing"></div></div>' +
-              '<div class="kanban-col" data-status="done"><h3>Closed</h3><div class="kanban-list" id="kanban-done"></div></div>' +
+              '<div class="kanban-col" data-status="closed"><h3>Closed</h3><div class="kanban-list" id="kanban-closed"></div></div>' +
             '</div>' +
             '<div class="kanban-add">' +
               '<input id="kanban-input" class="input" placeholder="Add a todo to kanban…">' +
@@ -715,12 +716,13 @@
       return;
     }
     list.innerHTML = todos.map(function (t) {
-      const done = t.status === "done";
+      const closed = t.status === "closed" || t.status === "done";
       const prio = t.priority || 0;
       const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
-      return '<div class="todo-row' + (done ? " done" : "") + '">' +
-        '<button class="todo-check' + (done ? " done" : "") + '" data-id="' + t.id + '" data-done="' + done + '" aria-label="toggle done"></button>' +
-        '<span class="todo-text' + (done ? " done" : "") + '">' + esc(t.text) + "</span>" +
+      const desc = t.description ? '<div class="todo-desc">' + esc(t.description) + '</div>' : "";
+      return '<div class="todo-row' + (closed ? " done" : "") + '">' +
+        '<button class="todo-check' + (closed ? " done" : "") + '" data-id="' + t.id + '" data-done="' + closed + '" aria-label="toggle done"></button>' +
+        '<div style="flex:1"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span>" + desc + "</div>" +
         '<span class="todo-meta">' +
           '<span class="todo-prio p' + Math.min(prio, 3) + '"></span>' +
           (due ? "<span>" + esc(due) + "</span>" : "") +
@@ -747,11 +749,14 @@
   async function addTodo(e) {
     e.preventDefault();
     const input = $("#todo-input");
+    const descInput = $("#todo-desc");
     const text = input.value.trim();
+    const desc = descInput ? descInput.value.trim() : "";
     if (!text) return;
     try {
-      await api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text }) });
+      await api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text, description: desc }) });
       input.value = "";
+      if (descInput) descInput.value = "";
       refreshTodos();
       refreshKanban();
     } catch (err) {
@@ -774,24 +779,25 @@
   function renderKanban(todos) {
     const openList = $("#kanban-open");
     const doingList = $("#kanban-doing");
-    const doneList = $("#kanban-done");
-    if (!openList || !doneList || !doingList) return;
+    const closedList = $("#kanban-closed");
+    if (!openList || !closedList || !doingList) return;
     const open = todos.filter(function (t) { return t.status === "open"; });
     const doing = todos.filter(function (t) { return t.status === "in_progress"; });
-    const done = todos.filter(function (t) { return t.status === "done"; });
+    const closed = todos.filter(function (t) { return t.status === "closed"; });
     openList.innerHTML = open.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No open todos</div>';
     doingList.innerHTML = doing.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No tasks in progress</div>';
-    doneList.innerHTML = done.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No done todos</div>';
+    closedList.innerHTML = closed.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No closed todos</div>';
     attachKanbanHandlers();
   }
 
   function kanbanCard(t) {
     const prio = t.priority || 0;
     const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
-    const done = t.status === "done";
+    const closed = t.status === "closed";
     const doing = t.status === "in_progress";
-    return '<div class="kanban-card' + (done ? " done" : doing ? " doing" : "") + '" draggable="true" data-id="' + t.id + '">' +
-      '<div class="todo-text' + (done ? " done" : "") + '">' + esc(t.text) + "</div>" +
+    const desc = t.description ? '<div class="todo-desc" style="font-size:11px;color:var(--ink-faint);margin-top:4px">' + esc(t.description) + '</div>' : "";
+    return '<div class="kanban-card' + (closed ? " closed" : doing ? " doing" : "") + '" draggable="true" data-id="' + t.id + '">' +
+      '<div class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</div>" + desc +
       '<div class="todo-meta">' +
         '<span class="todo-prio p' + Math.min(prio, 3) + '"></span>' +
         (due ? "<span>" + esc(due) + "</span>" : "") +

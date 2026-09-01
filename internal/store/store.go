@@ -82,6 +82,7 @@ type Todo struct {
 	ID          int64      `json:"id"`
 	JID         string     `json:"jid"`
 	Text        string     `json:"text"`
+	Description string     `json:"description,omitempty"`
 	Status      string     `json:"status"`
 	Priority    int        `json:"priority"`
 	DueAt       *time.Time `json:"due_at,omitempty"`
@@ -91,7 +92,7 @@ type Todo struct {
 
 // TodoStore persists the per-conversation todo list.
 type TodoStore interface {
-	AddTodo(jid, text string, priority int, dueAt *time.Time) (int64, error)
+	AddTodo(jid, text, description string, priority int, dueAt *time.Time) (int64, error)
 	ListTodos(jid, status string, limit int) ([]Todo, error)
 	CompleteTodo(id int64) error
 	UpdateTodoStatus(id int64, status string) error
@@ -194,12 +195,14 @@ func (s *Store) migrate() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			jid TEXT NOT NULL,
 			text TEXT NOT NULL,
+			description TEXT DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'open',
 			priority INTEGER DEFAULT 0,
 			due_at DATETIME,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			completed_at DATETIME
 		);`},
+		{"todos_desc_migrate", `ALTER TABLE todos ADD COLUMN description TEXT DEFAULT ''`},
 		{"todos_jid_idx", `CREATE INDEX IF NOT EXISTS idx_todos_jid ON todos(jid, id)`},
 		{"todos_status_idx", `CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status)`},
 		{"meeting_notes", `CREATE TABLE IF NOT EXISTS meeting_notes (
@@ -217,10 +220,53 @@ func (s *Store) migrate() error {
 
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt.sql); err != nil {
+			// Ignore duplicate column error for idempotent migrations (e.g., description).
+			if stmt.name == "todos_desc_migrate" && isDuplicateColumnError(err) {
+				continue
+			}
 			return fmt.Errorf("fail to create table <%s>: %w", stmt.name, err)
 		}
 	}
 	return nil
+}
+
+func isDuplicateColumnError(err error) bool {
+	msg := err.Error()
+	return containsFold(msg, "duplicate column name") || containsFold(msg, "already exists")
+}
+
+func containsFold(s, substr string) bool {
+	// Minimal case-insensitive contains without importing strings.
+	ls := make([]byte, len(s))
+	for i := range s {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		ls[i] = c
+	}
+	lsub := make([]byte, len(substr))
+	for i := range substr {
+		c := substr[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		lsub[i] = c
+	}
+	return indexOf(string(ls), string(lsub)) >= 0
+}
+
+func indexOf(s, substr string) int {
+	n := len(substr)
+	if n == 0 {
+		return 0
+	}
+	for i := 0; i <= len(s)-n; i++ {
+		if s[i:i+n] == substr {
+			return i
+		}
+	}
+	return -1
 }
 
 // IsInitialized reports whether the default settings have been seeded.

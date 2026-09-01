@@ -268,9 +268,10 @@ func (s *Service) registerManagementTools() {
 		"add_todo",
 		"Add a todo item to the Master's list. Triggered by 'add todo ...', 'remember to ...', 'todo: ...'. Only the Master may use this.",
 		toolParams(map[string]any{
-			"text":     map[string]any{"type": "string", "description": "The todo text, e.g. 'Buy milk'"},
-			"priority": map[string]any{"type": "integer", "description": "Optional priority 0-5, higher is more urgent"},
-			"due":      map[string]any{"type": "string", "description": "Optional due date as RFC3339, e.g. 2026-09-01T10:00:00+07:00"},
+			"text":        map[string]any{"type": "string", "description": "The todo text, e.g. 'Buy milk'"},
+			"description": map[string]any{"type": "string", "description": "Optional description for more detail"},
+			"priority":    map[string]any{"type": "integer", "description": "Optional priority 0-5, higher is more urgent"},
+			"due":         map[string]any{"type": "string", "description": "Optional due date as RFC3339, e.g. 2026-09-01T10:00:00+07:00"},
 		}, "text"),
 		func(ctx context.Context, args map[string]any) (string, error) {
 			if err := masterOnly(ctx); err != nil {
@@ -281,6 +282,7 @@ func (s *Service) registerManagementTools() {
 				return "", fmt.Errorf("text is required")
 			}
 			jid := tools.Sender(ctx)
+			desc := tools.StringArg(args, "description")
 			priority := tools.IntArg(args, "priority", 0)
 			var dueTime *time.Time
 			if dStr := tools.StringArg(args, "due"); dStr != "" {
@@ -288,7 +290,7 @@ func (s *Service) registerManagementTools() {
 					dueTime = &t
 				}
 			}
-			id, err := s.todos.AddTodo(jid, text, priority, dueTime)
+			id, err := s.todos.AddTodo(jid, text, desc, priority, dueTime)
 			if err != nil {
 				return "", err
 			}
@@ -300,7 +302,7 @@ func (s *Service) registerManagementTools() {
 		"list_todos",
 		"List todo items. Triggered by 'list todos', 'show my todos', 'what are my todos'. Only the Master may use this.",
 		toolParams(map[string]any{
-			"status": map[string]any{"type": "string", "description": "Optional: 'open', 'in_progress' (or 'doing'), or 'done'. Omit for all."},
+			"status": map[string]any{"type": "string", "description": "Optional: 'open', 'in_progress' (or 'doing'), or 'closed'. Omit for all."},
 			"limit":  map[string]any{"type": "integer", "description": "Optional max to show"},
 		}),
 		func(ctx context.Context, args map[string]any) (string, error) {
@@ -334,7 +336,7 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"complete_todo",
-		"Mark a todo as done. Triggered by 'complete todo #3', 'done with todo 3'. Only the Master may use this.",
+		"Mark a todo as closed. Triggered by 'complete todo #3', 'close todo 3', 'done with todo 3'. Only the Master may use this.",
 		toolParams(map[string]any{
 			"id": map[string]any{"type": "integer", "description": "The todo ID"},
 		}, "id"),
@@ -349,7 +351,7 @@ func (s *Service) registerManagementTools() {
 			if err := s.todos.CompleteTodo(int64(id)); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("Completed todo #%d.", id), nil
+			return fmt.Sprintf("Closed todo #%d.", id), nil
 		},
 	)
 
@@ -376,10 +378,10 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"update_todo_status",
-		"Move a todo between statuses. Triggered by 'start todo #3', 'move todo 3 to in progress', 'reopen todo 2'. Only the Master may use this.",
+		"Move a todo between statuses. Triggered by 'start todo #3', 'move todo 3 to in progress', 'reopen todo 2', 'close todo 3'. Only the Master may use this.",
 		toolParams(map[string]any{
 			"id":     map[string]any{"type": "integer", "description": "The todo ID"},
-			"status": map[string]any{"type": "string", "description": "New status: 'open', 'in_progress' (or 'doing'), or 'done'"},
+			"status": map[string]any{"type": "string", "description": "New status: 'open', 'in_progress' (or 'doing'), or 'closed'"},
 		}, "id", "status"),
 		func(ctx context.Context, args map[string]any) (string, error) {
 			if err := masterOnly(ctx); err != nil {

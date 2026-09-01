@@ -811,7 +811,7 @@ label.field .lbl {
 
 .kanban-col[data-status="open"] h3 { border-color: oklch(0.75 0.15 45); }
 .kanban-col[data-status="in_progress"] h3 { border-color: oklch(0.60 0.18 250); }
-.kanban-col[data-status="done"] h3 { border-color: var(--ok-ink); opacity: 0.7; }
+.kanban-col[data-status="closed"] h3 { border-color: var(--ok-ink); opacity: 0.7; }
 
 .kanban-list {
   display: flex;
