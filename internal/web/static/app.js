@@ -284,8 +284,14 @@
               '<div class="todo-list" id="todo-list"></div>' +
             "</div>" +
             '<div class="card tile-calendar"><h2>Calendar</h2><p class="sub">upcoming — precise, calm, authoritative</p>' +
+              '<form id="calendar-form" class="todo-form">' +
+                '<input id="calendar-title" class="input" placeholder="Event title" aria-label="Event title">' +
+                '<input id="calendar-start" class="input" type="datetime-local" aria-label="Start">' +
+                '<input id="calendar-end" class="input" type="datetime-local" aria-label="End">' +
+                '<button class="btn primary" type="submit">add</button>' +
+              "</form>" +
               '<div class="calendar-list" id="calendar-list"><div class="todo-empty">No upcoming events</div></div>' +
-              '<button class="btn mini" id="calendar-refresh">refresh</button>' +
+              '<button class="btn mini" id="calendar-refresh">refresh via Clark</button>' +
             "</div>" +
           "</section>" +
           '<section id="chat" class="hidden">' +
@@ -445,6 +451,23 @@
     });
     const calRefresh = $("#calendar-refresh");
     if (calRefresh) calRefresh.addEventListener("click", refreshCalendar);
+    const calForm = $("#calendar-form");
+    if (calForm) calForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      const title = $("#calendar-title").value.trim();
+      const start = $("#calendar-start").value;
+      const end = $("#calendar-end").value;
+      if (!title || !start || !end) { toast("title, start, and end are required"); return; }
+      const startISO = new Date(start).toISOString();
+      const endISO = new Date(end).toISOString();
+      setMode("chat");
+      const input = $("#chat-input");
+      input.value = "add to calendar " + title + " from " + startISO + " to " + endISO;
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      const submitBtn = $("#chat-send");
+      if (submitBtn) submitBtn.click();
+      calForm.reset();
+    });
 
     document.querySelectorAll("#vip-sort button").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -802,6 +825,20 @@
         api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (err) { toast(err.message); });
       });
     });
+  }
+
+  /* ---------------- calendar (tool-driven) ---------------- */
+
+  async function refreshCalendar() {
+    const list = $("#calendar-list");
+    list.innerHTML = '<div class="todo-empty">Asking Clark… check chat for events</div>';
+    setMode("chat");
+    const input = $("#chat-input");
+    input.value = "what's on my calendar for the next 7 days?";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    // Fallback direct submit
+    const submitBtn = $("#chat-send");
+    if (submitBtn) submitBtn.click();
   }
 
   /* ---------------- idle sound ---------------- */

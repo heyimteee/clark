@@ -18,6 +18,7 @@ import (
 
 	"github.com/heyimteee/clark/internal/alert"
 	"github.com/heyimteee/clark/internal/assistant"
+	"github.com/heyimteee/clark/internal/calendar"
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/imessage"
@@ -65,6 +66,11 @@ func New() (*App, error) {
 		logging.Log("CLARK", logging.SevWarn, "TOOLS", "Web search disabled", "reason", "no TAVILY_API_KEY in .env")
 	}
 
+	if cfg.MacActionURL != "" {
+		registerCalendarTools(ast, cfg.MacActionURL, cfg.MacActionToken)
+		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Calendar enabled", "provider", "mac-bridge")
+	}
+
 	return &App{cfg: cfg, st: st, ast: ast}, nil
 }
 
@@ -99,6 +105,130 @@ func registerWebSearchTool(reg *tools.Registry, client *websearch.Client) {
 			return websearch.Format(results), nil
 		},
 	)
+}
+
+func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
+	client := calendar.NewMacosClient(baseURL, token)
+	ast.Tools().RegisterFunc(
+		"add_calendar_event",
+		"Add an event to the Master's calendar. Triggered by 'add to calendar ...', 'schedule ...', 'create event ...'. Only the Master may use this.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":    map[string]any{"type": "string", "description": "Event title"},
+				"start":    map[string]any{"type": "string", "description": "Start time as RFC3339, e.g. 2026-09-01T10:00:00+07:00"},
+				"end":      map[string]any{"type": "string", "description": "End time as RFC3339"},
+				"location": map[string]any{"type": "string", "description": "Optional location"},
+				"notes":    map[string]any{"type": "string", "description": "Optional notes"},
+			},
+			"required": []string{"title", "start", "end"},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			title := tools.StringArg(args, "title")
+			startStr := tools.StringArg(args, "start")
+			endStr := tools.StringArg(args, "end")
+			if title == "" || startStr == "" || endStr == "" {
+				return "", fmt.Errorf("title, start, and end are required")
+			}
+			start, err := time.Parse(time.RFC3339, startStr)
+			if err != nil {
+				return "", fmt.Errorf("invalid start time: %w", err)
+			}
+			end, err := time.Parse(time.RFC3339, endStr)
+			if err != nil {
+				return "", fmt.Errorf("invalid end time: %w", err)
+			}
+			e := calendar.Event{Title: title, Start: start, End: end, Location: tools.StringArg(args, "location"), Notes: tools.StringArg(args, "notes")}
+			id, err := client.Create(ctx, e)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Event '%s' created with ID %s.", title, id), nil
+		},
+	)
+	ast.Tools().RegisterFunc(
+		"list_calendar_events",
+		"List upcoming calendar events. Triggered by 'what's on my calendar', 'show my events', 'list events'. Only the Master may use this.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"from":  map[string]any{"type": "string", "description": "Optional start time as RFC3339, defaults to now"},
+				"to":    map[string]any{"type": "string", "description": "Optional end time as RFC3339, defaults to 7 days from now"},
+				"limit": map[string]any{"type": "integer", "description": "Optional max events to show"},
+			},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			from := time.Now()
+			to := from.Add(7 * 24 * time.Hour)
+			if s := tools.StringArg(args, "from"); s != "" {
+				if t, err := time.Parse(time.RFC3339, s); err == nil {
+					from = t
+				}
+			}
+			if s := tools.StringArg(args, "to"); s != "" {
+				if t, err := time.Parse(time.RFC3339, s); err == nil {
+					to = t
+				}
+			}
+			events, err := client.List(ctx, from, to)
+			if err != nil {
+				return "", err
+			}
+			if len(events) == 0 {
+				return "No events found in that window.", nil
+			}
+			limit := tools.IntArg(args, "limit", 0)
+			if limit > 0 && len(events) > limit {
+				events = events[:limit]
+			}
+			var b strings.Builder
+			for _, e := range events {
+				fmt.Fprintf(&b, "- %s: %s to %s", e.Title, e.Start.Format("2006-01-02 15:04"), e.End.Format("15:04"))
+				if e.Location != "" {
+					fmt.Fprintf(&b, " @ %s", e.Location)
+				}
+				b.WriteString("\n")
+			}
+			return b.String(), nil
+		},
+	)
+	ast.Tools().RegisterFunc(
+		"delete_calendar_event",
+		"Delete a calendar event by ID or title. Triggered by 'delete event ...', 'cancel my meeting ...', 'remove event ...'. Only the Master may use this.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "Event ID or title to delete"},
+			},
+			"required": []string{"id"},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			id := tools.StringArg(args, "id")
+			if id == "" {
+				return "", fmt.Errorf("id is required")
+			}
+			if err := client.Delete(ctx, id); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Event %s deleted.", id), nil
+		},
+	)
+}
+
+func masterOnlyForTool(ctx context.Context, _ *assistant.Service) error {
+	if !tools.IsMaster(ctx) {
+		return fmt.Errorf("forbidden: only the Master may use this tool")
+	}
+	return nil
 }
 
 // Close releases the underlying store.
@@ -197,6 +327,34 @@ func (a *App) Run() error {
 		alerts.Relay(ctx, text)
 		return nil
 	})
+
+	// Calendar proactive ticker: if there are events in the next 24h, ask
+	// whether to enter Protocol Away via the LLM tool path.
+	if a.cfg.MacActionURL != "" {
+		go func() {
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			lastAsk := time.Time{}
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if time.Since(lastAsk) < 24*time.Hour {
+						continue
+					}
+					// Use the LLM to check calendar via tool: send a synthetic
+					// message that will trigger list_calendar_events
+					_, err := a.ast.Reply(ctx, "master@master", "Check my calendar for the next 24 hours and if there are events, ask me whether to enter Protocol Away.", true)
+					if err != nil {
+						logging.Log("CALENDAR", logging.SevWarn, "TICKER", "Failed to check calendar", "error", err)
+						continue
+					}
+					lastAsk = time.Now()
+				}
+			}
+		}()
+	}
 
 	errCh := make(chan error, 3)
 	go func() {
