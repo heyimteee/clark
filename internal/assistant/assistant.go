@@ -116,6 +116,7 @@ type Service struct {
 	settings  store.Settings
 	history   store.HistoryStore
 	access    store.AccessStore
+	todos     store.TodoStore
 	vip       *VIP
 	tools     *tools.Registry
 	llm       LLM
@@ -165,6 +166,7 @@ func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 		settings:    st,
 		history:     st,
 		access:      st,
+		todos:       st,
 		vip:         NewVIP(st),
 		tools:       tools.NewRegistry(),
 		llm:         llm,

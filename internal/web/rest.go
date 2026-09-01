@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/ollama"
+	"github.com/heyimteee/clark/internal/store"
 )
 
 // state builds the full console snapshot the SPA re-renders from. Shape is
@@ -135,6 +137,92 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "scope must be global, vip, or web"})
 	}
+}
+
+// handleTodos serves the per-conversation todo list.
+func (s *Server) handleTodos(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		status := r.URL.Query().Get("status")
+		limit := 0
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		todos, err := s.store.ListTodos(webJID, status, limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list todos"})
+			return
+		}
+		if todos == nil {
+			todos = []store.Todo{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"todos": todos})
+	case http.MethodPost:
+		var body struct {
+			Text     string `json:"text"`
+			Priority *int   `json:"priority"`
+			Due      string `json:"due"`
+		}
+		if err := decodeBody(w, r, &body); err != nil || body.Text == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "text is required"})
+			return
+		}
+		priority := 0
+		if body.Priority != nil {
+			priority = *body.Priority
+		}
+		var dueAt *time.Time
+		if body.Due != "" {
+			if t, err := time.Parse(time.RFC3339, body.Due); err == nil {
+				dueAt = &t
+			}
+		}
+		id, err := s.store.AddTodo(webJID, body.Text, priority, dueAt)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to add todo"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleTodoAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/web/api/todos/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id is required"})
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid id"})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "complete" {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+			return
+		}
+		if err := s.store.CompleteTodo(id); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to complete todo"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	if err := s.store.DeleteTodo(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to delete todo"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // --- Mutations (every one returns a fresh state snapshot) ---

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/heyimteee/clark/internal/store"
 	"github.com/heyimteee/clark/internal/tools"
@@ -259,6 +261,116 @@ func (s *Service) registerManagementTools() {
 				return "", err
 			}
 			return fmt.Sprintf("Understood, Master. I now review the %d most recent messages on every turn.", limit), nil
+		},
+	)
+
+	s.tools.RegisterFunc(
+		"add_todo",
+		"Add a todo item to the Master's list. Triggered by 'add todo ...', 'remember to ...', 'todo: ...'. Only the Master may use this.",
+		toolParams(map[string]any{
+			"text":     map[string]any{"type": "string", "description": "The todo text, e.g. 'Buy milk'"},
+			"priority": map[string]any{"type": "integer", "description": "Optional priority 0-5, higher is more urgent"},
+			"due":      map[string]any{"type": "string", "description": "Optional due date as RFC3339, e.g. 2026-09-01T10:00:00+07:00"},
+		}, "text"),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			text := tools.StringArg(args, "text")
+			if text == "" {
+				return "", fmt.Errorf("text is required")
+			}
+			jid := tools.Sender(ctx)
+			priority := tools.IntArg(args, "priority", 0)
+			var dueTime *time.Time
+			if dStr := tools.StringArg(args, "due"); dStr != "" {
+				if t, err := time.Parse(time.RFC3339, dStr); err == nil {
+					dueTime = &t
+				}
+			}
+			id, err := s.todos.AddTodo(jid, text, priority, dueTime)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Added todo #%d: %s", id, text), nil
+		},
+	)
+
+	s.tools.RegisterFunc(
+		"list_todos",
+		"List todo items. Triggered by 'list todos', 'show my todos', 'what are my todos'. Only the Master may use this.",
+		toolParams(map[string]any{
+			"status": map[string]any{"type": "string", "description": "Optional: 'open' or 'done'. Omit for all."},
+			"limit":  map[string]any{"type": "integer", "description": "Optional max to show"},
+		}),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			jid := tools.Sender(ctx)
+			status := tools.StringArg(args, "status")
+			limit := tools.IntArg(args, "limit", 0)
+			todos, err := s.todos.ListTodos(jid, status, limit)
+			if err != nil {
+				return "", err
+			}
+			if len(todos) == 0 {
+				return "No todos found.", nil
+			}
+			var b strings.Builder
+			for _, t := range todos {
+				fmt.Fprintf(&b, "#%d [%s] %s", t.ID, t.Status, t.Text)
+				if t.Priority > 0 {
+					fmt.Fprintf(&b, " (prio %d)", t.Priority)
+				}
+				if t.DueAt != nil {
+					fmt.Fprintf(&b, " due %s", t.DueAt.Format("2006-01-02"))
+				}
+				b.WriteString("\n")
+			}
+			return b.String(), nil
+		},
+	)
+
+	s.tools.RegisterFunc(
+		"complete_todo",
+		"Mark a todo as done. Triggered by 'complete todo #3', 'done with todo 3'. Only the Master may use this.",
+		toolParams(map[string]any{
+			"id": map[string]any{"type": "integer", "description": "The todo ID"},
+		}, "id"),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			id := tools.IntArg(args, "id", 0)
+			if id == 0 {
+				return "", fmt.Errorf("id is required")
+			}
+			if err := s.todos.CompleteTodo(int64(id)); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Completed todo #%d.", id), nil
+		},
+	)
+
+	s.tools.RegisterFunc(
+		"delete_todo",
+		"Delete a todo item. Triggered by 'delete todo #3', 'remove todo 3'. Only the Master may use this.",
+		toolParams(map[string]any{
+			"id": map[string]any{"type": "integer", "description": "The todo ID"},
+		}, "id"),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			id := tools.IntArg(args, "id", 0)
+			if id == 0 {
+				return "", fmt.Errorf("id is required")
+			}
+			if err := s.todos.DeleteTodo(int64(id)); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Deleted todo #%d.", id), nil
 		},
 	)
 }

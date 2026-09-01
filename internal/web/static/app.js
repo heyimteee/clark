@@ -194,6 +194,7 @@
           '<div class="mode-switch">' +
             '<button id="mode-bento" class="active" aria-pressed="true">bento</button>' +
             '<button id="mode-chat" aria-pressed="false">chat</button>' +
+            '<button id="mode-kanban" aria-pressed="false">kanban</button>' +
           "</div>" +
           '<button id="btn-logout" class="btn">lock</button>' +
         "</div></header>" +
@@ -270,6 +271,22 @@
               "</div>" +
               '<div class="hist-list" id="hist-list"></div>' +
             "</div>" +
+            '<div class="card tile-todos"><h2>Todos</h2><p class="sub">your list — precise, calm, authoritative</p>' +
+              '<div class="todo-head">' +
+                '<div class="todo-count" id="todo-count">0 open</div>' +
+                '<div class="spacer"></div>' +
+                '<button class="btn mini" id="todo-refresh">refresh</button>' +
+              "</div>" +
+              '<form id="todo-form" class="todo-form">' +
+                '<input id="todo-input" class="input" placeholder="Add a todo — e.g. Review Tiara’s deck by Friday" aria-label="Add todo">' +
+                '<button class="btn primary" type="submit">add</button>' +
+              "</form>" +
+              '<div class="todo-list" id="todo-list"></div>' +
+            "</div>" +
+            '<div class="card tile-calendar"><h2>Calendar</h2><p class="sub">upcoming — precise, calm, authoritative</p>' +
+              '<div class="calendar-list" id="calendar-list"><div class="todo-empty">No upcoming events</div></div>' +
+              '<button class="btn mini" id="calendar-refresh">refresh</button>' +
+            "</div>" +
           "</section>" +
           '<section id="chat" class="hidden">' +
             '<div id="chat-scroll"><div id="chat-list"></div></div>' +
@@ -285,6 +302,16 @@
               '<textarea id="chat-input" rows="1" placeholder="message clark…" aria-label="message clark"></textarea>' +
               '<button id="chat-send" class="btn primary">send</button>' +
             "</div>" +
+          "</section>" +
+          '<section id="kanban" class="hidden">' +
+            '<div class="kanban-board">' +
+              '<div class="kanban-col" data-status="open"><h3>Open</h3><div class="kanban-list" id="kanban-open"></div></div>' +
+              '<div class="kanban-col" data-status="done"><h3>Done</h3><div class="kanban-list" id="kanban-done"></div></div>' +
+            '</div>' +
+            '<div class="kanban-add">' +
+              '<input id="kanban-input" class="input" placeholder="Add a todo to kanban…">' +
+              '<button class="btn primary" id="kanban-add">add</button>' +
+            '</div>' +
           "</section>" +
         "</main>" +
         '<section id="logs">' +
@@ -313,6 +340,9 @@
       connectChat();
       connectLogs();
       refreshHistory();
+      refreshTodos();
+      refreshKanban();
+      refreshCalendar();
     } catch (e) {
       toast(e.message);
     }
@@ -330,11 +360,15 @@
     mode = m;
     $("#mode-bento").classList.toggle("active", m === "bento");
     $("#mode-chat").classList.toggle("active", m === "chat");
+    $("#mode-kanban").classList.toggle("active", m === "kanban");
     $("#mode-bento").setAttribute("aria-pressed", String(m === "bento"));
     $("#mode-chat").setAttribute("aria-pressed", String(m === "chat"));
+    $("#mode-kanban").setAttribute("aria-pressed", String(m === "kanban"));
     $("#bento").classList.toggle("hidden", m !== "bento");
     $("#chat").classList.toggle("hidden", m !== "chat");
+    $("#kanban").classList.toggle("hidden", m !== "kanban");
     if (m === "chat") $("#chat-input").focus();
+    if (m === "kanban") refreshKanban();
   }
 
   function markLive(live) {
@@ -398,6 +432,19 @@
       refreshHistory();
     });
     $("#hist-refresh").addEventListener("click", refreshHistory);
+    const todoRefresh = $("#todo-refresh");
+    if (todoRefresh) todoRefresh.addEventListener("click", refreshTodos);
+    const todoForm = $("#todo-form");
+    if (todoForm) todoForm.addEventListener("submit", addTodo);
+    const kanbanAdd = $("#kanban-add");
+    if (kanbanAdd) kanbanAdd.addEventListener("click", function () {
+      const input = $("#kanban-input");
+      const text = input.value.trim();
+      if (!text) return;
+      api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text }) }).then(function () { input.value = ""; refreshTodos(); refreshKanban(); }).catch(function (e) { toast(e.message); });
+    });
+    const calRefresh = $("#calendar-refresh");
+    if (calRefresh) calRefresh.addEventListener("click", refreshCalendar);
 
     document.querySelectorAll("#vip-sort button").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -619,6 +666,142 @@
       return '<option value="' + esc(v.jid) + '">' + esc(v.name || v.jid) + "</option>";
     }).join("");
     if (vips.some(function (v) { return v.jid === cur; })) sel.value = cur;
+  }
+
+  /* ---------------- todos ---------------- */
+
+  async function refreshTodos() {
+    try {
+      const d = await api("/web/api/todos");
+      const todos = (d && d.todos) || [];
+      renderTodos(todos);
+    } catch (e) {
+      if (e.message !== "session expired") toast(e.message);
+    }
+  }
+
+  function renderTodos(todos) {
+    const list = $("#todo-list");
+    const count = $("#todo-count");
+    const open = todos.filter(function (t) { return t.status === "open"; }).length;
+    count.textContent = open + " open";
+    if (!todos.length) {
+      list.innerHTML = '<div class="todo-empty">No todos yet — add one above</div>';
+      return;
+    }
+    list.innerHTML = todos.map(function (t) {
+      const done = t.status === "done";
+      const prio = t.priority || 0;
+      const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
+      return '<div class="todo-row' + (done ? " done" : "") + '">' +
+        '<button class="todo-check' + (done ? " done" : "") + '" data-id="' + t.id + '" data-done="' + done + '" aria-label="toggle done"></button>' +
+        '<span class="todo-text' + (done ? " done" : "") + '">' + esc(t.text) + "</span>" +
+        '<span class="todo-meta">' +
+          '<span class="todo-prio p' + Math.min(prio, 3) + '"></span>' +
+          (due ? "<span>" + esc(due) + "</span>" : "") +
+        "</span>" +
+        '<button class="todo-del" data-id="' + t.id + '" aria-label="delete">×</button>' +
+        "</div>";
+    }).join("");
+    list.querySelectorAll(".todo-check").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const id = btn.dataset.id;
+        const done = btn.dataset.done === "true";
+        if (done) return;
+        api("/web/api/todos/" + id + "/complete", { method: "POST" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (e) { toast(e.message); });
+      });
+    });
+    list.querySelectorAll(".todo-del").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const id = btn.dataset.id;
+        api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (e) { toast(e.message); });
+      });
+    });
+  }
+
+  async function addTodo(e) {
+    e.preventDefault();
+    const input = $("#todo-input");
+    const text = input.value.trim();
+    if (!text) return;
+    try {
+      await api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text }) });
+      input.value = "";
+      refreshTodos();
+      refreshKanban();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  /* ---------------- kanban ---------------- */
+
+  async function refreshKanban() {
+    try {
+      const d = await api("/web/api/todos");
+      const todos = (d && d.todos) || [];
+      renderKanban(todos);
+    } catch (e) {
+      if (e.message !== "session expired") toast(e.message);
+    }
+  }
+
+  function renderKanban(todos) {
+    const openList = $("#kanban-open");
+    const doneList = $("#kanban-done");
+    if (!openList || !doneList) return;
+    const open = todos.filter(function (t) { return t.status === "open"; });
+    const done = todos.filter(function (t) { return t.status === "done"; });
+    openList.innerHTML = open.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No open todos</div>';
+    doneList.innerHTML = done.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No done todos</div>';
+    attachKanbanHandlers();
+  }
+
+  function kanbanCard(t) {
+    const prio = t.priority || 0;
+    const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
+    const done = t.status === "done";
+    return '<div class="kanban-card' + (done ? " done" : "") + '" draggable="true" data-id="' + t.id + '">' +
+      '<div class="todo-text' + (done ? " done" : "") + '">' + esc(t.text) + "</div>" +
+      '<div class="todo-meta">' +
+        '<span class="todo-prio p' + Math.min(prio, 3) + '"></span>' +
+        (due ? "<span>" + esc(due) + "</span>" : "") +
+        '<span class="spacer"></span>' +
+        '<button class="todo-del" data-id="' + t.id + '">×</button>' +
+      "</div>" +
+      "</div>";
+  }
+
+  function attachKanbanHandlers() {
+    document.querySelectorAll(".kanban-card").forEach(function (card) {
+      card.addEventListener("dragstart", function (e) {
+        e.dataTransfer.setData("text/plain", card.dataset.id);
+        card.classList.add("dragging");
+      });
+      card.addEventListener("dragend", function () { card.classList.remove("dragging"); });
+    });
+    document.querySelectorAll(".kanban-col").forEach(function (col) {
+      col.addEventListener("dragover", function (e) { e.preventDefault(); col.classList.add("drag-over"); });
+      col.addEventListener("dragleave", function () { col.classList.remove("drag-over"); });
+      col.addEventListener("drop", function (e) {
+        e.preventDefault();
+        col.classList.remove("drag-over");
+        const id = e.dataTransfer.getData("text/plain");
+        const status = col.dataset.status;
+        if (status === "done") {
+          api("/web/api/todos/" + id + "/complete", { method: "POST" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (err) { toast(err.message); });
+        } else if (status === "open") {
+          toast("Only open → done via drag for now");
+        }
+      });
+    });
+    document.querySelectorAll(".kanban-card .todo-del").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        const id = btn.dataset.id || btn.closest(".kanban-card").dataset.id;
+        api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (err) { toast(err.message); });
+      });
+    });
   }
 
   /* ---------------- idle sound ---------------- */

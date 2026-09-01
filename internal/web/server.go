@@ -125,6 +125,9 @@ func New(opts Options) *Server {
 
 	s.mux.HandleFunc("GET /web/api/state", s.requireAuth(s.handleState))
 	s.mux.HandleFunc("GET /web/api/history", s.requireAuth(s.handleHistory))
+	s.mux.HandleFunc("GET /web/api/todos", s.requireAuth(s.handleTodos))
+	s.mux.HandleFunc("POST /web/api/todos", s.requireAuth(s.handleTodos))
+	s.mux.HandleFunc("/web/api/todos/", s.requireAuth(s.handleTodoAction))
 	s.mux.HandleFunc("GET /web/api/voice", s.requireAuth(s.handleVoiceStatus))
 
 	s.mux.HandleFunc("POST /web/api/status", s.requireAuth(s.handleSetStatus))

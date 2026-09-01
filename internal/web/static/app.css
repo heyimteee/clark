@@ -304,6 +304,7 @@ label.field .lbl {
 .tile-access { grid-column: span 4; }
 .tile-vips { grid-column: span 12; }
 .tile-history { grid-column: span 12; }
+.tile-todos { grid-column: span 12; }
 
 /* config tile */
 
@@ -640,6 +641,225 @@ label.field .lbl {
   color: var(--ink-faint);
   text-align: center;
   padding: 32px 0;
+}
+
+/* ---------- todos tile — bold within bento bounds ---------- */
+.tile-todos .todo-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0 12px;
+}
+
+.tile-todos .todo-count {
+  font-family: var(--display, var(--sans));
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.tile-todos .todo-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tile-todos .todo-form .input {
+  flex: 1;
+}
+
+.tile-todos .todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.tile-todos .todo-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-1, var(--card-bg, #fff));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.tile-todos .todo-row.done {
+  opacity: 0.6;
+}
+
+.tile-todos .todo-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  flex: none;
+  cursor: pointer;
+  background: transparent;
+}
+
+.tile-todos .todo-check.done {
+  background: var(--ok-ink);
+  border-color: var(--ok-ink);
+}
+
+.tile-todos .todo-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tile-todos .todo-text.done {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+}
+
+.tile-todos .todo-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.tile-todos .todo-prio {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.tile-todos .todo-prio.p0 { background: var(--line-strong); }
+.tile-todos .todo-prio.p1 { background: oklch(0.85 0.12 90); }
+.tile-todos .todo-prio.p2 { background: oklch(0.75 0.15 45); }
+.tile-todos .todo-prio.p3 { background: oklch(0.65 0.18 25); }
+
+.tile-todos .todo-del {
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.tile-todos .todo-del:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+
+.tile-todos .todo-empty {
+  color: var(--ink-faint);
+  text-align: center;
+  padding: 24px 0;
+  font-size: 13px;
+}
+
+#kanban {
+  padding: var(--space-5) 0;
+}
+
+.kanban-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.kanban-col {
+  background: var(--surface-1, var(--card-bg, #fff));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.kanban-col h3 {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--line);
+}
+
+.kanban-col[data-status="open"] h3 { border-color: oklch(0.75 0.15 45); }
+.kanban-col[data-status="done"] h3 { border-color: var(--ok-ink); opacity: 0.7; }
+
+.kanban-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 200px;
+}
+
+.kanban-card {
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 13px;
+  cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.kanban-card:active {
+  cursor: grabbing;
+  transform: rotate(1deg) scale(1.02);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.kanban-card.dragging {
+  opacity: 0.5;
+}
+
+.kanban-col.drag-over {
+  background: oklch(0.97 0.02 240);
+  border-color: var(--accent);
+}
+
+.kanban-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.tile-calendar .calendar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tile-calendar .calendar-event {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.tile-calendar .calendar-event-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+.kanban-add .input {
+  flex: 1;
 }
 
 /* ---------- chat mode ---------- */

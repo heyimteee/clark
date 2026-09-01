@@ -77,6 +77,27 @@ type HistoryStore interface {
 	ClearHistory(jid string) error
 }
 
+// Todo is one item in a per-conversation todo list.
+type Todo struct {
+	ID          int64      `json:"id"`
+	JID         string     `json:"jid"`
+	Text        string     `json:"text"`
+	Status      string     `json:"status"`
+	Priority    int        `json:"priority"`
+	DueAt       *time.Time `json:"due_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+// TodoStore persists the per-conversation todo list.
+type TodoStore interface {
+	AddTodo(jid, text string, priority int, dueAt *time.Time) (int64, error)
+	ListTodos(jid, status string, limit int) ([]Todo, error)
+	CompleteTodo(id int64) error
+	DeleteTodo(id int64) error
+	ClearTodos(jid string) error
+}
+
 // Store is the SQLite-backed implementation of Settings, VIPStore and HistoryStore.
 type Store struct {
 	db *sql.DB
@@ -168,6 +189,29 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			picked_at DATETIME
 		);`},
+		{"todos", `CREATE TABLE IF NOT EXISTS todos (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			jid TEXT NOT NULL,
+			text TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'open',
+			priority INTEGER DEFAULT 0,
+			due_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			completed_at DATETIME
+		);`},
+		{"todos_jid_idx", `CREATE INDEX IF NOT EXISTS idx_todos_jid ON todos(jid, id)`},
+		{"todos_status_idx", `CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status)`},
+		{"meeting_notes", `CREATE TABLE IF NOT EXISTS meeting_notes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			jid TEXT NOT NULL,
+			title TEXT,
+			transcript TEXT,
+			digest TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`},
+		{"meeting_notes_jid_idx", `CREATE INDEX IF NOT EXISTS idx_meeting_notes_jid ON meeting_notes(jid, id)`},
+		{"chat_history_ts_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp ON chat_history(timestamp)`},
+		{"chat_history_jid_ts_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_jid_timestamp ON chat_history(jid, timestamp)`},
 	}
 
 	for _, stmt := range stmts {
