@@ -214,6 +214,25 @@ func (s *Server) handleTodoAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
+	if len(parts) == 2 && parts[1] == "status" {
+		if r.Method != http.MethodPost && r.Method != http.MethodPatch {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+			return
+		}
+		var body struct {
+			Status string `json:"status"`
+		}
+		if err := decodeBody(w, r, &body); err != nil || body.Status == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "status is required"})
+			return
+		}
+		if err := s.store.UpdateTodoStatus(id, body.Status); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	if r.Method != http.MethodDelete {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return

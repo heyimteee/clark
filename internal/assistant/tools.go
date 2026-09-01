@@ -300,7 +300,7 @@ func (s *Service) registerManagementTools() {
 		"list_todos",
 		"List todo items. Triggered by 'list todos', 'show my todos', 'what are my todos'. Only the Master may use this.",
 		toolParams(map[string]any{
-			"status": map[string]any{"type": "string", "description": "Optional: 'open' or 'done'. Omit for all."},
+			"status": map[string]any{"type": "string", "description": "Optional: 'open', 'in_progress' (or 'doing'), or 'done'. Omit for all."},
 			"limit":  map[string]any{"type": "integer", "description": "Optional max to show"},
 		}),
 		func(ctx context.Context, args map[string]any) (string, error) {
@@ -371,6 +371,29 @@ func (s *Service) registerManagementTools() {
 				return "", err
 			}
 			return fmt.Sprintf("Deleted todo #%d.", id), nil
+		},
+	)
+
+	s.tools.RegisterFunc(
+		"update_todo_status",
+		"Move a todo between statuses. Triggered by 'start todo #3', 'move todo 3 to in progress', 'reopen todo 2'. Only the Master may use this.",
+		toolParams(map[string]any{
+			"id":     map[string]any{"type": "integer", "description": "The todo ID"},
+			"status": map[string]any{"type": "string", "description": "New status: 'open', 'in_progress' (or 'doing'), or 'done'"},
+		}, "id", "status"),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			id := tools.IntArg(args, "id", 0)
+			status := tools.StringArg(args, "status")
+			if id == 0 || status == "" {
+				return "", fmt.Errorf("id and status are required")
+			}
+			if err := s.todos.UpdateTodoStatus(int64(id), status); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Todo #%d is now %s.", id, status), nil
 		},
 	)
 }

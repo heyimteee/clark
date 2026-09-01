@@ -64,10 +64,27 @@ func (s *Store) ListTodos(jid, status string, limit int) ([]Todo, error) {
 }
 
 func (s *Store) CompleteTodo(id int64) error {
+	return s.UpdateTodoStatus(id, "done")
+}
+
+func (s *Store) UpdateTodoStatus(id int64, status string) error {
+	if status != "open" && status != "in_progress" && status != "done" {
+		if status == "doing" {
+			status = "in_progress"
+		} else {
+			return fmt.Errorf("invalid status %q: must be open, in_progress, or done", status)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := s.db.ExecContext(ctx, `UPDATE todos SET status = 'done', completed_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("fail to complete todo: %w", err)
+	if status == "done" {
+		if _, err := s.db.ExecContext(ctx, `UPDATE todos SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?`, status, id); err != nil {
+			return fmt.Errorf("fail to update todo status: %w", err)
+		}
+	} else {
+		if _, err := s.db.ExecContext(ctx, `UPDATE todos SET status = ?, completed_at = NULL WHERE id = ?`, status, id); err != nil {
+			return fmt.Errorf("fail to update todo status: %w", err)
+		}
 	}
 	return nil
 }

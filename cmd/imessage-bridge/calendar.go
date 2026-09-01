@@ -29,24 +29,26 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 	if to.IsZero() {
 		to = from.Add(7 * 24 * time.Hour)
 	}
-	// AppleScript to list events in the window across all calendars
+	// Language-agnostic: build dates from epoch offset, and emit ISO via «class isot»
+	fromUnix := from.Unix()
+	toUnix := to.Unix()
 	script := fmt.Sprintf(`
-		set fromDate to date "%s"
-		set toDate to date "%s"
+		set epoch to date "Monday, January 1, 2001 at 12:00:00 AM"
+		set fromDate to epoch + (%d - 978307200)
+		set toDate to epoch + (%d - 978307200)
 		set out to ""
 		tell application "Calendar"
 			repeat with c in calendars
 				repeat with e in (every event of c whose start date >= fromDate and start date <= toDate)
-					set out to out & (summary of e) & "||" & (start date of e as string) & "||" & (end date of e as string) & "||" & (location of e as string) & "||" & (description of e as string) & "\n"
+					set out to out & (summary of e) & "||" & ((start date of e) as «class isot» as string) & "||" & ((end date of e) as «class isot» as string) & "||" & (location of e as string) & "||" & (description of e as string) & "||" & (uid of e as string) & "\n"
 				end repeat
 			end repeat
 		end tell
 		return out
-	`, from.Format("Monday, January 2, 2006 at 3:04:05 PM"), to.Format("Monday, January 2, 2006 at 3:04:05 PM"))
+	`, fromUnix, toUnix)
 	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
-		// If Calendar TCC not granted, return empty rather than 500 to avoid LLM hiccup
-		json.NewEncoder(w).Encode(map[string]any{"events": []calendarEvent{}})
+		http.Error(w, fmt.Sprintf("calendar list failed: %s: %s", err, string(out)), http.StatusInternalServerError)
 		return
 	}
 	events := parseCalendarListOutput(string(out))
@@ -68,23 +70,36 @@ func parseCalendarListOutput(out string) []calendarEvent {
 		endStr := strings.TrimSpace(parts[2])
 		loc := ""
 		notes := ""
+		uid := ""
 		if len(parts) > 3 {
 			loc = strings.TrimSpace(parts[3])
 		}
 		if len(parts) > 4 {
 			notes = strings.TrimSpace(parts[4])
 		}
-		// Try to parse the AppleScript date string, fallback to raw
-		start, _ := time.Parse("Monday, January 2, 2006 at 3:04:05 PM", startStr)
-		end, _ := time.Parse("Monday, January 2, 2006 at 3:04:05 PM", endStr)
+		if len(parts) > 5 {
+			uid = strings.TrimSpace(parts[5])
+		}
+		start, _ := time.Parse("2006-01-02T15:04:05Z07:00", startStr)
 		if start.IsZero() {
 			start, _ = time.Parse(time.RFC3339, startStr)
 		}
+		if start.IsZero() {
+			start, _ = time.Parse("Monday, January 2, 2006 at 3:04:05 PM", startStr)
+		}
+		end, _ := time.Parse("2006-01-02T15:04:05Z07:00", endStr)
 		if end.IsZero() {
 			end, _ = time.Parse(time.RFC3339, endStr)
 		}
+		if end.IsZero() {
+			end, _ = time.Parse("Monday, January 2, 2006 at 3:04:05 PM", endStr)
+		}
+		id := title + start.Format("20060102T150405")
+		if uid != "" {
+			id = uid
+		}
 		events = append(events, calendarEvent{
-			ID:       title + start.Format("20060102T150405"),
+			ID:       id,
 			Title:    title,
 			Start:    start.Format(time.RFC3339),
 			End:      end.Format(time.RFC3339),

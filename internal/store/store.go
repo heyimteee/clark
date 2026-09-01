@@ -94,6 +94,7 @@ type TodoStore interface {
 	AddTodo(jid, text string, priority int, dueAt *time.Time) (int64, error)
 	ListTodos(jid, status string, limit int) ([]Todo, error)
 	CompleteTodo(id int64) error
+	UpdateTodoStatus(id int64, status string) error
 	DeleteTodo(id int64) error
 	ClearTodos(jid string) error
 }

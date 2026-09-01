@@ -312,7 +312,8 @@
           '<section id="kanban" class="hidden">' +
             '<div class="kanban-board">' +
               '<div class="kanban-col" data-status="open"><h3>Open</h3><div class="kanban-list" id="kanban-open"></div></div>' +
-              '<div class="kanban-col" data-status="done"><h3>Done</h3><div class="kanban-list" id="kanban-done"></div></div>' +
+              '<div class="kanban-col" data-status="in_progress"><h3>In Progress</h3><div class="kanban-list" id="kanban-doing"></div></div>' +
+              '<div class="kanban-col" data-status="done"><h3>Closed</h3><div class="kanban-list" id="kanban-done"></div></div>' +
             '</div>' +
             '<div class="kanban-add">' +
               '<input id="kanban-input" class="input" placeholder="Add a todo to kanban…">' +
@@ -772,11 +773,14 @@
 
   function renderKanban(todos) {
     const openList = $("#kanban-open");
+    const doingList = $("#kanban-doing");
     const doneList = $("#kanban-done");
-    if (!openList || !doneList) return;
+    if (!openList || !doneList || !doingList) return;
     const open = todos.filter(function (t) { return t.status === "open"; });
+    const doing = todos.filter(function (t) { return t.status === "in_progress"; });
     const done = todos.filter(function (t) { return t.status === "done"; });
     openList.innerHTML = open.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No open todos</div>';
+    doingList.innerHTML = doing.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No tasks in progress</div>';
     doneList.innerHTML = done.map(function (t) { return kanbanCard(t); }).join("") || '<div class="todo-empty">No done todos</div>';
     attachKanbanHandlers();
   }
@@ -785,7 +789,8 @@
     const prio = t.priority || 0;
     const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
     const done = t.status === "done";
-    return '<div class="kanban-card' + (done ? " done" : "") + '" draggable="true" data-id="' + t.id + '">' +
+    const doing = t.status === "in_progress";
+    return '<div class="kanban-card' + (done ? " done" : doing ? " doing" : "") + '" draggable="true" data-id="' + t.id + '">' +
       '<div class="todo-text' + (done ? " done" : "") + '">' + esc(t.text) + "</div>" +
       '<div class="todo-meta">' +
         '<span class="todo-prio p' + Math.min(prio, 3) + '"></span>' +
@@ -812,11 +817,8 @@
         col.classList.remove("drag-over");
         const id = e.dataTransfer.getData("text/plain");
         const status = col.dataset.status;
-        if (status === "done") {
-          api("/web/api/todos/" + id + "/complete", { method: "POST" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (err) { toast(err.message); });
-        } else if (status === "open") {
-          toast("Only open → done via drag for now");
-        }
+        if (!id || !status) return;
+        api("/web/api/todos/" + id + "/status", { method: "POST", body: JSON.stringify({ status: status }) }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (err) { toast(err.message); });
       });
     });
     document.querySelectorAll(".kanban-card .todo-del").forEach(function (btn) {
