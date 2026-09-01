@@ -31,6 +31,9 @@ func NewActionServer(token string) *ActionServer {
 func (s *ActionServer) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /action", s.handleAction)
+	mux.HandleFunc("GET /calendars/events", handleCalendarList)
+	mux.HandleFunc("POST /calendars/events", handleCalendarCreate)
+	mux.HandleFunc("DELETE /calendars/events/", handleCalendarDelete)
 	return s.requireToken(mux)
 }
 

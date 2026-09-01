@@ -29,9 +29,70 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 	if to.IsZero() {
 		to = from.Add(7 * 24 * time.Hour)
 	}
-	_ = from
-	_ = to
-	json.NewEncoder(w).Encode(map[string]any{"events": []calendarEvent{}})
+	// AppleScript to list events in the window across all calendars
+	script := fmt.Sprintf(`
+		set fromDate to date "%s"
+		set toDate to date "%s"
+		set out to ""
+		tell application "Calendar"
+			repeat with c in calendars
+				repeat with e in (every event of c whose start date >= fromDate and start date <= toDate)
+					set out to out & (summary of e) & "||" & (start date of e as string) & "||" & (end date of e as string) & "||" & (location of e as string) & "||" & (description of e as string) & "\n"
+				end repeat
+			end repeat
+		end tell
+		return out
+	`, from.Format("Monday, January 2, 2006 at 3:04:05 PM"), to.Format("Monday, January 2, 2006 at 3:04:05 PM"))
+	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+	if err != nil {
+		// If Calendar TCC not granted, return empty rather than 500 to avoid LLM hiccup
+		json.NewEncoder(w).Encode(map[string]any{"events": []calendarEvent{}})
+		return
+	}
+	events := parseCalendarListOutput(string(out))
+	json.NewEncoder(w).Encode(map[string]any{"events": events})
+}
+
+func parseCalendarListOutput(out string) []calendarEvent {
+	var events []calendarEvent
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "||")
+		if len(parts) < 3 {
+			continue
+		}
+		title := strings.TrimSpace(parts[0])
+		startStr := strings.TrimSpace(parts[1])
+		endStr := strings.TrimSpace(parts[2])
+		loc := ""
+		notes := ""
+		if len(parts) > 3 {
+			loc = strings.TrimSpace(parts[3])
+		}
+		if len(parts) > 4 {
+			notes = strings.TrimSpace(parts[4])
+		}
+		// Try to parse the AppleScript date string, fallback to raw
+		start, _ := time.Parse("Monday, January 2, 2006 at 3:04:05 PM", startStr)
+		end, _ := time.Parse("Monday, January 2, 2006 at 3:04:05 PM", endStr)
+		if start.IsZero() {
+			start, _ = time.Parse(time.RFC3339, startStr)
+		}
+		if end.IsZero() {
+			end, _ = time.Parse(time.RFC3339, endStr)
+		}
+		events = append(events, calendarEvent{
+			ID:       title + start.Format("20060102T150405"),
+			Title:    title,
+			Start:    start.Format(time.RFC3339),
+			End:      end.Format(time.RFC3339),
+			Location: loc,
+			Notes:    notes,
+		})
+	}
+	return events
 }
 
 func handleCalendarCreate(w http.ResponseWriter, r *http.Request) {

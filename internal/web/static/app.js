@@ -360,6 +360,7 @@
     $("#btn-logout").addEventListener("click", logout);
     $("#mode-bento").addEventListener("click", function () { setMode("bento"); });
     $("#mode-chat").addEventListener("click", function () { setMode("chat"); });
+    $("#mode-kanban").addEventListener("click", function () { setMode("kanban"); });
   }
 
   function setMode(m) {

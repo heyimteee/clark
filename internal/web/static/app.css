@@ -305,6 +305,7 @@ label.field .lbl {
 .tile-vips { grid-column: span 12; }
 .tile-history { grid-column: span 12; }
 .tile-todos { grid-column: span 12; }
+.tile-calendar { grid-column: span 12; }
 
 /* config tile */
 
@@ -660,14 +661,28 @@ label.field .lbl {
   color: var(--ink);
 }
 
-.tile-todos .todo-form {
+.todo-form {
   display: flex;
   gap: 8px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
-.tile-todos .todo-form .input {
-  flex: 1;
+.todo-form .input {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.tile-calendar .todo-form .btn {
+  flex: none;
+  align-self: center;
+}
+
+.todo-empty {
+  color: var(--ink-faint);
+  text-align: center;
+  padding: 24px 0;
+  font-size: 13px;
 }
 
 .tile-todos .todo-list {
@@ -1161,7 +1176,7 @@ label.field .lbl {
 }
 
 @media (max-width: 1080px) {
-  .tile-config, .tile-voice, .tile-access { grid-column: span 12; }
+  .tile-config, .tile-voice, .tile-access, .tile-calendar { grid-column: span 12; }
 }
 
 /* ---------- narrow viewports ---------- */

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -25,7 +26,7 @@ func NewMacosClient(baseURL, token string) *MacosClient {
 
 func (c *MacosClient) List(ctx context.Context, from, to time.Time) ([]Event, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("%s/calendars/events?from=%s&to=%s", c.baseURL, from.Format(time.RFC3339), to.Format(time.RFC3339)), nil)
+		fmt.Sprintf("%s/calendars/events?from=%s&to=%s", c.baseURL, url.QueryEscape(from.Format(time.RFC3339)), url.QueryEscape(to.Format(time.RFC3339))), nil)
 	if err != nil {
 		return nil, err
 	}
