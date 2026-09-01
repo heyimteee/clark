@@ -360,6 +360,7 @@ func TestServiceSetContext(t *testing.T) {
 
 func TestServiceReply(t *testing.T) {
 	s, st, fake := newService(t)
+	_ = s.SetStatus(false)
 	jid := "6281234567890@s.whatsapp.net"
 
 	if err := s.AddVIP("6281234567890, Test, Friend"); err != nil {
@@ -392,6 +393,7 @@ func TestServiceReply(t *testing.T) {
 
 func TestServiceReplyRunsToolCall(t *testing.T) {
 	s, _, fake := newService(t)
+	_ = s.SetStatus(false)
 	jid := "6281234567890@s.whatsapp.net"
 
 	if err := s.AddVIP("6281234567890, Test, Friend"); err != nil {
@@ -638,6 +640,7 @@ func TestServiceChatReplyNotNudged(t *testing.T) {
 
 func TestServicePostToolConfirmationNotNudged(t *testing.T) {
 	s, _, fake := newService(t)
+	_ = s.SetStatus(false)
 	jid := "6281234567890@s.whatsapp.net"
 	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
 		t.Fatalf("AddVIP: %v", err)
@@ -790,6 +793,7 @@ func TestServiceNudgeExhaustionHonestMessage(t *testing.T) {
 
 func TestServiceVIPClaimNotNudged(t *testing.T) {
 	s, _, fake := newService(t)
+	_ = s.SetStatus(false)
 	jid := "6281234567890@s.whatsapp.net"
 	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
 		t.Fatalf("AddVIP: %v", err)

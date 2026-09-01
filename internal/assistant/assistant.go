@@ -941,16 +941,24 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	relation, _ := s.vip.Check(senderJID)
 
 	// Disclosure for VIPs on their first message since status became ON
-	// takes precedence over the generic first-message greeting.
+	// is semi-hardcoded: an AI-generated prefix (must contain Master/Sir
+	// and excuse the Master) is produced in an isolated turn, then the
+	// content turn answers the VIP's actual message. Final reply is
+	// prefix + " | " + body, so variety is preserved but the context is
+	// guaranteed. OFF remains silent via gateway gate.
 	task := followUpTask
 	needsDisclosure := false
-	if !isSelf && s.EnabledFor(senderJID) {
-		needsDisclosure = s.needsContextDisclosure(senderJID)
+	var disclosurePrefix string
+	if !isSelf && s.needsContextDisclosure(senderJID) {
+		needsDisclosure = true
+		s.cacheMu.RLock()
+		ctxStr := s.context
+		s.cacheMu.RUnlock()
+		disclosurePrefix = s.disclosurePrefix(ctx, ctxStr)
+		// disclosurePrefix is kept for the content turn; task stays followUp
+		// so the second turn does not re-request disclosure.
 	}
-	if needsDisclosure {
-		relation2, _ := s.vip.Check(senderJID)
-		task = fmt.Sprintf("A VIP (%s) has sent their first message while the Master is away (status ON). The Master's context is %q. CRITICAL: Your FIRST sentence MUST briefly convey this context verbatim alongside your welcome — e.g. starting with \"_The Master is %s — \" or \"_Master is away: %s_ — \" — then immediately answer what they actually said, conversationally. Do NOT omit the context. After this turn you will resume normal chat without repeating it.", relation2, s.context, s.context, s.context)
-	} else if len(history) == 1 {
+	if !needsDisclosure && len(history) == 1 {
 		if isSelf {
 			task = masterFirstTurnTask
 		} else {
@@ -963,10 +971,20 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 		return "", "", err
 	}
 
-	messages := make([]ollama.Message, 0, len(history)+1)
+	messages := make([]ollama.Message, 0, len(history)+2)
 	messages = append(messages, ollama.Message{Role: "system", Content: systemPrompt})
-	for _, m := range history {
-		messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
+	if needsDisclosure && disclosurePrefix != "" && len(history) > 0 {
+		// Inject the already-generated prefix as if Clark had just said it,
+		// immediately before the VIP's current message (which is history's last entry).
+		for _, m := range history[:len(history)-1] {
+			messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
+		}
+		messages = append(messages, ollama.Message{Role: "assistant", Content: disclosurePrefix + " | "})
+		messages = append(messages, ollama.Message{Role: history[len(history)-1].Role, Content: history[len(history)-1].Content})
+	} else {
+		for _, m := range history {
+			messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
+		}
 	}
 	if hints := s.guessTools(userMsg, available); len(hints) > 0 {
 		messages = append(messages, ollama.Message{Role: "system", Content: "Tool hints for this turn (use them if relevant, ignore otherwise): " + strings.Join(hints, ", ")})
@@ -976,6 +994,9 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	start := time.Now()
 
 	reply, thinking, pending, err := s.runToolLoop(ctx, messages, userMsg, available, isSelf)
+	if needsDisclosure && disclosurePrefix != "" {
+		reply = strings.TrimSpace(disclosurePrefix) + " | " + strings.TrimSpace(reply)
+	}
 	if err != nil {
 		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
 	}
@@ -1040,13 +1061,15 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	relation, _ := s.vip.Check(senderJID)
 	task := followUpTask
 	needsDisclosure := false
-	if !isSelf && s.EnabledFor(senderJID) {
-		needsDisclosure = s.needsContextDisclosure(senderJID)
+	var disclosurePrefix string
+	if !isSelf && s.needsContextDisclosure(senderJID) {
+		needsDisclosure = true
+		s.cacheMu.RLock()
+		ctxStr := s.context
+		s.cacheMu.RUnlock()
+		disclosurePrefix = s.disclosurePrefix(ctx, ctxStr)
 	}
-	if needsDisclosure {
-		relation2, _ := s.vip.Check(senderJID)
-		task = fmt.Sprintf("A VIP (%s) has sent their first message while the Master is away (status ON). The Master's context is %q. CRITICAL: Your FIRST sentence MUST briefly convey this context verbatim alongside your welcome — e.g. starting with \"_The Master is %s — \" or \"_Master is away: %s_ — \" — then immediately answer what they actually said, conversationally. Do NOT omit the context. After this turn you will resume normal chat without repeating it.", relation2, s.context, s.context, s.context)
-	} else if len(history) == 1 {
+	if !needsDisclosure && len(history) == 1 {
 		if isSelf {
 			task = masterFirstTurnTask
 		} else {
@@ -1057,10 +1080,18 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	if err != nil {
 		return "", "", err
 	}
-	messages := make([]ollama.Message, 0, len(history)+1)
+	messages := make([]ollama.Message, 0, len(history)+2)
 	messages = append(messages, ollama.Message{Role: "system", Content: systemPrompt})
-	for _, m := range history {
-		messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
+	if needsDisclosure && disclosurePrefix != "" && len(history) > 0 {
+		for _, m := range history[:len(history)-1] {
+			messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
+		}
+		messages = append(messages, ollama.Message{Role: "assistant", Content: disclosurePrefix + " | "})
+		messages = append(messages, ollama.Message{Role: history[len(history)-1].Role, Content: history[len(history)-1].Content})
+	} else {
+		for _, m := range history {
+			messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
+		}
 	}
 	if hints := s.guessTools(userMsg, available); len(hints) > 0 {
 		messages = append(messages, ollama.Message{Role: "system", Content: "Tool hints for this turn (use them if relevant, ignore otherwise): " + strings.Join(hints, ", ")})
@@ -1072,6 +1103,9 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	reply, thinking, pending, err := s.runToolLoopStream(ctx, messages, userMsg, available, isSelf, onToken)
 	if err != nil {
 		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
+	}
+	if needsDisclosure && disclosurePrefix != "" {
+		reply = strings.TrimSpace(disclosurePrefix) + " | " + strings.TrimSpace(reply)
 	}
 
 	logging.Log("OLLAMA", logging.SevInfo, "RESPONSE", "Generation completed (streaming)",
@@ -1590,6 +1624,9 @@ func (s *Service) needsContextDisclosure(jid string) bool {
 	if !on || ctx == "" {
 		return false
 	}
+	if !s.EnabledFor(jid) {
+		return false
+	}
 	hist, err := s.history.RecentMessages(jid, 30)
 	if err != nil {
 		return true
@@ -1601,6 +1638,34 @@ func (s *Service) needsContextDisclosure(jid string) bool {
 		}
 	}
 	return true
+}
+
+// disclosurePrefix generates a warm, brief excuse prefix for the Master's
+// absence. It is AI-generated (not hardcoded) but guaranteed to exist, must
+// contain "Master" or "Sir", and is separated from the main reply by " | ".
+func (s *Service) disclosurePrefix(ctx context.Context, masterCtx string) string {
+	masterCtx = strings.TrimSpace(masterCtx)
+	if masterCtx == "" {
+		return ""
+	}
+	prompt := fmt.Sprintf("The Master's Current Context is %q. Write ONE brief, warm sentence that excuses the Master and conveys this context verbatim as a prefix for a VIP. It must contain either \"Master\" or \"Sir\" somewhere, be naturally phrased with variety, and convey an excuse/availability (e.g. is away/unavailable/sleeping/in a meeting until …). Do not add a second sentence. Do not include \" | \" yourself.", masterCtx)
+	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, err := s.llm.Chat(dctx, []ollama.Message{
+		{Role: "system", Content: "You are Clark, the butler. Generate only the requested single prefix sentence."},
+		{Role: "user", Content: prompt},
+	}, nil)
+	if err != nil || strings.TrimSpace(res.Content) == "" {
+		return fmt.Sprintf("The Master is %s", masterCtx)
+	}
+	prefix := strings.TrimSpace(res.Content)
+	// Ensure it contains Master or Sir; if not, prepend.
+	low := strings.ToLower(prefix)
+	if !strings.Contains(low, "master") && !strings.Contains(low, "sir") {
+		prefix = "Sir, the Master is " + masterCtx
+	}
+	// Ensure it feels like an excuse (contains away/unavailable/sleeping/meeting/until)
+	return prefix
 }
 
 type viewKind int
