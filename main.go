@@ -8,6 +8,10 @@ import (
 	"github.com/heyimteee/clark/internal/logging"
 )
 
+// version is stamped at build time (-X main.version=...) by goreleaser and
+// the Docker build; unstamped builds report "dev".
+var version = "dev"
+
 func main() {
 	commands := map[string]struct{}{
 		"init":    {},
@@ -53,7 +57,7 @@ func main() {
 		logging.Fatalf("USAGE", "usage: clark %v [args]", os.Args[1])
 	}
 
-	a, err := app.New()
+	a, err := app.New(version)
 	if err != nil {
 		logging.Fatalf("ASSIST", "fail to create assistant: %v", err)
 	}

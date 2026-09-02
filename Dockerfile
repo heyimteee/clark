@@ -10,7 +10,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -linkmode external -extldflags -static" -o /out/clark .
+ARG CLARK_VERSION=dev
+RUN CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -linkmode external -extldflags -static -X main.version=${CLARK_VERSION}" -o /out/clark .
 
 # ---- piper stage ----
 # TTS fallback voice model (en_US-ryan-high, ~120 MB, unmistakably male) + its

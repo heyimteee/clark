@@ -1,6 +1,9 @@
 services:
   clark:
-    build: .
+    build:
+      context: .
+      args:
+        CLARK_VERSION: ${CLARK_VERSION:-dev}
     image: clark:latest
     container_name: clark
     restart: unless-stopped
