@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/heyimteee/clark/internal/alert"
 	"github.com/heyimteee/clark/internal/assistant"
+	"github.com/heyimteee/clark/internal/calendar"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/scheduler"
 	"github.com/heyimteee/clark/internal/store"
@@ -48,6 +49,7 @@ type Options struct {
 	SessionMaxLife time.Duration
 	Alerts         *alert.Service
 	Scheduler      *scheduler.Scheduler
+	Calendar       calendar.Client
 }
 
 // Server owns the HTTP handlers, sessions, and the voice engine.
@@ -64,6 +66,7 @@ type Server struct {
 	listen       string
 	alerts       *alert.Service
 	sched        *scheduler.Scheduler
+	cal          calendar.Client
 
 	sessions *sessionManager
 	logins   *loginThrottle
@@ -101,6 +104,7 @@ func New(opts Options) *Server {
 		listen:        opts.ListenAddr,
 		alerts:        opts.Alerts,
 		sched:         opts.Scheduler,
+		cal:           opts.Calendar,
 		sessions:      newSessionManager(ttl, maxLife),
 		logins:        newLoginThrottle(),
 		hub:           newChatHub(),
@@ -138,6 +142,8 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("GET /web/api/schedules", s.requireAuth(s.handleSchedules))
 	s.mux.HandleFunc("POST /web/api/schedules", s.requireAuth(s.handleSchedules))
 	s.mux.HandleFunc("/web/api/schedules/", s.requireAuth(s.handleScheduleAction))
+	s.mux.HandleFunc("GET /web/api/calendar", s.requireAuth(s.handleCalendarEvents))
+	s.mux.HandleFunc("POST /web/api/calendar/events", s.requireAuth(s.handleCalendarAdd))
 	s.mux.HandleFunc("GET /web/api/voice", s.requireAuth(s.handleVoiceStatus))
 
 	s.mux.HandleFunc("POST /web/api/status", s.requireAuth(s.handleSetStatus))

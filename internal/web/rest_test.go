@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/heyimteee/clark/internal/calendar"
 	"github.com/heyimteee/clark/internal/scheduler"
 	"github.com/heyimteee/clark/internal/voice"
 )
@@ -481,4 +482,91 @@ func TestProtocolsRequireAuth(t *testing.T) {
 
 func itoa(n int) string {
 	return strconv.Itoa(n)
+}
+
+type fakeCalendar struct {
+	listErr   error
+	createErr error
+	events    []calendar.Event
+	created   calendar.Event
+}
+
+func (f *fakeCalendar) List(_ context.Context, _, _ time.Time) ([]calendar.Event, error) {
+	return f.events, f.listErr
+}
+func (f *fakeCalendar) Create(_ context.Context, e calendar.Event) (string, error) {
+	f.created = e
+	return "evt-1", f.createErr
+}
+func (f *fakeCalendar) Delete(_ context.Context, _ string) error { return nil }
+
+func newCalendarTestServer(t *testing.T, fc *fakeCalendar) *httptest.Server {
+	t.Helper()
+	srv := New(Options{
+		ListenAddr: ":0",
+		WebToken:   testWebToken,
+		Store:      testStore(t),
+		STTModel:   "whisper-turbo",
+		TTSEngine:  "kokoro-remote",
+		Voice:      &voice.Engine{},
+		Calendar:   fc,
+	})
+	return newServerFor(t, srv)
+}
+
+func TestCalendarTileEvents(t *testing.T) {
+	start := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+	fc := &fakeCalendar{events: []calendar.Event{{
+		ID: "e1", Title: "Standup", Start: start, End: end, Location: "F3.9A",
+	}}}
+	ts := newCalendarTestServer(t, fc)
+	tok := login(t, ts)
+
+	code, out := getJSON(t, ts, "/web/api/calendar", tok)
+	if code != 200 {
+		t.Fatalf("calendar = %d (%v), want 200", code, out)
+	}
+	events, _ := out["events"].([]any)
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(events))
+	}
+	first := events[0].(map[string]any)
+	if first["title"] != "Standup" || first["location"] != "F3.9A" {
+		t.Fatalf("event payload wrong: %v", first)
+	}
+}
+
+func TestCalendarTileAdd(t *testing.T) {
+	fc := &fakeCalendar{}
+	ts := newCalendarTestServer(t, fc)
+	tok := login(t, ts)
+
+	code, out := postJSON(t, ts, "/web/api/calendar/events", tok, map[string]any{
+		"title": "Lunch", "start": "2026-09-03T12:00:00+07:00", "end": "2026-09-03T13:00:00+07:00",
+	})
+	if code != 201 || out["id"] != "evt-1" {
+		t.Fatalf("add = %d (%v)", code, out)
+	}
+	if fc.created.Title != "Lunch" || fc.created.End.Before(fc.created.Start) {
+		t.Fatalf("created event wrong: %+v", fc.created)
+	}
+
+	code, _ = postJSON(t, ts, "/web/api/calendar/events", tok, map[string]any{
+		"title": "Backwards", "start": "2026-09-03T13:00:00+07:00", "end": "2026-09-03T12:00:00+07:00",
+	})
+	if code != 400 {
+		t.Fatalf("end<=start = %d, want 400", code)
+	}
+}
+
+func TestCalendarTileUnavailable(t *testing.T) {
+	fc := &fakeCalendar{listErr: errors.New("bridge down")}
+	ts := newCalendarTestServer(t, fc)
+	tok := login(t, ts)
+
+	code, out := getJSON(t, ts, "/web/api/calendar", tok)
+	if code != http.StatusBadGateway {
+		t.Fatalf("list error = %d (%v), want 502", code, out)
+	}
 }
