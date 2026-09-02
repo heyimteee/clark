@@ -2,11 +2,14 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/heyimteee/clark/internal/calendar"
 	"github.com/heyimteee/clark/internal/scheduler"
