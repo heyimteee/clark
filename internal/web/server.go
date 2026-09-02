@@ -50,6 +50,7 @@ type Options struct {
 	Alerts         *alert.Service
 	Scheduler      *scheduler.Scheduler
 	Calendar       calendar.Client
+	Version        string
 }
 
 // Server owns the HTTP handlers, sessions, and the voice engine.
@@ -67,6 +68,7 @@ type Server struct {
 	alerts       *alert.Service
 	sched        *scheduler.Scheduler
 	cal          calendar.Client
+	version      string
 
 	sessions *sessionManager
 	logins   *loginThrottle
@@ -105,6 +107,7 @@ func New(opts Options) *Server {
 		alerts:        opts.Alerts,
 		sched:         opts.Scheduler,
 		cal:           opts.Calendar,
+		version:       opts.Version,
 		sessions:      newSessionManager(ttl, maxLife),
 		logins:        newLoginThrottle(),
 		hub:           newChatHub(),

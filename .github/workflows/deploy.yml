@@ -22,6 +22,7 @@ jobs:
       - name: Rebuild and restart
         run: |
           cd /home/tristan/clark
+          export CLARK_VERSION=$(git describe --tags --always)
           ok=0
           for i in 1 2 3; do
             if docker compose up -d --build; then ok=1; break; fi

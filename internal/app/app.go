@@ -36,14 +36,17 @@ import (
 
 // App is the composition root for a clark process.
 type App struct {
-	cfg   *config.Config
-	st    *store.Store
-	ast   *assistant.Service
-	sched *scheduler.Scheduler
+	cfg     *config.Config
+	st      *store.Store
+	ast     *assistant.Service
+	sched   *scheduler.Scheduler
+	version string
 }
 
 // New loads config, opens the store, and builds the assistant.
-func New() (*App, error) {
+// New builds the application root. version is the build-stamped identifier
+// surfaced in the web console header and CLI output.
+func New(version string) (*App, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
@@ -92,7 +95,7 @@ func New() (*App, error) {
 		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Calendar enabled", "provider", "mac-bridge")
 	}
 
-	return &App{cfg: cfg, st: st, ast: ast, sched: sched}, nil
+	return &App{cfg: cfg, st: st, ast: ast, sched: sched, version: version}, nil
 }
 
 // registerCurrentTimeTool gives the model a clock: without it, "now" is a
@@ -763,6 +766,7 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *vo
 				Alerts:         alerts,
 				Scheduler:      a.sched,
 				Calendar:       calClient,
+				Version:        a.version,
 			})
 		}()
 	}

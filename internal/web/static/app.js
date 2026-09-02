@@ -97,6 +97,11 @@
     // Deliberately does NOT touch the chat transcript — server state pushes
     // fire on any setting change (any tab/device), and reseeding here would
     // wipe a live conversation. The greeting is seeded once at boot.
+    const tag = $("#env-tag");
+    if (tag && state && state.version) {
+      const ver = String(state.version);
+      tag.textContent = (ver.charAt(0) === "v" ? ver : "v" + ver) + " console";
+    }
     captureState();
     renderVoiceMeta();
     renderVips();

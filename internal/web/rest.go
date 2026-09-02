@@ -34,6 +34,7 @@ func (s *Server) state() map[string]any {
 		"ttsVoice":     s.ttsVoice(),
 		"vips":         s.vipEntries(),
 		"tools":        s.toolList(),
+		"version":      s.version,
 	}
 }
 
