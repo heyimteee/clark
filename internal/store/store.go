@@ -226,6 +226,15 @@ func (s *Store) migrate() error {
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`},
+		{"schedules", `CREATE TABLE IF NOT EXISTS schedules (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			task TEXT NOT NULL,
+			spec TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			last_run_at DATETIME,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`},
 		{"chat_history_ts_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp ON chat_history(timestamp)`},
 		{"chat_history_jid_ts_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_jid_timestamp ON chat_history(jid, timestamp)`},
 	}
