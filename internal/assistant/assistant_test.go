@@ -445,6 +445,9 @@ func TestServiceVIPToolGrant(t *testing.T) {
 	s.Tools().RegisterFunc("web_search", "search", map[string]any{"type": "object"}, func(_ context.Context, _ map[string]any) (string, error) {
 		return "results", nil
 	})
+	s.Tools().RegisterFunc("current_time", "local time", map[string]any{"type": "object"}, func(_ context.Context, _ map[string]any) (string, error) {
+		return "now", nil
+	})
 	s.Tools().RegisterFunc("secret_tool", "master only", map[string]any{"type": "object"}, func(_ context.Context, _ map[string]any) (string, error) {
 		return "secret", nil
 	})
@@ -456,7 +459,7 @@ func TestServiceVIPToolGrant(t *testing.T) {
 		if tt.Function.Name == "secret_tool" {
 			t.Fatal("VIP saw master-only tool in the request")
 		}
-		if tt.Function.Name != "web_search" && tt.Function.Name != "view_history" && tt.Function.Name != "relay_to_master" {
+		if tt.Function.Name != "web_search" && tt.Function.Name != "view_history" && tt.Function.Name != "relay_to_master" && tt.Function.Name != "current_time" {
 			t.Errorf("unexpected tool advertised to VIP: %s", tt.Function.Name)
 		}
 	}

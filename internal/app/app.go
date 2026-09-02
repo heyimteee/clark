@@ -59,6 +59,8 @@ func New() (*App, error) {
 		return nil, err
 	}
 
+	registerCurrentTimeTool(ast.Tools())
+
 	if cfg.TavilyAPIKey != "" {
 		registerWebSearchTool(ast.Tools(), websearch.New(cfg.TavilyAPIKey))
 		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Web search enabled", "provider", "tavily")
@@ -72,6 +74,31 @@ func New() (*App, error) {
 	}
 
 	return &App{cfg: cfg, st: st, ast: ast}, nil
+}
+
+// registerCurrentTimeTool gives the model a clock: without it, "now" is a
+// guess — calendar windows start at the wrong minute and RFC3339 args drift
+// to UTC instead of the server's local offset.
+func registerCurrentTimeTool(reg *tools.Registry) {
+	reg.RegisterFunc(
+		"current_time",
+		"Get the current local date and time. Triggered by 'what time is it', 'what's the date', or before building any time window (calendar from/to, schedules, reminders). Always use the reported offset when constructing RFC3339 times.",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			now := time.Now()
+			zone, offset := now.Zone()
+			return fmt.Sprintf(
+				"Now: %s\nRFC3339: %s\nEpoch: %d\nWeekday: %s\nTimezone: %s (UTC%+.2d:%.2d)",
+				now.Format("2006-01-02 15:04:05"),
+				now.Format(time.RFC3339),
+				now.Unix(),
+				now.Weekday(),
+				zone,
+				offset/3600,
+				(offset%3600)/60,
+			), nil
+		},
+	)
 }
 
 func registerWebSearchTool(reg *tools.Registry, client *websearch.Client) {
