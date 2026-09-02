@@ -451,6 +451,8 @@ label.field .lbl {
 
 #access-list .a-name { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
 
+#access-list .a-row-empty { color: var(--ink-faint); justify-content: center; }
+
 /* vips tile */
 
 .vip-tools {
@@ -609,7 +611,7 @@ label.field .lbl {
 
 #hist-meta .spacer { flex: 1; }
 
-#hist-vip { width: 220px; }
+#hist-vip { flex: 0 1 220px; min-width: 130px; width: auto; }
 
 .hist-list { max-height: 420px; overflow-y: auto; }
 
@@ -665,11 +667,10 @@ label.field .lbl {
 
 .tile-todos .todo-count {
   font-family: var(--sans);
-  font-size: 28px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
   line-height: 1;
-  letter-spacing: -0.02em;
-  color: var(--ink);
+  color: var(--ink-soft);
 }
 
 .todo-form {
@@ -1027,19 +1028,29 @@ label.field .lbl {
 }
 
 .kanban-col h3 {
-  font-size: 14px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
   margin-bottom: 16px;
   padding-bottom: 8px;
-  border-bottom: 2px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 
-.kanban-col[data-status="open"] h3 { border-color: var(--warn-ink); }
-.kanban-col[data-status="in_progress"] h3 { border-color: var(--info-ink); }
-.kanban-col[data-status="closed"] h3 { border-color: var(--ok-ink); opacity: 0.7; }
+.kanban-col h3::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: var(--line-strong);
+  vertical-align: 1px;
+}
+
+.kanban-col[data-status="open"] h3::before { background: var(--warn-ink); }
+.kanban-col[data-status="in_progress"] h3::before { background: var(--info-ink); }
+.kanban-col[data-status="closed"] h3::before { background: var(--ok-ink); opacity: 0.7; }
 
 .kanban-list {
   display: flex;
@@ -1056,6 +1067,20 @@ label.field .lbl {
   font-size: 13px;
   cursor: grab;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.kanban-card:hover {
+  border-color: var(--line-strong);
+}
+
+.kanban-card:focus-visible {
+  border-color: var(--accent);
+}
+
+.kanban-desc {
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-top: 4px;
 }
 
 .kanban-card:active {
@@ -1246,15 +1271,15 @@ label.field .lbl {
   height: 6px;
   border-radius: 50%;
   background: var(--ink-faint);
-  animation: bounce 1.2s infinite ease-in-out;
+  animation: rise 1.1s infinite cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .typing-dots span:nth-child(2) { animation-delay: 0.15s; }
 .typing-dots span:nth-child(3) { animation-delay: 0.3s; }
 
-@keyframes bounce {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.3; }
-  30% { transform: translateY(-6px); opacity: 1; }
+@keyframes rise {
+  0%, 100% { transform: translateY(0); opacity: 0.35; }
+  40% { transform: translateY(-3px); opacity: 1; }
 }
 
 /* Collapsible thinking/reasoning block */
@@ -1476,6 +1501,12 @@ label.field .lbl {
 /* ---------- touch targets ---------- */
 
 @media (pointer: coarse) {
+  .todo-del {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 18px;
+  }
+
   /* iOS-scale toggle: 46x28 hit box (knob travel = 46 - 22 - 2*3 = 18px) */
   .switch { width: 46px; height: 28px; }
   .switch .knob { width: 22px; height: 22px; }

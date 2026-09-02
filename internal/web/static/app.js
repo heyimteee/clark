@@ -297,7 +297,7 @@
             "</div>" +
           "</section>" +
           '<section id="chat" class="hidden">' +
-            '<div id="chat-scroll"><div id="chat-list"></div></div>' +
+            '<div id="chat-scroll"><div id="chat-list" role="log" aria-live="polite"></div></div>' +
             '<div id="quick-msgs">' +
               '<button class="chip" data-msg="What is your status?">status</button>' +
               '<button class="chip" data-msg="Turn on thinking mode">thinking</button>' +
@@ -506,17 +506,8 @@
       const jid = btn.dataset.vip;
       const act = btn.dataset.vipAction;
       if (act === "del") {
-        // Two-step guard: first click arms ("sure?"), second click deletes.
-        // Any re-render disarms — fail-safe by default.
-        if (!btn.classList.contains("armed")) {
-          btn.classList.add("armed");
-          btn.textContent = "sure?";
-          setTimeout(function () {
-            btn.classList.remove("armed");
-            btn.textContent = "delete";
-          }, 3000);
-          return;
-        }
+        // Two-step guard (shared armDelete): re-renders disarm — fail-safe.
+        if (!armDelete(btn)) return;
         mutate("/web/api/vip/delete", { jid: jid }, "deleted " + jid);
       } else if (act === "on") {
         mutate("/web/api/vip/status", { jid: jid, enabled: true });
@@ -631,7 +622,7 @@
     const list = $("#access-list");
 
     if (!vip) {
-      list.innerHTML = '<div class="a-row" style="color:var(--ink-faint)">pick a vip</div>';
+      list.innerHTML = '<div class="a-row a-row-empty">pick a vip</div>';
       return;
     }
     const grants = vip.access || [];
@@ -641,7 +632,7 @@
       return '<div class="a-row"><span class="a-name">' + esc(name) + "</span>" +
         '<label class="switch"><input type="checkbox" data-tool="' + esc(name) + '" data-jid="' + esc(jid) + '"' + (on ? " checked" : "") + ">" +
         '<span class="track"></span><span class="knob"></span></label></div>';
-    }).join("") || '<div class="a-row" style="color:var(--ink-faint)">no tools</div>';
+    }).join("") || '<div class="a-row a-row-empty">no tools</div>';
 
     list.querySelectorAll("input[data-tool]").forEach(function (cb) {
       cb.addEventListener("change", function () {
@@ -759,6 +750,7 @@
     });
     list.querySelectorAll(".todo-del").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        if (!armDelete(btn)) return;
         const id = btn.dataset.id;
         api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (e) { toast(e.message); });
       });
@@ -814,8 +806,9 @@
     const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
     const closed = t.status === "closed";
     const doing = t.status === "in_progress";
-    const desc = t.description ? '<div class="todo-desc" style="font-size:11px;color:var(--ink-faint);margin-top:4px">' + esc(t.description) + '</div>' : "";
-    return '<div class="kanban-card' + (closed ? " closed" : doing ? " doing" : "") + '" draggable="true" data-id="' + t.id + '">' +
+    const desc = t.description ? '<div class="todo-desc kanban-desc">' + esc(t.description) + '</div>' : "";
+    const statusLabel = closed ? "closed" : doing ? "in progress" : "open";
+    return '<div class="kanban-card' + (closed ? " closed" : doing ? " doing" : "") + '" draggable="true" tabindex="0" data-id="' + t.id + '" aria-label="' + esc(t.text) + ", status " + statusLabel + ". Press left or right arrow to move." + '">' +
       '<div class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</div>" + desc +
       '<div class="todo-meta">' +
         '<span class="todo-prio p' + Math.min(prio, 3) + '"></span>' +
@@ -827,12 +820,26 @@
   }
 
   function attachKanbanHandlers() {
+    const statusOrder = ["open", "in_progress", "closed"];
     document.querySelectorAll(".kanban-card").forEach(function (card) {
       card.addEventListener("dragstart", function (e) {
         e.dataTransfer.setData("text/plain", card.dataset.id);
         card.classList.add("dragging");
       });
       card.addEventListener("dragend", function () { card.classList.remove("dragging"); });
+      // Keyboard path: left/right arrows walk the card through the columns.
+      card.addEventListener("keydown", function (e) {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        const col = card.closest(".kanban-col");
+        if (!col) return;
+        const idx = statusOrder.indexOf(col.dataset.status);
+        const next = statusOrder[idx + (e.key === "ArrowRight" ? 1 : -1)];
+        if (!next || next === col.dataset.status) return;
+        e.preventDefault();
+        api("/web/api/todos/" + card.dataset.id + "/status", { method: "POST", body: JSON.stringify({ status: next }) })
+          .then(function () { refreshTodos(); refreshKanban(); })
+          .catch(function (err) { toast(err.message); });
+      });
     });
     document.querySelectorAll(".kanban-col").forEach(function (col) {
       col.addEventListener("dragover", function (e) { e.preventDefault(); col.classList.add("drag-over"); });
@@ -849,6 +856,7 @@
     document.querySelectorAll(".kanban-card .todo-del").forEach(function (btn) {
       btn.addEventListener("click", function (e) {
         e.stopPropagation();
+        if (!armDelete(btn)) return;
         const id = btn.dataset.id || btn.closest(".kanban-card").dataset.id;
         api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (err) { toast(err.message); });
       });
