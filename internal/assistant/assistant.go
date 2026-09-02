@@ -51,7 +51,7 @@ const defaultHistoryLimit = 10
 // grant. web_search covers research; view_history lets a VIP recall their own
 // conversation (and lets clark honour the history-first rule mid-chat);
 // relay_to_master lets a VIP ask Clark to pass a message to the Master.
-var defaultVIPGrants = []string{"web_search", "view_history", "relay_to_master"}
+var defaultVIPGrants = []string{"web_search", "view_history", "relay_to_master", "current_time"}
 
 // iterationLimitMessage is returned when a genuine tool chain exhausts its
 // iteration budget while tools were still running.
