@@ -97,7 +97,7 @@
     // Deliberately does NOT touch the chat transcript — server state pushes
     // fire on any setting change (any tab/device), and reseeding here would
     // wipe a live conversation. The greeting is seeded once at boot.
-    const tag = $("#env-tag");
+    const tag = $("#env-tag") || $(".env-tag");
     if (tag && state && state.version) {
       const ver = String(state.version);
       tag.textContent = (ver.charAt(0) === "v" ? ver : "v" + ver) + " console";
@@ -193,7 +193,7 @@
     const shell = el(
       '<div id="shell" class="hidden">' +
         '<header id="header"><div class="container">' +
-          '<div class="brand"><span class="wordmark">clark</span><span class="env-tag">v4 console</span></div>' +
+          '<div class="brand"><span class="wordmark">clark</span><span class="env-tag" id="env-tag">clark console</span></div>' +
           '<div class="spacer"></div>' +
           '<div id="live" title="live link"><span class="dot"></span>live</div>' +
           '<div class="mode-switch">' +
