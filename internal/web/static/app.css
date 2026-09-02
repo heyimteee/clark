@@ -798,6 +798,90 @@ label.field .lbl {
   padding: var(--space-5) 0;
 }
 
+/* ---------- protocols mode ---------- */
+
+#protocols {
+  padding: var(--space-5) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.section-title {
+  margin: var(--space-2) 0 0;
+}
+
+.protocol-list,
+.schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.proto-card,
+.sched-row {
+  padding: var(--space-4);
+}
+
+.proto-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.proto-title {
+  font-weight: 600;
+  margin-right: var(--space-2);
+}
+
+.proto-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.proto-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.proto-slug {
+  font-family: var(--mono, monospace);
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: var(--space-1) 0;
+}
+
+.proto-body {
+  width: 100%;
+  margin-top: var(--space-2);
+  font-family: var(--mono, monospace);
+  font-size: 0.85rem;
+}
+
+.proto-card .proto-save {
+  margin-top: var(--space-2);
+}
+
+.sched-task {
+  white-space: pre-wrap;
+  font-size: 0.88rem;
+  color: var(--text-soft, inherit);
+}
+
+.proto-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.proto-form h3 {
+  margin: 0;
+}
+
+
 .kanban-board {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));

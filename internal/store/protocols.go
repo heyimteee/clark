@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -134,3 +135,42 @@ func scanProtocol(scan func(dest ...any) error) (Protocol, error) {
 // maxProtocolBody bounds a protocol document so a runaway save can never
 // blow up the prompt context when loaded.
 const maxProtocolBody = 8 << 10
+
+// SlugifyProtocolTitle turns a protocol title into a lookup slug: lowercase
+// alphanumerics with single dashes, trimmed, max 64 chars.
+func SlugifyProtocolTitle(s string) string {
+	var b strings.Builder
+	dash := true
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			dash = false
+			continue
+		}
+		if !dash {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 64 {
+		out = strings.Trim(out[:64], "-")
+	}
+	return out
+}
+
+// GetProtocolByID fetches a protocol by primary key (web console edits).
+func (s *Store) GetProtocolByID(id int64) (Protocol, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	row := s.db.QueryRowContext(ctx, `SELECT id, slug, title, body, origin, version, use_count, last_used_at, created_at, updated_at
+		FROM protocols WHERE id = ?`, id)
+	p, err := scanProtocol(row.Scan)
+	if err == sql.ErrNoRows {
+		return Protocol{}, fmt.Errorf("protocol id %d not found", id)
+	}
+	if err != nil {
+		return Protocol{}, fmt.Errorf("fail to get protocol: %w", err)
+	}
+	return p, nil
+}

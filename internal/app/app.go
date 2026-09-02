@@ -356,7 +356,7 @@ func registerProtocolsTools(ast *assistant.Service, st *store.Store) {
 			if title == "" || body == "" {
 				return "", fmt.Errorf("title and body are required")
 			}
-			slug := slugifyProtocolTitle(title)
+			slug := store.SlugifyProtocolTitle(title)
 			if len(slug) < 2 {
 				return "", fmt.Errorf("title must contain at least two letters or digits")
 			}
@@ -516,29 +516,6 @@ func registerScheduleTools(ast *assistant.Service, sched *scheduler.Scheduler) {
 			return fmt.Sprintf("Schedule %q deleted.", name), nil
 		},
 	)
-}
-
-// slugifyProtocolTitle turns a protocol title into a URL-safe lookup slug:
-// lowercase alphanumerics with single dashes, trimmed, max 64 chars.
-func slugifyProtocolTitle(s string) string {
-	var b strings.Builder
-	dash := true
-	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			dash = false
-			continue
-		}
-		if !dash {
-			b.WriteByte('-')
-			dash = true
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if len(out) > 64 {
-		out = strings.Trim(out[:64], "-")
-	}
-	return out
 }
 
 func masterOnlyForTool(ctx context.Context, _ *assistant.Service) error {
@@ -777,6 +754,7 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *vo
 				TTSEngine:      a.cfg.TTSEngine,
 				AffirmationDir: a.cfg.AffirmationDir,
 				Alerts:         alerts,
+				Scheduler:      a.sched,
 			})
 		}()
 	}

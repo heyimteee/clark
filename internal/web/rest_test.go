@@ -1,10 +1,15 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/heyimteee/clark/internal/scheduler"
+	"github.com/heyimteee/clark/internal/voice"
 )
 
 func TestStateSnapshot(t *testing.T) {
@@ -330,4 +335,150 @@ func TestClearHistory(t *testing.T) {
 	if len(hist) != 0 {
 		t.Errorf("history after clear = %d, want 0", len(hist))
 	}
+}
+
+func TestProtocolsWebCRUD(t *testing.T) {
+	ts, _, _, st := newTestServer(t)
+	tok := login(t, ts)
+
+	code, out := getJSON(t, ts, "/web/api/protocols", tok)
+	if code != 200 {
+		t.Fatalf("list protocols = %d, want 200", code)
+	}
+	if rows, ok := out["protocols"].([]any); !ok || len(rows) != 0 {
+		t.Fatalf("fresh protocols = %v", out)
+	}
+
+	code, out = postJSON(t, ts, "/web/api/protocols", tok, map[string]any{"title": "Morning News Digest", "body": "1. gather\n2. report", "origin": "master"})
+	if code != 201 {
+		t.Fatalf("create protocol = %d, want 201 (%v)", code, out)
+	}
+	proto, _ := out["protocol"].(map[string]any)
+	if proto["slug"] != "morning-news-digest" {
+		t.Fatalf("slug = %v", proto["slug"])
+	}
+	id := int(proto["id"].(float64))
+
+	code, out = getJSON(t, ts, "/web/api/protocols", tok)
+	rows, _ := out["protocols"].([]any)
+	if code != 200 || len(rows) != 1 {
+		t.Fatalf("list after create = %d len=%d", code, len(rows))
+	}
+
+	code, out = postJSON(t, ts, "/web/api/protocols", tok, map[string]any{"title": "Morning News Digest", "body": "1. better", "origin": "master"})
+	if code != 201 {
+		t.Fatalf("upsert = %d", code)
+	}
+	if up, _ := out["protocol"].(map[string]any); up["version"].(float64) != 2 {
+		t.Fatalf("upsert version = %v, want 2", up["version"])
+	}
+
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/web/api/protocols/"+itoa(id), strings.NewReader(`{"title":"Morning News Digest","body":"1. edited"}`))
+	req = bearer(req, tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("PUT protocol = %d, want 200", resp.StatusCode)
+	}
+
+	req, _ = http.NewRequest(http.MethodDelete, ts.URL+"/web/api/protocols/"+itoa(id), nil)
+	req = bearer(req, tok)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("DELETE protocol = %d, want 200", resp.StatusCode)
+	}
+	if _, err := st.GetProtocol("morning-news-digest"); err == nil {
+		t.Fatal("protocol should be deleted")
+	}
+}
+
+func TestSchedulesWebUnavailableWithoutScheduler(t *testing.T) {
+	ts, _, _, _ := newTestServer(t)
+	tok := login(t, ts)
+
+	code, out := getJSON(t, ts, "/web/api/schedules", tok)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("schedules without scheduler = %d (%v), want 503", code, out)
+	}
+}
+
+func TestSchedulesWebCRUD(t *testing.T) {
+	st := testStore(t)
+	sched := scheduler.New(st, func(_ context.Context, _, _ string) {})
+	srv := New(Options{
+		ListenAddr: ":0",
+		WebToken:   testWebToken,
+		Store:      st,
+		STTModel:   "whisper-turbo",
+		TTSEngine:  "kokoro-remote",
+		Voice:      &voice.Engine{},
+		Scheduler:  sched,
+	})
+	ts := newServerFor(t, srv)
+	tok := login(t, ts)
+
+	code, out := postJSON(t, ts, "/web/api/schedules", tok, map[string]any{"name": "morning-news", "task": "run protocol", "spec": "not-a-spec"})
+	if code != 400 {
+		t.Fatalf("invalid spec = %d (%v), want 400", code, out)
+	}
+
+	code, out = postJSON(t, ts, "/web/api/schedules", tok, map[string]any{"name": "morning-news", "task": "run protocol", "spec": "0 6 * * *"})
+	if code != 201 {
+		t.Fatalf("create schedule = %d (%v), want 201", code, out)
+	}
+
+	code, out = getJSON(t, ts, "/web/api/schedules", tok)
+	if code != 200 {
+		t.Fatalf("list schedules = %d", code)
+	}
+	rows, _ := out["schedules"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("schedules len = %d, want 1", len(rows))
+	}
+	row := rows[0].(map[string]any)
+	if row["next_run"] == nil {
+		t.Fatal("next_run should be set for enabled schedule")
+	}
+
+	code, _ = postJSON(t, ts, "/web/api/schedules", tok, map[string]any{"name": "morning-news", "enabled": false})
+	if code != 201 {
+		t.Fatalf("pause schedule = %d, want 201", code)
+	}
+	code, out = getJSON(t, ts, "/web/api/schedules", tok)
+	rows, _ = out["schedules"].([]any)
+	row = rows[0].(map[string]any)
+	if row["enabled"].(bool) || row["next_run"] != nil {
+		t.Fatalf("paused schedule wrong: %v", row)
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/web/api/schedules/morning-news", nil)
+	req = bearer(req, tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("DELETE schedule = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestProtocolsRequireAuth(t *testing.T) {
+	ts, _, _, _ := newTestServer(t)
+	code, _ := getJSON(t, ts, "/web/api/protocols", "")
+	if code != http.StatusUnauthorized {
+		t.Fatalf("protocols without token = %d, want 401", code)
+	}
+}
+
+func itoa(n int) string {
+	return strconv.Itoa(n)
 }
