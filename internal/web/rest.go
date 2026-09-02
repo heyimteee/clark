@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/heyimteee/clark/internal/calendar"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/ollama"
 	"github.com/heyimteee/clark/internal/store"
@@ -666,4 +667,73 @@ func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 	}
+}
+
+/* ---------------- calendar tile ---------------- */
+
+// handleCalendarEvents feeds the dashboard tile directly from the Mac
+// bridge — no chat round-trip. Window: local midnight through +7 days.
+func (s *Server) handleCalendarEvents(w http.ResponseWriter, r *http.Request) {
+	if s.cal == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "calendar not configured (no Mac bridge)"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	now := time.Now()
+	y, m, d := now.Date()
+	from := time.Date(y, m, d, 0, 0, 0, 0, now.Location())
+	events, err := s.cal.List(r.Context(), from, from.Add(7*24*time.Hour))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "calendar unavailable: " + err.Error()})
+		return
+	}
+	if events == nil {
+		events = []calendar.Event{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+// handleCalendarAdd creates an event straight from the tile form.
+func (s *Server) handleCalendarAdd(w http.ResponseWriter, r *http.Request) {
+	if s.cal == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "calendar not configured (no Mac bridge)"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	var body struct {
+		Title    string `json:"title"`
+		Start    string `json:"start"`
+		End      string `json:"end"`
+		Location string `json:"location"`
+	}
+	if err := decodeBody(w, r, &body); err != nil || body.Title == "" || body.Start == "" || body.End == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title, start, and end are required"})
+		return
+	}
+	start, err := time.Parse(time.RFC3339, body.Start)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid start time"})
+		return
+	}
+	end, err := time.Parse(time.RFC3339, body.End)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid end time"})
+		return
+	}
+	if !end.After(start) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "end must be after start"})
+		return
+	}
+	id, err := s.cal.Create(r.Context(), calendar.Event{Title: body.Title, Start: start, End: end, Location: body.Location})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "calendar unavailable: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }

@@ -741,6 +741,13 @@ func (a *App) Run() error {
 func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *voice.Engine) error {
 	errCh := make(chan error, 2)
 
+	// The dashboard calendar tile reads the Mac bridge directly (same client
+	// the LLM tools use) instead of round-tripping through chat.
+	var calClient calendar.Client
+	if a.cfg.MacActionURL != "" {
+		calClient = calendar.NewMacosClient(a.cfg.MacActionURL, a.cfg.MacActionToken)
+	}
+
 	if a.cfg.WebEnabled {
 		go func() {
 			errCh <- web.Run(ctx, web.Options{
@@ -755,6 +762,7 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *vo
 				AffirmationDir: a.cfg.AffirmationDir,
 				Alerts:         alerts,
 				Scheduler:      a.sched,
+				Calendar:       calClient,
 			})
 		}()
 	}

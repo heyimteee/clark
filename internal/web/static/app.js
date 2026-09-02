@@ -293,7 +293,7 @@
                 '<button class="btn primary" type="submit">add</button>' +
               "</form>" +
               '<div class="calendar-list" id="calendar-list"><div class="todo-empty">No upcoming events</div></div>' +
-              '<button class="btn mini" id="calendar-refresh">refresh via Clark</button>' +
+              '<button class="btn mini" id="calendar-refresh">refresh</button>' +
             "</div>" +
           "</section>" +
           '<section id="chat" class="hidden">' +
@@ -489,22 +489,7 @@
     const calRefresh = $("#calendar-refresh");
     if (calRefresh) calRefresh.addEventListener("click", refreshCalendar);
     const calForm = $("#calendar-form");
-    if (calForm) calForm.addEventListener("submit", function (e) {
-      e.preventDefault();
-      const title = $("#calendar-title").value.trim();
-      const start = $("#calendar-start").value;
-      const end = $("#calendar-end").value;
-      if (!title || !start || !end) { toast("title, start, and end are required"); return; }
-      const startISO = new Date(start).toISOString();
-      const endISO = new Date(end).toISOString();
-      setMode("chat");
-      const input = $("#chat-input");
-      input.value = "add to calendar " + title + " from " + startISO + " to " + endISO;
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
-      const submitBtn = $("#chat-send");
-      if (submitBtn) submitBtn.click();
-      calForm.reset();
-    });
+    if (calForm) calForm.addEventListener("submit", addCalendarEvent);
 
     document.querySelectorAll("#vip-sort button").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -1085,16 +1070,83 @@
 
   /* ---------------- calendar (tool-driven) ---------------- */
 
+  /* ---------------- calendar tile (direct REST) ---------------- */
+
   async function refreshCalendar() {
     const list = $("#calendar-list");
-    list.innerHTML = '<div class="todo-empty">Asking Clark… check chat for events</div>';
-    setMode("chat");
-    const input = $("#chat-input");
-    input.value = "what's on my calendar for the next 7 days?";
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
-    // Fallback direct submit
-    const submitBtn = $("#chat-send");
-    if (submitBtn) submitBtn.click();
+    try {
+      const d = await api("/web/api/calendar");
+      renderCalendar(d.events || []);
+    } catch (err) {
+      list.innerHTML = '<div class="empty-state">' + esc(err.message) + "</div>";
+    }
+  }
+
+  function renderCalendar(events) {
+    const list = $("#calendar-list");
+    if (!events.length) {
+      list.innerHTML = '<div class="empty-state"><strong>Nothing scheduled this week.</strong><br>' +
+        "Add an event above, or ask Clark in chat — <em>what's on my calendar?</em></div>";
+      return;
+    }
+    const dayLabels = {};
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today.getTime() + i * 86400000);
+      const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+      const label = i === 0 ? "Today" : i === 1 ? "Tomorrow" :
+        d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+      dayLabels[key] = label;
+    }
+    const groups = [];
+    let currentDay = null;
+    events.forEach(function (e) {
+      const start = new Date(e.start);
+      const key = start.getFullYear() + "-" + String(start.getMonth() + 1).padStart(2, "0") + "-" + String(start.getDate()).padStart(2, "0");
+      if (key !== currentDay) {
+        currentDay = key;
+        groups.push({ label: dayLabels[key] || start.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }), items: [] });
+      }
+      groups[groups.length - 1].items.push(e);
+    });
+    list.innerHTML = groups.map(function (g) {
+      const rows = g.items.map(function (e) {
+        const s = new Date(e.start);
+        const t = e.allDay ? "all day" :
+          s.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "–" +
+          new Date(e.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        return '<div class="calendar-event">' +
+          '<span class="calendar-event-title">' + esc(e.title) + (e.location ? '<span class="calendar-event-loc">@ ' + esc(e.location) + "</span>" : "") + "</span>" +
+          '<span class="calendar-event-time">' + esc(t) + "</span>" +
+          "</div>";
+      }).join("");
+      return '<div class="calendar-day"><div class="calendar-day-label">' + esc(g.label) + "</div>" + rows + "</div>";
+    }).join("");
+  }
+
+  async function addCalendarEvent(e) {
+    e.preventDefault();
+    const title = $("#calendar-title").value.trim();
+    const startV = $("#calendar-start").value;
+    const endV = $("#calendar-end").value;
+    if (!title || !startV || !endV) { toast("title, start, and end are required"); return; }
+    const start = new Date(startV);
+    const end = new Date(endV);
+    if (!(end > start)) { toast("end must be after start"); return; }
+    try {
+      await api("/web/api/calendar/events", {
+        method: "POST",
+        body: JSON.stringify({ title: title, start: start.toISOString(), end: end.toISOString() }),
+      });
+      $("#calendar-title").value = "";
+      $("#calendar-start").value = "";
+      $("#calendar-end").value = "";
+      toast("event added");
+      refreshCalendar();
+    } catch (err) {
+      toast(err.message);
+    }
   }
 
   /* ---------------- idle sound ---------------- */
