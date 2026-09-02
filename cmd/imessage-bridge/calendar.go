@@ -29,11 +29,19 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 	if to.IsZero() {
 		to = from.Add(7 * 24 * time.Hour)
 	}
-	// Language-agnostic: build dates from epoch offset, and emit ISO via «class isot»
+	// Language-agnostic: build dates from current date's components to avoid
+	// parsing the English literal "Monday, January 1, 2001 at 12:00:00 AM"
+	// which fails on Indonesian locale (Senin, 1 Januari ... pukul ...).
 	fromUnix := from.Unix()
 	toUnix := to.Unix()
 	script := fmt.Sprintf(`
-		set epoch to date "Monday, January 1, 2001 at 12:00:00 AM"
+		set epoch to current date
+		set year of epoch to 2001
+		set month of epoch to 1
+		set day of epoch to 1
+		set hours of epoch to 0
+		set minutes of epoch to 0
+		set seconds of epoch to 0
 		set fromDate to epoch + (%d - 978307200)
 		set toDate to epoch + (%d - 978307200)
 		set out to ""
@@ -48,11 +56,11 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 	`, fromUnix, toUnix)
 	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
-		// Log but return empty with 200 to avoid LLM hiccup — calendar may be empty or TCC not yet granted
-		json.NewEncoder(w).Encode(map[string]any{"events": []calendarEvent{}})
+		http.Error(w, fmt.Sprintf("calendar list failed: %s: %s", err, string(out)), http.StatusInternalServerError)
 		return
 	}
 	events := parseCalendarListOutput(string(out))
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"events": events})
 }
 
@@ -119,13 +127,25 @@ func handleCalendarCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	start, _ := time.Parse(time.RFC3339, e.Start)
 	end, _ := time.Parse(time.RFC3339, e.End)
+	// Use epoch math for locale-agnostic dates and pick the first writable calendar
 	script := fmt.Sprintf(`
+		set epoch to current date
+		set year of epoch to 2001
+		set month of epoch to 1
+		set day of epoch to 1
+		set hours of epoch to 0
+		set minutes of epoch to 0
+		set seconds of epoch to 0
+		set startDate to epoch + (%d - 978307200)
+		set endDate to epoch + (%d - 978307200)
 		tell application "Calendar"
-			tell calendar "Calendar"
-				make new event at end with properties {summary:"%s", start date:date "%s", end date:date "%s", location:"%s", description:"%s"}
+			set targetCal to first calendar whose writable is true
+			if targetCal is missing value then set targetCal to first calendar
+			tell targetCal
+				make new event at end with properties {summary:"%s", start date:startDate, end date:endDate, location:"%s", description:"%s"}
 			end tell
 		end tell
-	`, escapeAppleScript(e.Title), start.Format("Monday, January 2, 2006 at 3:04:00 PM"), end.Format("Monday, January 2, 2006 at 3:04:00 PM"), escapeAppleScript(e.Location), escapeAppleScript(e.Notes))
+	`, start.Unix(), end.Unix(), escapeAppleScript(e.Title), escapeAppleScript(e.Location), escapeAppleScript(e.Notes))
 	if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
 		http.Error(w, fmt.Sprintf("calendar create failed: %s: %s", err, string(out)), http.StatusInternalServerError)
 		return
@@ -145,13 +165,13 @@ func handleCalendarDelete(w http.ResponseWriter, r *http.Request) {
 		tell application "Calendar"
 			repeat with c in calendars
 				repeat with e in (every event of c)
-					if (summary of e) is "%s" then
+					if (uid of e as string) is "%s" or (summary of e) is "%s" then
 						delete e
 					end if
 				end repeat
 			end repeat
 		end tell
-	`, escapeAppleScript(id))
+	`, escapeAppleScript(id), escapeAppleScript(id))
 	if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
 		http.Error(w, fmt.Sprintf("delete failed: %s: %s", err, string(out)), http.StatusInternalServerError)
 		return
