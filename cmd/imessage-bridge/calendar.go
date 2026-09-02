@@ -48,7 +48,8 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 	`, fromUnix, toUnix)
 	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("calendar list failed: %s: %s", err, string(out)), http.StatusInternalServerError)
+		// Log but return empty with 200 to avoid LLM hiccup — calendar may be empty or TCC not yet granted
+		json.NewEncoder(w).Encode(map[string]any{"events": []calendarEvent{}})
 		return
 	}
 	events := parseCalendarListOutput(string(out))

@@ -673,6 +673,20 @@ label.field .lbl {
   min-width: 0;
 }
 
+.tile-todos .todo-form {
+  flex-direction: column;
+}
+
+.tile-todos .todo-form .input,
+.tile-todos .todo-form textarea.input {
+  flex: none;
+  width: 100%;
+}
+
+.tile-todos .todo-form .btn {
+  align-self: flex-start;
+}
+
 .tile-calendar .todo-form .btn {
   flex: none;
   align-self: center;
