@@ -956,8 +956,9 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	// is semi-hardcoded: an AI-generated prefix (must contain Master/Sir
 	// and excuse the Master) is produced in an isolated turn, then the
 	// content turn answers the VIP's actual message. Final reply is
-	// prefix + " | " + body, so variety is preserved but the context is
-	// guaranteed. OFF remains silent via gateway gate.
+	// _<prefix>_ + blank line + body, so the context reads as a distinct
+	// italic aside (WhatsApp italic, web <em>) instead of engineering
+	// debris. OFF remains silent via gateway gate.
 	task := followUpTask
 	needsDisclosure := false
 	var disclosurePrefix string
@@ -991,7 +992,7 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 		for _, m := range history[:len(history)-1] {
 			messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
 		}
-		messages = append(messages, ollama.Message{Role: "assistant", Content: disclosurePrefix + " | "})
+		messages = append(messages, ollama.Message{Role: "assistant", Content: "_" + disclosurePrefix + "_\n\n"})
 		messages = append(messages, ollama.Message{Role: history[len(history)-1].Role, Content: history[len(history)-1].Content})
 	} else {
 		for _, m := range history {
@@ -1007,7 +1008,7 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 
 	reply, thinking, pending, err := s.runToolLoop(ctx, messages, userMsg, available, isSelf)
 	if needsDisclosure && disclosurePrefix != "" {
-		reply = strings.TrimSpace(disclosurePrefix) + " | " + strings.TrimSpace(reply)
+		reply = "_" + strings.TrimSpace(disclosurePrefix) + "_\n\n" + strings.TrimSpace(reply)
 	}
 	if err != nil {
 		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
@@ -1098,7 +1099,7 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 		for _, m := range history[:len(history)-1] {
 			messages = append(messages, ollama.Message{Role: m.Role, Content: m.Content})
 		}
-		messages = append(messages, ollama.Message{Role: "assistant", Content: disclosurePrefix + " | "})
+		messages = append(messages, ollama.Message{Role: "assistant", Content: "_" + disclosurePrefix + "_\n\n"})
 		messages = append(messages, ollama.Message{Role: history[len(history)-1].Role, Content: history[len(history)-1].Content})
 	} else {
 		for _, m := range history {
@@ -1117,7 +1118,7 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
 	}
 	if needsDisclosure && disclosurePrefix != "" {
-		reply = strings.TrimSpace(disclosurePrefix) + " | " + strings.TrimSpace(reply)
+		reply = "_" + strings.TrimSpace(disclosurePrefix) + "_\n\n" + strings.TrimSpace(reply)
 	}
 
 	logging.Log("OLLAMA", logging.SevInfo, "RESPONSE", "Generation completed (streaming)",
