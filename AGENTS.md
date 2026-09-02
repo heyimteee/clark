@@ -3,7 +3,7 @@
 ## Overview
 
 This document defines the mandatory workflow for AI agents working on Clark.
-Every task must follow the Issue → Plan → Implement → Test → Commit → Push cycle.
+Every task must follow the Issue → Label & Assign → Plan → Branch → Implement → Test → PR → Merge → Next cycle.
 
 ---
 
@@ -14,11 +14,13 @@ All work tracked via GitHub Issues at `heyimteee/clark`.
 ### Issue lifecycle
 
 ```
-Open → Plan (comment) → Implement → Commit → Close
+Open → Label & Assign self → Plan (comment) → Branch → Implement → Test
+     → PR → Merge → Delete branch → Close → Next issue
 ```
 
 - Label: Assign proper labels
 - Asignees: Assign Myself
+- One issue = one branch = one PR. Never work on `main` directly.
 
 ### Issue body (problem statement)
 
@@ -51,11 +53,25 @@ Resolves #37
 
 Or for multiple commits per issue, each commit references the issue number.
 
+### Branch & Pull Request workflow
+
+1. **Branch naming**: `<type>/NNN-short-slug`, e.g. `feat/89-current-time-tool`, `fix/76-imessage-media`
+2. **Branch from up-to-date `main`** before starting: `git checkout main && git pull --ff-only && git checkout -b feat/NNN-slug`
+3. **Work only on that branch** — one issue per branch, one PR per branch
+4. **PR**: title = the conventional commit message; body: short summary + `Resolves #NNN`; base = `main`
+5. **Merge**: squash-merge so `main` stays linear; keep `Resolves #NNN` in the squash commit body — GitHub auto-closes the issue on merge
+6. **Delete the branch** after merge (`gh pr merge --squash --delete-branch`)
+7. Pick the next issue and repeat
+
+Note: every merge to `main` triggers auto-deploy (Section 4). Multiple PRs
+in a batch means multiple deploys — verify between merges when convenient,
+at minimum after the final one.
+
 ### Closing issues
 
 Close the issue only after:
 
-1. All commits are pushed
+1. The PR is squash-merged to `main` (`Resolves #NNN` in the squash body auto-closes it)
 2. All tests pass (`gofmt -l .`, `go vet ./...`, `go test -race ./...`)
 3. The success criteria in the issue are met
 
@@ -92,6 +108,7 @@ All commits follow [Conventional Commits](https://www.conventionalcommits.org/):
 - Reference issue: `Resolves #NNN` in footer
 - No commits without passing tests
 - No force-pushes to `main`
+- No direct commits to `main` — all changes land via squash-merged PRs from issue branches
 
 ### Examples
 
