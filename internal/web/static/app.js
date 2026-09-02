@@ -195,6 +195,7 @@
             '<button id="mode-bento" class="active" aria-pressed="true">bento</button>' +
             '<button id="mode-chat" aria-pressed="false">chat</button>' +
             '<button id="mode-kanban" aria-pressed="false">kanban</button>' +
+            '<button id="mode-protocols" aria-pressed="false">protocols</button>' +
           "</div>" +
           '<button id="btn-logout" class="btn">lock</button>' +
         "</div></header>" +
@@ -321,6 +322,27 @@
               '<button class="btn primary" id="kanban-add">add</button>' +
             '</div>' +
           "</section>" +
+          '<section id="protocols" class="hidden">' +
+            '<h2 class="section-title">Protocols</h2>' +
+            '<p class="sub">Skill protocols clark loads before complex tasks — edit or prune them.</p>' +
+            '<div id="protocol-list" class="protocol-list"></div>' +
+            '<div class="proto-form card">' +
+              '<h3>new protocol</h3>' +
+              '<input id="proto-title" class="input" placeholder="Title, e.g. Morning News Digest">' +
+              '<textarea id="proto-body" class="input" rows="5" placeholder="1. …&#10;2. …"></textarea>' +
+              '<button class="btn primary" id="proto-add">save protocol</button>' +
+            '</div>' +
+            '<h2 class="section-title">Schedules</h2>' +
+            '<p class="sub">Recurring tasks clark runs as you, cron spec in local time.</p>' +
+            '<div id="schedule-list" class="schedule-list"></div>' +
+            '<div class="proto-form card">' +
+              '<h3>new schedule</h3>' +
+              '<input id="sched-name" class="input" placeholder="Name, e.g. morning-news">' +
+              '<input id="sched-spec" class="input" placeholder="Cron spec, e.g. 0 6 * * *">' +
+              '<textarea id="sched-task" class="input" rows="3" placeholder="Instruction clark executes at fire time…"></textarea>' +
+              '<button class="btn primary" id="sched-add">save schedule</button>' +
+            '</div>' +
+          "</section>" +
         "</main>" +
         '<section id="logs">' +
           '<div id="logs-head">' +
@@ -340,6 +362,7 @@
     bindBento();
     bindChat();
     bindLogs();
+    bindProtocols();
 
     try {
       await api("/web/api/state");
@@ -363,6 +386,7 @@
     $("#mode-bento").addEventListener("click", function () { setMode("bento"); });
     $("#mode-chat").addEventListener("click", function () { setMode("chat"); });
     $("#mode-kanban").addEventListener("click", function () { setMode("kanban"); });
+    $("#mode-protocols").addEventListener("click", function () { setMode("protocols"); });
   }
 
   function setMode(m) {
@@ -370,14 +394,18 @@
     $("#mode-bento").classList.toggle("active", m === "bento");
     $("#mode-chat").classList.toggle("active", m === "chat");
     $("#mode-kanban").classList.toggle("active", m === "kanban");
+    $("#mode-protocols").classList.toggle("active", m === "protocols");
     $("#mode-bento").setAttribute("aria-pressed", String(m === "bento"));
     $("#mode-chat").setAttribute("aria-pressed", String(m === "chat"));
     $("#mode-kanban").setAttribute("aria-pressed", String(m === "kanban"));
+    $("#mode-protocols").setAttribute("aria-pressed", String(m === "protocols"));
     $("#bento").classList.toggle("hidden", m !== "bento");
     $("#chat").classList.toggle("hidden", m !== "chat");
     $("#kanban").classList.toggle("hidden", m !== "kanban");
+    $("#protocols").classList.toggle("hidden", m !== "protocols");
     if (m === "chat") $("#chat-input").focus();
     if (m === "kanban") refreshKanban();
+    if (m === "protocols") refreshProtocols();
   }
 
   function markLive(live) {
@@ -836,6 +864,141 @@
     });
   }
 
+  /* ---------------- protocols + schedules ---------------- */
+
+  async function refreshProtocols() {
+    try {
+      const data = await api("/web/api/protocols");
+      renderProtocols(data.protocols || []);
+      const sdata = await api("/web/api/schedules");
+      renderSchedules(sdata.schedules || []);
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  function renderProtocols(protocols) {
+    const list = $("#protocol-list");
+    if (!protocols.length) {
+      list.innerHTML = '<div class="todo-empty">No protocols yet — clark saves them as he learns.</div>';
+      return;
+    }
+    list.innerHTML = protocols.map(function (p) {
+      const meta = "v" + p.version + " · used " + p.use_count + "× · " + (p.origin === "clark" ? "clark" : "master");
+      return (
+        '<div class="proto-card card" data-id="' + p.id + '">' +
+          '<div class="proto-head">' +
+            '<div><span class="proto-title">' + esc(p.title) + '</span><span class="proto-meta">' + meta + '</span></div>' +
+            '<div class="proto-actions">' +
+              '<button class="btn proto-edit" data-id="' + p.id + '">edit</button>' +
+              '<button class="btn proto-del" data-id="' + p.id + '">delete</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="proto-slug">' + esc(p.slug) + '</div>' +
+          '<textarea class="input proto-body hidden" data-id="' + p.id + '" rows="6">' + esc(p.body) + '</textarea>' +
+          '<button class="btn primary proto-save hidden" data-id="' + p.id + '">save changes</button>' +
+        '</div>'
+      );
+    }).join("");
+    list.querySelectorAll(".proto-edit").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const id = btn.dataset.id;
+        const card = btn.closest(".proto-card");
+        card.querySelector(".proto-body").classList.toggle("hidden");
+        card.querySelector(".proto-save").classList.toggle("hidden");
+      });
+    });
+    list.querySelectorAll(".proto-save").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const id = btn.dataset.id;
+        const card = btn.closest(".proto-card");
+        const body = card.querySelector(".proto-body");
+        const title = card.querySelector(".proto-title").textContent;
+        api("/web/api/protocols/" + id, { method: "PUT", body: JSON.stringify({ title: title, body: body.value }) })
+          .then(function () { toast("protocol saved"); refreshProtocols(); })
+          .catch(function (err) { toast(err.message); });
+      });
+    });
+    list.querySelectorAll(".proto-del").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        api("/web/api/protocols/" + btn.dataset.id, { method: "DELETE" })
+          .then(function () { refreshProtocols(); })
+          .catch(function (err) { toast(err.message); });
+      });
+    });
+  }
+
+  function renderSchedules(schedules) {
+    const list = $("#schedule-list");
+    if (!schedules.length) {
+      list.innerHTML = '<div class="todo-empty">No schedules — ask clark to create one.</div>';
+      return;
+    }
+    list.innerHTML = schedules.map(function (sc) {
+      const next = sc.next_run ? new Date(sc.next_run).toLocaleString() : "—";
+      return (
+        '<div class="sched-row card" data-name="' + esc(sc.name) + '">' +
+          '<div class="proto-head">' +
+            '<div><span class="proto-title">' + esc(sc.name) + '</span>' +
+            '<span class="proto-meta">' + esc(sc.spec) + ' · ' + (sc.enabled ? "enabled" : "paused") + '</span></div>' +
+            '<div class="proto-actions">' +
+              '<button class="btn sched-toggle" data-name="' + esc(sc.name) + '" data-enabled="' + (sc.enabled ? "1" : "0") + '">' + (sc.enabled ? "pause" : "resume") + '</button>' +
+              '<button class="btn sched-del" data-name="' + esc(sc.name) + '">delete</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="proto-slug">next: ' + esc(next) + '</div>' +
+          '<div class="sched-task">' + esc(sc.task || "") + '</div>' +
+        '</div>'
+      );
+    }).join("");
+    list.querySelectorAll(".sched-toggle").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const enable = btn.dataset.enabled !== "1";
+        api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "PUT", body: JSON.stringify({ enabled: enable }) })
+          .then(function () { refreshProtocols(); })
+          .catch(function (err) { toast(err.message); });
+      });
+    });
+    list.querySelectorAll(".sched-del").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "DELETE" })
+          .then(function () { refreshProtocols(); })
+          .catch(function (err) { toast(err.message); });
+      });
+    });
+  }
+
+  function bindProtocols() {
+    $("#proto-add").addEventListener("click", function () {
+      const title = $("#proto-title").value.trim();
+      const body = $("#proto-body").value;
+      if (!title || !body) { toast("title and body are required"); return; }
+      api("/web/api/protocols", { method: "POST", body: JSON.stringify({ title: title, body: body, origin: "master" }) })
+        .then(function () {
+          $("#proto-title").value = "";
+          $("#proto-body").value = "";
+          toast("protocol saved");
+          refreshProtocols();
+        })
+        .catch(function (err) { toast(err.message); });
+    });
+    $("#sched-add").addEventListener("click", function () {
+      const name = $("#sched-name").value.trim();
+      const spec = $("#sched-spec").value.trim();
+      const task = $("#sched-task").value;
+      if (!name || !spec) { toast("name and cron spec are required"); return; }
+      api("/web/api/schedules", { method: "POST", body: JSON.stringify({ name: name, spec: spec, task: task }) })
+        .then(function () {
+          $("#sched-name").value = "";
+          $("#sched-spec").value = "";
+          $("#sched-task").value = "";
+          toast("schedule saved");
+          refreshProtocols();
+        })
+        .catch(function (err) { toast(err.message); });
+    });
+  }
+
   /* ---------------- calendar (tool-driven) ---------------- */
 
   async function refreshCalendar() {
@@ -1053,6 +1216,12 @@
           state = f.state;
           renderState();
         }
+      } else if (f.type === "protocols_changed") {
+        // A protocol was saved/edited/deleted (chat tool or another console)
+        // — refresh the Protocols page live if it is open.
+        if (mode === "protocols") refreshProtocols();
+      } else if (f.type === "schedules_changed") {
+        if (mode === "protocols") refreshProtocols();
       } else if (f.type === "pong") {
         /* keepalive ok */
       }

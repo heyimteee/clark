@@ -18,6 +18,7 @@ import (
 	"github.com/heyimteee/clark/internal/alert"
 	"github.com/heyimteee/clark/internal/assistant"
 	"github.com/heyimteee/clark/internal/logging"
+	"github.com/heyimteee/clark/internal/scheduler"
 	"github.com/heyimteee/clark/internal/store"
 	"github.com/heyimteee/clark/internal/voice"
 )
@@ -46,6 +47,7 @@ type Options struct {
 	SessionTTL     time.Duration
 	SessionMaxLife time.Duration
 	Alerts         *alert.Service
+	Scheduler      *scheduler.Scheduler
 }
 
 // Server owns the HTTP handlers, sessions, and the voice engine.
@@ -61,6 +63,7 @@ type Server struct {
 	affirmations string
 	listen       string
 	alerts       *alert.Service
+	sched        *scheduler.Scheduler
 
 	sessions *sessionManager
 	logins   *loginThrottle
@@ -97,6 +100,7 @@ func New(opts Options) *Server {
 		affirmations:  opts.AffirmationDir,
 		listen:        opts.ListenAddr,
 		alerts:        opts.Alerts,
+		sched:         opts.Scheduler,
 		sessions:      newSessionManager(ttl, maxLife),
 		logins:        newLoginThrottle(),
 		hub:           newChatHub(),
@@ -128,6 +132,12 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("GET /web/api/todos", s.requireAuth(s.handleTodos))
 	s.mux.HandleFunc("POST /web/api/todos", s.requireAuth(s.handleTodos))
 	s.mux.HandleFunc("/web/api/todos/", s.requireAuth(s.handleTodoAction))
+	s.mux.HandleFunc("GET /web/api/protocols", s.requireAuth(s.handleProtocols))
+	s.mux.HandleFunc("POST /web/api/protocols", s.requireAuth(s.handleProtocols))
+	s.mux.HandleFunc("/web/api/protocols/", s.requireAuth(s.handleProtocolAction))
+	s.mux.HandleFunc("GET /web/api/schedules", s.requireAuth(s.handleSchedules))
+	s.mux.HandleFunc("POST /web/api/schedules", s.requireAuth(s.handleSchedules))
+	s.mux.HandleFunc("/web/api/schedules/", s.requireAuth(s.handleScheduleAction))
 	s.mux.HandleFunc("GET /web/api/voice", s.requireAuth(s.handleVoiceStatus))
 
 	s.mux.HandleFunc("POST /web/api/status", s.requireAuth(s.handleSetStatus))

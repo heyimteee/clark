@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -490,4 +491,179 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+/* ---------------- protocols + schedules ---------------- */
+
+func (s *Server) broadcastChanged(kind string) {
+	s.hub.broadcast(map[string]any{"type": kind})
+}
+
+func (s *Server) handleProtocols(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		protocols, err := s.store.ListProtocols()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list protocols"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"protocols": protocols})
+	case http.MethodPost:
+		var body struct {
+			Title  string `json:"title"`
+			Body   string `json:"body"`
+			Origin string `json:"origin"`
+		}
+		if err := decodeBody(w, r, &body); err != nil || body.Title == "" || body.Body == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title and body are required"})
+			return
+		}
+		slug := store.SlugifyProtocolTitle(body.Title)
+		if len(slug) < 2 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title must contain letters or digits"})
+			return
+		}
+		p, err := s.store.UpsertProtocol(store.Protocol{Slug: slug, Title: body.Title, Body: body.Body, Origin: body.Origin})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		s.broadcastChanged("protocols_changed")
+		writeJSON(w, http.StatusCreated, map[string]any{"protocol": p})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleProtocolAction(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimPrefix(r.URL.Path, "/web/api/protocols/")
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id is required"})
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var body struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+		}
+		if err := decodeBody(w, r, &body); err != nil || body.Title == "" || body.Body == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title and body are required"})
+			return
+		}
+		p, err := s.store.GetProtocolByID(id)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			return
+		}
+		p.Title = body.Title
+		p.Body = body.Body
+		p.Origin = "master"
+		saved, err := s.store.UpsertProtocol(p)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		s.broadcastChanged("protocols_changed")
+		writeJSON(w, http.StatusOK, map[string]any{"protocol": saved})
+	case http.MethodDelete:
+		if err := s.store.DeleteProtocol(id); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			return
+		}
+		s.broadcastChanged("protocols_changed")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
+	if s.sched == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "scheduler not available"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		rows, next, err := s.sched.List()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list schedules"})
+			return
+		}
+		type scheduleView struct {
+			store.Schedule
+			NextRun *time.Time `json:"next_run,omitempty"`
+		}
+		views := []scheduleView{}
+		for i := range rows {
+			v := scheduleView{Schedule: rows[i]}
+			if rows[i].Enabled && !next[i].IsZero() {
+				t := next[i]
+				v.NextRun = &t
+			}
+			views = append(views, v)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"schedules": views})
+	case http.MethodPost:
+		var body struct {
+			Name    string `json:"name"`
+			Task    string `json:"task"`
+			Spec    string `json:"spec"`
+			Enabled *bool  `json:"enabled"`
+		}
+		if err := decodeBody(w, r, &body); err != nil || body.Name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name is required"})
+			return
+		}
+		sc, err := s.sched.Upsert(body.Name, body.Task, body.Spec, body.Enabled)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		s.broadcastChanged("schedules_changed")
+		writeJSON(w, http.StatusCreated, map[string]any{"schedule": sc})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
+	if s.sched == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "scheduler not available"})
+		return
+	}
+	name, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/web/api/schedules/"))
+	if err != nil || name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name is required"})
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var body struct {
+			Task    string `json:"task"`
+			Spec    string `json:"spec"`
+			Enabled *bool  `json:"enabled"`
+		}
+		if err := decodeBody(w, r, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid body"})
+			return
+		}
+		sc, err := s.sched.Upsert(name, body.Task, body.Spec, body.Enabled)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		s.broadcastChanged("schedules_changed")
+		writeJSON(w, http.StatusOK, map[string]any{"schedule": sc})
+	case http.MethodDelete:
+		if err := s.sched.Delete(name); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			return
+		}
+		s.broadcastChanged("schedules_changed")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
 }
