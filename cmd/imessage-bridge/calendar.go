@@ -60,6 +60,7 @@ function run() {
         title: toStr(e.title),
         start: e.startDate.timeIntervalSince1970,
         end: e.endDate.timeIntervalSince1970,
+        allDay: !!e.allDay,
         location: toStr(e.location),
         notes: toStr(e.notes),
         calendar: cal,
