@@ -155,8 +155,8 @@ func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"from":  map[string]any{"type": "string", "description": "Optional start time as RFC3339, defaults to now"},
-				"to":    map[string]any{"type": "string", "description": "Optional end time as RFC3339, defaults to 7 days from now"},
+				"from":  map[string]any{"type": "string", "description": "Optional start time as RFC3339, defaults to start of today"},
+				"to":    map[string]any{"type": "string", "description": "Optional end time as RFC3339, defaults to 7 days from start"},
 				"limit": map[string]any{"type": "integer", "description": "Optional max events to show"},
 			},
 		},
@@ -165,12 +165,17 @@ func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 				return "", err
 			}
 			from := time.Now()
-			to := from.Add(7 * 24 * time.Hour)
 			if s := tools.StringArg(args, "from"); s != "" {
 				if t, err := time.Parse(time.RFC3339, s); err == nil {
 					from = t
 				}
+			} else {
+				// Default to the start of today so all-day and earlier-today
+				// events are not silently cut off by a rolling "now" window.
+				y, m, d := from.Date()
+				from = time.Date(y, m, d, 0, 0, 0, 0, from.Location())
 			}
+			to := from.Add(7 * 24 * time.Hour)
 			if s := tools.StringArg(args, "to"); s != "" {
 				if t, err := time.Parse(time.RFC3339, s); err == nil {
 					to = t

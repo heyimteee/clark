@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -18,105 +21,203 @@ type calendarEvent struct {
 	Notes    string `json:"notes,omitempty"`
 }
 
+// Calendar access goes through EventKit via JXA (osascript -l JavaScript)
+// instead of the Calendar.app AppleScript dictionary. The AppleScript
+// `every event ... whose start date` queries silently return incomplete
+// or empty result sets on modern macOS; EventKit is the same framework the
+// Calendar UI uses and expands recurring occurrences correctly. All dates
+// are passed as absolute Unix epochs, which removes both the locale
+// dependency and the UTC-epoch-constant timezone shift of the old script.
+
+const jxaHelpers = `
+function toStr(v) {
+  if (v === undefined || v === null) return ''
+  if (typeof v === 'string') return v
+  try { if (v.isNil()) return '' } catch (e) {}
+  try { const s = ObjC.unwrap(v); if (s !== undefined && s !== null) return String(s) } catch (e) {}
+  return String(v)
+}
+`
+
+const calendarListJXA = `ObjC.import('Foundation')
+ObjC.import('EventKit')
+` + jxaHelpers + `
+function run() {
+  const params = __PARAMS__
+  try {
+    const store = $.EKEventStore.alloc.init
+    const nsStart = $.NSDate.alloc.initWithTimeIntervalSince1970(params.from)
+    const nsEnd = $.NSDate.alloc.initWithTimeIntervalSince1970(params.to)
+    const pred = store.predicateForEventsWithStartDateEndDateCalendars(nsStart, nsEnd, $())
+    const evs = ObjC.unwrap(store.eventsMatchingPredicate(pred)) || []
+    const events = []
+    for (const e of evs) {
+      let cal = ''
+      try { if (e.calendar && !e.calendar.isNil()) cal = toStr(e.calendar.title) } catch (x) {}
+      events.push({
+        id: toStr(e.eventIdentifier) || toStr(e.calendarItemExternalIdentifier),
+        title: toStr(e.title),
+        start: e.startDate.timeIntervalSince1970,
+        end: e.endDate.timeIntervalSince1970,
+        location: toStr(e.location),
+        notes: toStr(e.notes),
+        calendar: cal,
+      })
+    }
+    return JSON.stringify({events: events})
+  } catch (err) {
+    return JSON.stringify({error: String(err)})
+  }
+}
+`
+
+const calendarCreateJXA = `ObjC.import('Foundation')
+ObjC.import('EventKit')
+` + jxaHelpers + `
+function run() {
+  const params = __PARAMS__
+  try {
+    const store = $.EKEventStore.alloc.init
+    const e = $.EKEvent.eventWithEventStore(store)
+    e.title = params.title
+    if (params.location) e.location = params.location
+    if (params.notes) e.notes = params.notes
+    e.startDate = $.NSDate.alloc.initWithTimeIntervalSince1970(params.start)
+    e.endDate = $.NSDate.alloc.initWithTimeIntervalSince1970(params.end)
+    const cal = store.defaultCalendarForNewEvents
+    if (!cal || cal.isNil()) return JSON.stringify({error: 'no default calendar configured'})
+    e.calendar = cal
+    const err = Ref()
+    const ok = store.saveEventSpanError(e, 0, err)
+    if (!ok) {
+      let msg = 'EventKit refused to save the event'
+      try { if (err[0] && !err[0].isNil()) msg = toStr(err[0].localizedDescription) } catch (x) {}
+      return JSON.stringify({error: msg})
+    }
+    return JSON.stringify({id: toStr(e.eventIdentifier) || toStr(e.calendarItemExternalIdentifier)})
+  } catch (err) {
+    return JSON.stringify({error: String(err)})
+  }
+}
+`
+
+const calendarDeleteJXA = `ObjC.import('Foundation')
+ObjC.import('EventKit')
+` + jxaHelpers + `
+function run() {
+  const params = __PARAMS__
+  try {
+    const store = $.EKEventStore.alloc.init
+    const targets = []
+    if (params.id) {
+      try {
+        const e = store.eventWithIdentifier(params.id)
+        if (e && !e.isNil()) targets.push(e)
+      } catch (x) {}
+    }
+    if (targets.length === 0) {
+      const nsStart = $.NSDate.alloc.initWithTimeIntervalSince1970(params.from)
+      const nsEnd = $.NSDate.alloc.initWithTimeIntervalSince1970(params.to)
+      const pred = store.predicateForEventsWithStartDateEndDateCalendars(nsStart, nsEnd, $())
+      const evs = ObjC.unwrap(store.eventsMatchingPredicate(pred)) || []
+      for (const e of evs) {
+        if (params.title && toStr(e.title) === params.title) { targets.push(e); continue }
+        if (params.id && (toStr(e.eventIdentifier) === params.id || toStr(e.calendarItemExternalIdentifier) === params.id)) targets.push(e)
+      }
+    }
+    if (targets.length === 0) return JSON.stringify({deleted: 0, error: 'event not found'})
+    const err = Ref()
+    let deleted = 0
+    for (const e of targets) {
+      if (store.removeEventSpanError(e, 0, err)) deleted++
+    }
+    return JSON.stringify({deleted: deleted})
+  } catch (err) {
+    return JSON.stringify({error: String(err)})
+  }
+}
+`
+
+// runJXA embeds params as JSON into the script (injection-safe), writes it to
+// a temp file and executes osascript. It returns stdout, with stderr folded
+// into the error for diagnostics.
+func runJXA(params any, script string) (string, error) {
+	blob, err := json.Marshal(params)
+	if err != nil {
+		return "", fmt.Errorf("encode params: %w", err)
+	}
+	js := strings.Replace(script, "__PARAMS__", string(blob), 1)
+
+	f, err := os.CreateTemp("", "clark-calendar-*.js")
+	if err != nil {
+		return "", fmt.Errorf("temp file: %w", err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(js); err != nil {
+		f.Close()
+		return "", fmt.Errorf("write temp: %w", err)
+	}
+	f.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", f.Name())
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return string(out), fmt.Errorf("osascript: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return string(out), nil
+}
+
 func handleCalendarList(w http.ResponseWriter, r *http.Request) {
-	fromStr := r.URL.Query().Get("from")
-	toStr := r.URL.Query().Get("to")
-	from, _ := time.Parse(time.RFC3339, fromStr)
-	to, _ := time.Parse(time.RFC3339, toStr)
+	from, _ := time.Parse(time.RFC3339, r.URL.Query().Get("from"))
+	to, _ := time.Parse(time.RFC3339, r.URL.Query().Get("to"))
 	if from.IsZero() {
 		from = time.Now()
 	}
 	if to.IsZero() {
 		to = from.Add(7 * 24 * time.Hour)
 	}
-	// Language-agnostic: build dates from current date's components to avoid
-	// parsing the English literal "Monday, January 1, 2001 at 12:00:00 AM"
-	// which fails on Indonesian locale (Senin, 1 Januari ... pukul ...).
-	fromUnix := from.Unix()
-	toUnix := to.Unix()
-	script := fmt.Sprintf(`
-		set epoch to current date
-		set year of epoch to 2001
-		set month of epoch to 1
-		set day of epoch to 1
-		set hours of epoch to 0
-		set minutes of epoch to 0
-		set seconds of epoch to 0
-		set fromDate to epoch + (%d - 978307200)
-		set toDate to epoch + (%d - 978307200)
-		set out to ""
-		tell application "Calendar"
-			repeat with c in calendars
-				repeat with e in (every event of c whose start date >= fromDate and start date <= toDate)
-					set out to out & (summary of e) & "||" & ((start date of e) as «class isot» as string) & "||" & ((end date of e) as «class isot» as string) & "||" & (location of e as string) & "||" & (description of e as string) & "||" & (uid of e as string) & "\n"
-				end repeat
-			end repeat
-		end tell
-		return out
-	`, fromUnix, toUnix)
-	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+
+	out, err := runJXA(map[string]int64{"from": from.Unix(), "to": to.Unix()}, calendarListJXA)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("calendar list failed: %s: %s", err, string(out)), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("calendar list failed: %v: %s", err, out), http.StatusInternalServerError)
 		return
 	}
-	events := parseCalendarListOutput(string(out))
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"events": events})
-}
-
-func parseCalendarListOutput(out string) []calendarEvent {
-	var events []calendarEvent
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "||")
-		if len(parts) < 3 {
-			continue
-		}
-		title := strings.TrimSpace(parts[0])
-		startStr := strings.TrimSpace(parts[1])
-		endStr := strings.TrimSpace(parts[2])
-		loc := ""
-		notes := ""
-		uid := ""
-		if len(parts) > 3 {
-			loc = strings.TrimSpace(parts[3])
-		}
-		if len(parts) > 4 {
-			notes = strings.TrimSpace(parts[4])
-		}
-		if len(parts) > 5 {
-			uid = strings.TrimSpace(parts[5])
-		}
-		start, _ := time.Parse("2006-01-02T15:04:05Z07:00", startStr)
-		if start.IsZero() {
-			start, _ = time.Parse(time.RFC3339, startStr)
-		}
-		if start.IsZero() {
-			start, _ = time.Parse("Monday, January 2, 2006 at 3:04:05 PM", startStr)
-		}
-		end, _ := time.Parse("2006-01-02T15:04:05Z07:00", endStr)
-		if end.IsZero() {
-			end, _ = time.Parse(time.RFC3339, endStr)
-		}
-		if end.IsZero() {
-			end, _ = time.Parse("Monday, January 2, 2006 at 3:04:05 PM", endStr)
-		}
-		id := title + start.Format("20060102T150405")
-		if uid != "" {
-			id = uid
-		}
+	var payload struct {
+		Events []struct {
+			ID       string  `json:"id"`
+			Title    string  `json:"title"`
+			Start    float64 `json:"start"`
+			End      float64 `json:"end"`
+			Location string  `json:"location"`
+			Notes    string  `json:"notes"`
+		} `json:"events"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &payload); err != nil {
+		http.Error(w, fmt.Sprintf("calendar list: cannot parse output: %v: %q", err, out), http.StatusInternalServerError)
+		return
+	}
+	if payload.Error != "" {
+		http.Error(w, "calendar list failed: "+payload.Error, http.StatusInternalServerError)
+		return
+	}
+	events := make([]calendarEvent, 0, len(payload.Events))
+	for _, e := range payload.Events {
 		events = append(events, calendarEvent{
-			ID:       id,
-			Title:    title,
-			Start:    start.Format(time.RFC3339),
-			End:      end.Format(time.RFC3339),
-			Location: loc,
-			Notes:    notes,
+			ID:       e.ID,
+			Title:    e.Title,
+			Start:    time.Unix(int64(e.Start), 0).Format(time.RFC3339),
+			End:      time.Unix(int64(e.End), 0).Format(time.RFC3339),
+			Location: e.Location,
+			Notes:    e.Notes,
 		})
 	}
-	return events
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"events": events})
 }
 
 func handleCalendarCreate(w http.ResponseWriter, r *http.Request) {
@@ -125,34 +226,43 @@ func handleCalendarCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	start, _ := time.Parse(time.RFC3339, e.Start)
-	end, _ := time.Parse(time.RFC3339, e.End)
-	// Use epoch math for locale-agnostic dates and pick the first writable calendar
-	script := fmt.Sprintf(`
-		set epoch to current date
-		set year of epoch to 2001
-		set month of epoch to 1
-		set day of epoch to 1
-		set hours of epoch to 0
-		set minutes of epoch to 0
-		set seconds of epoch to 0
-		set startDate to epoch + (%d - 978307200)
-		set endDate to epoch + (%d - 978307200)
-		tell application "Calendar"
-			set targetCal to first calendar whose writable is true
-			if targetCal is missing value then set targetCal to first calendar
-			tell targetCal
-				make new event at end with properties {summary:"%s", start date:startDate, end date:endDate, location:"%s", description:"%s"}
-			end tell
-		end tell
-	`, start.Unix(), end.Unix(), escapeAppleScript(e.Title), escapeAppleScript(e.Location), escapeAppleScript(e.Notes))
-	if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
-		http.Error(w, fmt.Sprintf("calendar create failed: %s: %s", err, string(out)), http.StatusInternalServerError)
+	start, err := time.Parse(time.RFC3339, e.Start)
+	if err != nil {
+		http.Error(w, "invalid start time", http.StatusBadRequest)
+		return
+	}
+	end, err := time.Parse(time.RFC3339, e.End)
+	if err != nil {
+		http.Error(w, "invalid end time", http.StatusBadRequest)
+		return
+	}
+
+	out, err := runJXA(map[string]any{
+		"title":    e.Title,
+		"start":    start.Unix(),
+		"end":      end.Unix(),
+		"location": e.Location,
+		"notes":    e.Notes,
+	}, calendarCreateJXA)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("calendar create failed: %v: %s", err, out), http.StatusInternalServerError)
+		return
+	}
+	var payload struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &payload); err != nil {
+		http.Error(w, fmt.Sprintf("calendar create: cannot parse output: %v: %q", err, out), http.StatusInternalServerError)
+		return
+	}
+	if payload.Error != "" {
+		http.Error(w, "calendar create failed: "+payload.Error, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"id": e.Title + start.Format("20060102T150405")})
+	json.NewEncoder(w).Encode(map[string]string{"id": payload.ID})
 }
 
 func handleCalendarDelete(w http.ResponseWriter, r *http.Request) {
@@ -161,24 +271,29 @@ func handleCalendarDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	script := fmt.Sprintf(`
-		tell application "Calendar"
-			repeat with c in calendars
-				repeat with e in (every event of c)
-					if (uid of e as string) is "%s" or (summary of e) is "%s" then
-						delete e
-					end if
-				end repeat
-			end repeat
-		end tell
-	`, escapeAppleScript(id), escapeAppleScript(id))
-	if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
-		http.Error(w, fmt.Sprintf("delete failed: %s: %s", err, string(out)), http.StatusInternalServerError)
+
+	now := time.Now()
+	out, err := runJXA(map[string]any{
+		"id":    id,
+		"title": id,
+		"from":  now.Add(-90 * 24 * time.Hour).Unix(),
+		"to":    now.Add(270 * 24 * time.Hour).Unix(),
+	}, calendarDeleteJXA)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("calendar delete failed: %v: %s", err, out), http.StatusInternalServerError)
+		return
+	}
+	var payload struct {
+		Deleted int    `json:"deleted"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &payload); err != nil {
+		http.Error(w, fmt.Sprintf("calendar delete: cannot parse output: %v: %q", err, out), http.StatusInternalServerError)
+		return
+	}
+	if payload.Error != "" || payload.Deleted == 0 {
+		http.Error(w, "calendar delete failed: "+payload.Error, http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func escapeAppleScript(s string) string {
-	return strings.ReplaceAll(s, `"`, `\"`)
 }
