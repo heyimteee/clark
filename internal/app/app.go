@@ -25,6 +25,7 @@ import (
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/notify"
 	"github.com/heyimteee/clark/internal/ollama"
+	"github.com/heyimteee/clark/internal/scheduler"
 	"github.com/heyimteee/clark/internal/store"
 	"github.com/heyimteee/clark/internal/tools"
 	"github.com/heyimteee/clark/internal/voice"
@@ -35,9 +36,10 @@ import (
 
 // App is the composition root for a clark process.
 type App struct {
-	cfg *config.Config
-	st  *store.Store
-	ast *assistant.Service
+	cfg   *config.Config
+	st    *store.Store
+	ast   *assistant.Service
+	sched *scheduler.Scheduler
 }
 
 // New loads config, opens the store, and builds the assistant.
@@ -62,6 +64,22 @@ func New() (*App, error) {
 	registerCurrentTimeTool(ast.Tools())
 	registerProtocolsTools(ast, st)
 
+	// Scheduler: fires are master-privileged turns whose results relay to
+	// the Master over every wired channel. Built here so tools share the
+	// live instance with the web console later.
+	sched := scheduler.New(st, func(ctx context.Context, name, task string) {
+		reply, err := ast.Reply(ctx, "master@master", task, true)
+		if err != nil {
+			logging.Log("SCHED", logging.SevWarn, "FIRE", "Schedule failed", "name", name, "error", err)
+			_ = ast.RelayToMaster(ctx, fmt.Sprintf("⚠️ Schedule %q failed: %v", name, err))
+			return
+		}
+		if out := strings.TrimSpace(reply); out != "" {
+			_ = ast.RelayToMaster(ctx, fmt.Sprintf("⏰ [%s]\n%s", name, out))
+		}
+	})
+	registerScheduleTools(ast, sched)
+
 	if cfg.TavilyAPIKey != "" {
 		registerWebSearchTool(ast.Tools(), websearch.New(cfg.TavilyAPIKey))
 		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Web search enabled", "provider", "tavily")
@@ -74,7 +92,7 @@ func New() (*App, error) {
 		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Calendar enabled", "provider", "mac-bridge")
 	}
 
-	return &App{cfg: cfg, st: st, ast: ast}, nil
+	return &App{cfg: cfg, st: st, ast: ast, sched: sched}, nil
 }
 
 // registerCurrentTimeTool gives the model a clock: without it, "now" is a
@@ -393,6 +411,113 @@ func registerProtocolsTools(ast *assistant.Service, st *store.Store) {
 	)
 }
 
+// registerScheduleTools lets the Master create and manage recurring tasks:
+// "gather the news and report at 6 AM every day" becomes a cron schedule
+// fired as a master-privileged turn whose result is relayed back.
+func registerScheduleTools(ast *assistant.Service, sched *scheduler.Scheduler) {
+	ast.Tools().RegisterFunc(
+		"list_schedules",
+		"List recurring scheduled tasks with their cron spec and next run time. Only the Master may use this.",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(ctx context.Context, _ map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			rows, next, err := sched.List()
+			if err != nil {
+				return "", err
+			}
+			if len(rows) == 0 {
+				return "No schedules yet. Create one with create_schedule.", nil
+			}
+			var b strings.Builder
+			for i, sc := range rows {
+				nextStr := "—"
+				if !next[i].IsZero() {
+					nextStr = next[i].Format("2006-01-02 15:04 (-07:00)")
+				}
+				state := "enabled"
+				if !sc.Enabled {
+					state = "disabled"
+				}
+				task := sc.Task
+				if len(task) > 80 {
+					task = task[:80] + "…"
+				}
+				fmt.Fprintf(&b, "- %s | %s | %s | next: %s\n  task: %s\n", sc.Name, sc.Spec, state, nextStr, task)
+			}
+			return strings.TrimRight(b.String(), "\n"), nil
+		},
+	)
+	ast.Tools().RegisterFunc(
+		"create_schedule",
+		"Create or update a recurring scheduled task. spec is 5-field cron ('0 6 * * *' = every day 06:00 local). Omitted task/spec keep existing values on update — pause by passing enabled=false. Confirm the schedule and its next run to the Master after creating. Only the Master may use this.",
+		map[string]any{
+			"type":     "object",
+			"required": []string{"name", "spec"},
+			"properties": map[string]any{
+				"name":    map[string]any{"type": "string", "description": "Short schedule name, e.g. morning-news"},
+				"task":    map[string]any{"type": "string", "description": "The instruction executed at fire time, e.g. 'Run the morning-news protocol: gather current news and report a digest.'"},
+				"spec":    map[string]any{"type": "string", "description": "5-field cron spec in local time, e.g. '0 6 * * *'"},
+				"enabled": map[string]any{"type": "boolean", "description": "Whether the schedule runs (default true; false pauses it)"},
+			},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			name := tools.StringArg(args, "name")
+			task := tools.StringArg(args, "task")
+			spec := tools.StringArg(args, "spec")
+			if name == "" || spec == "" {
+				return "", fmt.Errorf("name and spec are required")
+			}
+			var enabled *bool
+			if _, ok := args["enabled"]; ok {
+				v := tools.BoolArg(args, "enabled")
+				enabled = &v
+			}
+			sc, err := sched.Upsert(name, task, spec, enabled)
+			if err != nil {
+				return "", err
+			}
+			state := "enabled"
+			if !sc.Enabled {
+				state = "disabled (paused)"
+			}
+			next := "—"
+			if n, err := sched.NextRun(sc.Spec); err == nil && sc.Enabled {
+				next = n.Format("2006-01-02 15:04 (-07:00)")
+			}
+			return fmt.Sprintf("Schedule %q saved (%s, %s). Next run: %s.", sc.Name, sc.Spec, state, next), nil
+		},
+	)
+	ast.Tools().RegisterFunc(
+		"delete_schedule",
+		"Delete a recurring scheduled task by name. Only the Master may use this.",
+		map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Schedule name from list_schedules"},
+			},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			name := tools.StringArg(args, "name")
+			if name == "" {
+				return "", fmt.Errorf("name is required")
+			}
+			if err := sched.Delete(name); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Schedule %q deleted.", name), nil
+		},
+	)
+}
+
 // slugifyProtocolTitle turns a protocol title into a URL-safe lookup slug:
 // lowercase alphanumerics with single dashes, trimmed, max 64 chars.
 func slugifyProtocolTitle(s string) string {
@@ -542,6 +667,18 @@ func (a *App) Run() error {
 		alerts.Relay(ctx, text)
 		return nil
 	})
+
+	// Recurring-task scheduler: start after the relay is wired so fired
+	// schedules can reach the Master immediately.
+	if a.cfg.SchedulerEnabled {
+		go func() {
+			if err := a.sched.Start(ctx); err != nil {
+				logging.Log("SCHED", logging.SevErr, "START", "Scheduler failed to start", "error", err)
+			}
+		}()
+	} else {
+		logging.Log("SCHED", logging.SevInfo, "START", "Scheduler disabled (SCHEDULER_ENABLED)")
+	}
 
 	// Calendar proactive ticker: if there are events in the next 24h, ask
 	// whether to enter Protocol Away via the LLM tool path.
