@@ -60,6 +60,7 @@ func New() (*App, error) {
 	}
 
 	registerCurrentTimeTool(ast.Tools())
+	registerProtocolsTools(ast, st)
 
 	if cfg.TavilyAPIKey != "" {
 		registerWebSearchTool(ast.Tools(), websearch.New(cfg.TavilyAPIKey))
@@ -254,6 +255,165 @@ func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 			return fmt.Sprintf("Event %s deleted.", id), nil
 		},
 	)
+}
+
+// registerProtocolsTools gives the model its self-evolving skill library:
+// load before complex tasks, save novel procedures conservatively, refine on
+// failure. Clark-origin saves relay a report to the Master — the mandatory
+// "report every new protocol" rule is enforced here in code, not only in the
+// prompt.
+func registerProtocolsTools(ast *assistant.Service, st *store.Store) {
+	list := func(ctx context.Context, _ map[string]any) (string, error) {
+		if err := masterOnlyForTool(ctx, ast); err != nil {
+			return "", err
+		}
+		protocols, err := st.ListProtocols()
+		if err != nil {
+			return "", err
+		}
+		if len(protocols) == 0 {
+			return "No protocols saved yet. Save one with save_protocol after solving a reusable task.", nil
+		}
+		var b strings.Builder
+		for _, p := range protocols {
+			fmt.Fprintf(&b, "- %s — %s (v%d · used %d× · %s)\n", p.Slug, p.Title, p.Version, p.UseCount, p.Origin)
+		}
+		return strings.TrimRight(b.String(), "\n"), nil
+	}
+	ast.Tools().RegisterFunc(
+		"list_protocols",
+		"List saved skill protocols (reusable step-by-step procedures). Check this before starting any complex multi-step task. Only the Master may use this.",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		list,
+	)
+	ast.Tools().RegisterFunc(
+		"load_protocol",
+		"Load the full step-by-step body of a skill protocol by slug. Follow the steps when executing the matching task. Only the Master may use this.",
+		map[string]any{
+			"type":     "object",
+			"required": []string{"slug"},
+			"properties": map[string]any{
+				"slug": map[string]any{"type": "string", "description": "Protocol slug from list_protocols, e.g. morning-news-digest"},
+			},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			slug := tools.StringArg(args, "slug")
+			if slug == "" {
+				return "", fmt.Errorf("slug is required")
+			}
+			p, err := st.GetProtocol(slug)
+			if err != nil {
+				return "", err
+			}
+			if err := st.TouchProtocol(p.ID); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Protocol %q (v%d, used %d×):\n\n%s", p.Slug, p.Version, p.UseCount+1, p.Body), nil
+		},
+	)
+	ast.Tools().RegisterFunc(
+		"save_protocol",
+		"Save or update a skill protocol: a concise numbered step-by-step procedure for a recurring task. Updating an existing slug bumps its version. Pass origin='clark' when you save on your own initiative (you must then report it to the Master in your reply); origin='master' when the Master explicitly asked. Only the Master may use this.",
+		map[string]any{
+			"type":     "object",
+			"required": []string{"title", "body"},
+			"properties": map[string]any{
+				"title":   map[string]any{"type": "string", "description": "Short protocol title, e.g. Morning News Digest"},
+				"body":    map[string]any{"type": "string", "description": "Concise numbered markdown steps (max 8KB)"},
+				"purpose": map[string]any{"type": "string", "description": "One-line summary of what this protocol achieves"},
+				"origin":  map[string]any{"type": "string", "description": "'clark' if self-initiated, 'master' if explicitly requested", "enum": []string{"master", "clark"}},
+			},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			title := tools.StringArg(args, "title")
+			body := tools.StringArg(args, "body")
+			purpose := tools.StringArg(args, "purpose")
+			origin := tools.StringArg(args, "origin")
+			if title == "" || body == "" {
+				return "", fmt.Errorf("title and body are required")
+			}
+			slug := slugifyProtocolTitle(title)
+			if len(slug) < 2 {
+				return "", fmt.Errorf("title must contain at least two letters or digits")
+			}
+			if len(body) > 8<<10 {
+				return "", fmt.Errorf("protocol body is %d bytes, max is %d", len(body), 8<<10)
+			}
+			p, err := st.UpsertProtocol(store.Protocol{Slug: slug, Title: title, Body: body, Origin: origin})
+			if err != nil {
+				return "", err
+			}
+			if origin == "clark" {
+				report := fmt.Sprintf("📓 New protocol saved: %s (%s) — %s", p.Title, p.Slug, purpose)
+				if err := ast.RelayToMaster(ctx, report); err != nil {
+					return fmt.Sprintf("Protocol %q saved (version %d), but the report to the Master failed: %v", p.Slug, p.Version, err), nil
+				}
+				return fmt.Sprintf("Protocol %q saved (version %d) and reported to the Master.", p.Slug, p.Version), nil
+			}
+			return fmt.Sprintf("Protocol %q saved (version %d).", p.Slug, p.Version), nil
+		},
+	)
+	ast.Tools().RegisterFunc(
+		"delete_protocol",
+		"Delete a skill protocol by id or slug. Only the Master may use this.",
+		map[string]any{
+			"type":     "object",
+			"required": []string{"id"},
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "Protocol id or slug"},
+			},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnlyForTool(ctx, ast); err != nil {
+				return "", err
+			}
+			raw := tools.StringArg(args, "id")
+			if raw == "" {
+				return "", fmt.Errorf("id is required")
+			}
+			id, convErr := strconv.ParseInt(raw, 10, 64)
+			if convErr != nil {
+				p, err := st.GetProtocol(raw)
+				if err != nil {
+					return "", err
+				}
+				id = p.ID
+			}
+			if err := st.DeleteProtocol(id); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Protocol %s deleted.", raw), nil
+		},
+	)
+}
+
+// slugifyProtocolTitle turns a protocol title into a URL-safe lookup slug:
+// lowercase alphanumerics with single dashes, trimmed, max 64 chars.
+func slugifyProtocolTitle(s string) string {
+	var b strings.Builder
+	dash := true
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			dash = false
+			continue
+		}
+		if !dash {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 64 {
+		out = strings.Trim(out[:64], "-")
+	}
+	return out
 }
 
 func masterOnlyForTool(ctx context.Context, _ *assistant.Service) error {

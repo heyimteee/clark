@@ -375,6 +375,16 @@ func (s *Service) SetAwaySender(fn func(ctx context.Context, text string) error)
 	s.awaySender = fn
 }
 
+// RelayToMaster pushes a system-originated notice to the Master over every
+// wired channel (WhatsApp self, iMessage self, web broadcast). Nil-safe so
+// callers in degraded deployments degrade instead of panicking.
+func (s *Service) RelayToMaster(ctx context.Context, text string) error {
+	if s.awaySender == nil {
+		return fmt.Errorf("no master relay wired")
+	}
+	return s.awaySender(ctx, text)
+}
+
 // triggerAwayDigest runs a tool-backed LLM summarization of what happened
 // while status was ON (away). It lets the model call view_all_history /
 // view_history to gather evidence, then delivers the digest dual-channel.
