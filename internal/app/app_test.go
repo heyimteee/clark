@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/heyimteee/clark/internal/assistant"
+	"github.com/heyimteee/clark/internal/calendar"
 	"github.com/heyimteee/clark/internal/ollama"
 	"github.com/heyimteee/clark/internal/store"
 
@@ -165,4 +167,58 @@ func (s *stubLLM) Chat(_ context.Context, _ []ollama.Message, _ []ollama.Tool) (
 }
 func (s *stubLLM) ChatStream(ctx context.Context, m []ollama.Message, tools []ollama.Tool, fn func(string)) (*ollama.ChatResult, error) {
 	return s.Chat(ctx, m, tools)
+}
+
+func TestFormatCalendarEvent(t *testing.T) {
+	zone := time.FixedZone("WIB", 7*3600)
+	tests := []struct {
+		name string
+		ev   calendar.Event
+		want string
+	}{
+		{
+			name: "timed event same day",
+			ev: calendar.Event{
+				ID: "abc-1", Title: "Standup",
+				Start: time.Date(2026, 9, 2, 9, 0, 0, 0, zone),
+				End:   time.Date(2026, 9, 2, 9, 30, 0, 0, zone),
+			},
+			want: "- Standup [id:abc-1] | 2026-09-02 09:00 → 09:30",
+		},
+		{
+			name: "timed event crosses midnight",
+			ev: calendar.Event{
+				ID: "abc-2", Title: "New year",
+				Start: time.Date(2026, 12, 31, 21, 0, 0, 0, zone),
+				End:   time.Date(2027, 1, 1, 2, 0, 0, 0, zone),
+			},
+			want: "- New year [id:abc-2] | 2026-12-31 21:00 → 2027-01-01 02:00",
+		},
+		{
+			name: "all day event",
+			ev: calendar.Event{
+				ID: "abc-3", Title: "pay ram", AllDay: true,
+				Start: time.Date(2026, 9, 1, 0, 0, 0, 0, zone),
+				End:   time.Date(2026, 9, 1, 23, 59, 59, 0, zone),
+			},
+			want: "- pay ram [id:abc-3] (all day) | 2026-09-01",
+		},
+		{
+			name: "location appended",
+			ev: calendar.Event{
+				ID: "abc-4", Title: "Class",
+				Start:    time.Date(2026, 9, 2, 7, 0, 0, 0, zone),
+				End:      time.Date(2026, 9, 2, 9, 30, 0, 0, zone),
+				Location: "F3.9A",
+			},
+			want: "- Class [id:abc-4] | 2026-09-02 07:00 → 09:30 @ F3.9A",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatCalendarEvent(tt.ev); got != tt.want {
+				t.Errorf("formatCalendarEvent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

@@ -17,6 +17,7 @@ type calendarEvent struct {
 	Title    string `json:"title"`
 	Start    string `json:"start"`
 	End      string `json:"end"`
+	AllDay   bool   `json:"allDay,omitempty"`
 	Location string `json:"location,omitempty"`
 	Notes    string `json:"notes,omitempty"`
 }
@@ -192,6 +193,7 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 			Title    string  `json:"title"`
 			Start    float64 `json:"start"`
 			End      float64 `json:"end"`
+			AllDay   bool    `json:"allDay"`
 			Location string  `json:"location"`
 			Notes    string  `json:"notes"`
 		} `json:"events"`
@@ -212,6 +214,7 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 			Title:    e.Title,
 			Start:    time.Unix(int64(e.Start), 0).Format(time.RFC3339),
 			End:      time.Unix(int64(e.End), 0).Format(time.RFC3339),
+			AllDay:   e.AllDay,
 			Location: e.Location,
 			Notes:    e.Notes,
 		})

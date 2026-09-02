@@ -138,13 +138,13 @@ func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 	client := calendar.NewMacosClient(baseURL, token)
 	ast.Tools().RegisterFunc(
 		"add_calendar_event",
-		"Add an event to the Master's calendar. Triggered by 'add to calendar ...', 'schedule ...', 'create event ...'. Only the Master may use this.",
+		"Add an event to the Master's calendar. Triggered by 'add to calendar ...', 'schedule ...', 'create event ...'. Call current_time first and emit start/end RFC3339 with the offset it reports (e.g. 2026-09-03T12:00:00+07:00); never use 'Z' unless the Master means UTC. Only the Master may use this.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"title":    map[string]any{"type": "string", "description": "Event title"},
-				"start":    map[string]any{"type": "string", "description": "Start time as RFC3339, e.g. 2026-09-01T10:00:00+07:00"},
-				"end":      map[string]any{"type": "string", "description": "End time as RFC3339"},
+				"start":    map[string]any{"type": "string", "description": "Start time as RFC3339 with offset, e.g. 2026-09-01T10:00:00+07:00"},
+				"end":      map[string]any{"type": "string", "description": "End time as RFC3339 with offset; must be after start"},
 				"location": map[string]any{"type": "string", "description": "Optional location"},
 				"notes":    map[string]any{"type": "string", "description": "Optional notes"},
 			},
@@ -168,6 +168,9 @@ func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 			if err != nil {
 				return "", fmt.Errorf("invalid end time: %w", err)
 			}
+			if !end.After(start) {
+				return "", fmt.Errorf("end (%s) must be after start (%s)", endStr, startStr)
+			}
 			e := calendar.Event{Title: title, Start: start, End: end, Location: tools.StringArg(args, "location"), Notes: tools.StringArg(args, "notes")}
 			id, err := client.Create(ctx, e)
 			if err != nil {
@@ -178,12 +181,12 @@ func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 	)
 	ast.Tools().RegisterFunc(
 		"list_calendar_events",
-		"List upcoming calendar events. Triggered by 'what's on my calendar', 'show my events', 'list events'. Only the Master may use this.",
+		"List calendar events overlapping a window. Triggered by 'what's on my calendar', 'show my events', 'list events'. Call current_time first to anchor 'now' and emit from/to RFC3339 with the offset it reports. from defaults to start of today, to defaults to 7 days later. The [id:...] in each row is what delete_calendar_event expects. Only the Master may use this.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"from":  map[string]any{"type": "string", "description": "Optional start time as RFC3339, defaults to start of today"},
-				"to":    map[string]any{"type": "string", "description": "Optional end time as RFC3339, defaults to 7 days from start"},
+				"from":  map[string]any{"type": "string", "description": "Optional start time as RFC3339 with offset, defaults to start of today"},
+				"to":    map[string]any{"type": "string", "description": "Optional end time as RFC3339 with offset, defaults to 7 days from start"},
 				"limit": map[string]any{"type": "integer", "description": "Optional max events to show"},
 			},
 		},
@@ -221,10 +224,7 @@ func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 			}
 			var b strings.Builder
 			for _, e := range events {
-				fmt.Fprintf(&b, "- %s: %s to %s", e.Title, e.Start.Format("2006-01-02 15:04"), e.End.Format("15:04"))
-				if e.Location != "" {
-					fmt.Fprintf(&b, " @ %s", e.Location)
-				}
+				b.WriteString(formatCalendarEvent(e))
 				b.WriteString("\n")
 			}
 			return b.String(), nil
@@ -232,7 +232,7 @@ func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 	)
 	ast.Tools().RegisterFunc(
 		"delete_calendar_event",
-		"Delete a calendar event by ID or title. Triggered by 'delete event ...', 'cancel my meeting ...', 'remove event ...'. Only the Master may use this.",
+		"Delete a calendar event by the [id:...] shown by list_calendar_events, or by exact title. Triggered by 'delete event ...', 'cancel my meeting ...', 'remove event ...'. Only the Master may use this.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -261,6 +261,29 @@ func masterOnlyForTool(ctx context.Context, _ *assistant.Service) error {
 		return fmt.Errorf("forbidden: only the Master may use this tool")
 	}
 	return nil
+}
+
+// formatCalendarEvent renders one event row for the model: the [id:...] is
+// what delete_calendar_event expects, all-day events skip meaningless
+// 00:00–23:59 times, and an end on a different day carries its full date
+// instead of a bare clock time.
+func formatCalendarEvent(e calendar.Event) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "- %s [id:%s]", e.Title, e.ID)
+	if e.AllDay {
+		fmt.Fprintf(&b, " (all day) | %s", e.Start.Format("2006-01-02"))
+	} else {
+		fmt.Fprintf(&b, " | %s", e.Start.Format("2006-01-02 15:04"))
+		if sameDay := e.End.Year() == e.Start.Year() && e.End.YearDay() == e.Start.YearDay(); sameDay {
+			fmt.Fprintf(&b, " → %s", e.End.Format("15:04"))
+		} else {
+			fmt.Fprintf(&b, " → %s", e.End.Format("2006-01-02 15:04"))
+		}
+	}
+	if e.Location != "" {
+		fmt.Fprintf(&b, " @ %s", e.Location)
+	}
+	return b.String()
 }
 
 // Close releases the underlying store.

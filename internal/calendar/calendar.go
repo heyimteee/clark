@@ -10,6 +10,7 @@ type Event struct {
 	Title    string    `json:"title"`
 	Start    time.Time `json:"start"`
 	End      time.Time `json:"end"`
+	AllDay   bool      `json:"allDay,omitempty"`
 	Location string    `json:"location,omitempty"`
 	Notes    string    `json:"notes,omitempty"`
 }
