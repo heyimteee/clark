@@ -323,23 +323,29 @@
             '</div>' +
           "</section>" +
           '<section id="protocols" class="hidden">' +
-            '<h2 class="section-title">Protocols</h2>' +
-            '<p class="sub">Skill protocols clark loads before complex tasks — edit or prune them.</p>' +
+            '<div class="section-head"><h2 class="section-title">Protocols <span class="count-chip" id="protocol-count">0</span></h2>' +
+            '<p class="sub">Step-by-step procedures clark saves and follows. He reports every protocol he creates himself.</p></div>' +
             '<div id="protocol-list" class="protocol-list"></div>' +
             '<div class="proto-form card">' +
               '<h3>new protocol</h3>' +
-              '<input id="proto-title" class="input" placeholder="Title, e.g. Morning News Digest">' +
-              '<textarea id="proto-body" class="input" rows="5" placeholder="1. …&#10;2. …"></textarea>' +
+              '<label class="field"><span class="lbl">title</span>' +
+              '<input id="proto-title" class="input" placeholder="Morning News Digest"></label>' +
+              '<label class="field"><span class="lbl">steps</span>' +
+              '<textarea id="proto-body" class="input" rows="5" placeholder="1. gather sources&#10;2. summarise&#10;3. report"></textarea></label>' +
               '<button class="btn primary" id="proto-add">save protocol</button>' +
             '</div>' +
-            '<h2 class="section-title">Schedules</h2>' +
-            '<p class="sub">Recurring tasks clark runs as you, cron spec in local time.</p>' +
+            '<div class="section-head"><h2 class="section-title">Schedules <span class="count-chip" id="schedule-count">0</span></h2>' +
+            '<p class="sub">Recurring tasks clark runs as you, on cron. He confirms the next run when he creates one.</p></div>' +
             '<div id="schedule-list" class="schedule-list"></div>' +
             '<div class="proto-form card">' +
               '<h3>new schedule</h3>' +
-              '<input id="sched-name" class="input" placeholder="Name, e.g. morning-news">' +
-              '<input id="sched-spec" class="input" placeholder="Cron spec, e.g. 0 6 * * *">' +
-              '<textarea id="sched-task" class="input" rows="3" placeholder="Instruction clark executes at fire time…"></textarea>' +
+              '<label class="field"><span class="lbl">name</span>' +
+              '<input id="sched-name" class="input" placeholder="morning-news"></label>' +
+              '<label class="field"><span class="lbl">cron spec</span>' +
+              '<input id="sched-spec" class="input mono" placeholder="0 6 * * *">' +
+              '<span class="field-hint">5 fields, local time — <code>0 6 * * *</code> = every day at 06:00</span></label>' +
+              '<label class="field"><span class="lbl">task</span>' +
+              '<textarea id="sched-task" class="input" rows="3" placeholder="Run the morning-news protocol: gather current news and report a digest."></textarea></label>' +
               '<button class="btn primary" id="sched-add">save schedule</button>' +
             '</div>' +
           "</section>" +
@@ -866,7 +872,50 @@
 
   /* ---------------- protocols + schedules ---------------- */
 
+  // armDelete: first tap arms the button ("confirm?") for 3s; the second tap
+  // actually fires. Returns true only when the tap should proceed.
+  function armDelete(btn) {
+    if (btn.dataset.armed === "1") return true;
+    btn.dataset.armed = "1";
+    if (!btn.dataset.orig) btn.dataset.orig = btn.textContent;
+    btn.textContent = "confirm?";
+    btn.classList.add("armed");
+    setTimeout(function () {
+      if (!btn.isConnected || btn.dataset.armed !== "1") return;
+      btn.dataset.armed = "";
+      btn.textContent = btn.dataset.orig;
+      btn.classList.remove("armed");
+    }, 3000);
+    return false;
+  }
+
+  // humanizeCron renders common 5-field specs in plain words; unknown
+  // patterns return "" and the raw spec stands alone.
+  function humanizeCron(spec) {
+    const p = (spec || "").trim().split(/\s+/);
+    if (p.length !== 5) return "";
+    const min = p[0], hr = p[1], dom = p[2], mon = p[3], dow = p[4];
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const hhmm = function (h, m) { return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0"); };
+    if (/^\d+$/.test(min) && /^\d+$/.test(hr) && dom === "*" && mon === "*" && dow === "*") {
+      return "daily at " + hhmm(hr, min);
+    }
+    if (min === "0" && /^\d+$/.test(hr) && dom === "*" && mon === "*" && /^\d+$/.test(dow)) {
+      return days[+dow % 7] + " at " + hhmm(hr, min);
+    }
+    if (min.startsWith("*/") && hr === "*" && dom === "*" && mon === "*" && dow === "*") {
+      return "every " + min.slice(2) + " min";
+    }
+    if (min === "0" && hr.startsWith("*/") && dom === "*" && mon === "*" && dow === "*") {
+      return "every " + hr.slice(2) + " h";
+    }
+    return "";
+  }
+
   async function refreshProtocols() {
+    // Never wipe an in-progress edit: the websocket fires *_changed on any
+    // save anywhere, and a blind re-render would destroy the draft.
+    if (document.querySelector(".proto-card.proto-editing")) return;
     try {
       const data = await api("/web/api/protocols");
       renderProtocols(data.protocols || []);
@@ -877,50 +926,74 @@
     }
   }
 
+  function originChip(origin) {
+    return origin === "clark"
+      ? '<span class="origin-chip clark">clark</span>'
+      : '<span class="origin-chip">master</span>';
+  }
+
   function renderProtocols(protocols) {
     const list = $("#protocol-list");
+    const count = $("#protocol-count");
+    if (count) count.textContent = String(protocols.length);
     if (!protocols.length) {
-      list.innerHTML = '<div class="todo-empty">No protocols yet — clark saves them as he learns.</div>';
+      list.innerHTML = '<div class="empty-state"><strong>No protocols yet.</strong><br>' +
+        "After Clark solves something reusable, tell him <em>save that as a protocol</em> — " +
+        "it lands here, and he follows it next time.</div>";
       return;
     }
     list.innerHTML = protocols.map(function (p) {
-      const meta = "v" + p.version + " · used " + p.use_count + "× · " + (p.origin === "clark" ? "clark" : "master");
       return (
         '<div class="proto-card card" data-id="' + p.id + '">' +
           '<div class="proto-head">' +
-            '<div><span class="proto-title">' + esc(p.title) + '</span><span class="proto-meta">' + meta + '</span></div>' +
+            '<div class="proto-heading">' +
+              '<span class="proto-title">' + esc(p.title) + "</span>" +
+              originChip(p.origin) +
+              '<span class="proto-meta">v' + p.version + " · used " + p.use_count + "×</span>" +
+            "</div>" +
             '<div class="proto-actions">' +
               '<button class="btn proto-edit" data-id="' + p.id + '">edit</button>' +
               '<button class="btn proto-del" data-id="' + p.id + '">delete</button>' +
-            '</div>' +
-          '</div>' +
-          '<div class="proto-slug">' + esc(p.slug) + '</div>' +
-          '<textarea class="input proto-body hidden" data-id="' + p.id + '" rows="6">' + esc(p.body) + '</textarea>' +
+            "</div>" +
+          "</div>" +
+          '<div class="proto-slug">' + esc(p.slug) + "</div>" +
+          '<pre class="proto-view">' + esc(p.body) + "</pre>" +
+          '<textarea class="input proto-body-input hidden" data-id="' + p.id + '" rows="8" aria-label="Protocol body for ' + esc(p.title) + '">' + esc(p.body) + "</textarea>" +
           '<button class="btn primary proto-save hidden" data-id="' + p.id + '">save changes</button>' +
-        '</div>'
+        "</div>"
       );
     }).join("");
     list.querySelectorAll(".proto-edit").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        const id = btn.dataset.id;
         const card = btn.closest(".proto-card");
-        card.querySelector(".proto-body").classList.toggle("hidden");
-        card.querySelector(".proto-save").classList.toggle("hidden");
+        const editing = card.classList.toggle("proto-editing");
+        btn.textContent = editing ? "cancel" : "edit";
+        const ta = card.querySelector(".proto-body-input");
+        if (editing) {
+          ta.value = card.querySelector(".proto-view").textContent;
+          ta.classList.remove("hidden");
+          card.querySelector(".proto-save").classList.remove("hidden");
+          ta.focus();
+        } else {
+          ta.classList.add("hidden");
+          card.querySelector(".proto-save").classList.add("hidden");
+        }
       });
     });
     list.querySelectorAll(".proto-save").forEach(function (btn) {
       btn.addEventListener("click", function () {
         const id = btn.dataset.id;
         const card = btn.closest(".proto-card");
-        const body = card.querySelector(".proto-body");
+        const body = card.querySelector(".proto-body-input").value;
         const title = card.querySelector(".proto-title").textContent;
-        api("/web/api/protocols/" + id, { method: "PUT", body: JSON.stringify({ title: title, body: body.value }) })
+        api("/web/api/protocols/" + id, { method: "PUT", body: JSON.stringify({ title: title, body: body }) })
           .then(function () { toast("protocol saved"); refreshProtocols(); })
           .catch(function (err) { toast(err.message); });
       });
     });
     list.querySelectorAll(".proto-del").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        if (!armDelete(btn)) return;
         api("/web/api/protocols/" + btn.dataset.id, { method: "DELETE" })
           .then(function () { refreshProtocols(); })
           .catch(function (err) { toast(err.message); });
@@ -930,25 +1003,35 @@
 
   function renderSchedules(schedules) {
     const list = $("#schedule-list");
+    const count = $("#schedule-count");
+    if (count) count.textContent = String(schedules.length);
     if (!schedules.length) {
-      list.innerHTML = '<div class="todo-empty">No schedules — ask clark to create one.</div>';
+      list.innerHTML = '<div class="empty-state"><strong>No schedules.</strong><br>' +
+        "Ask Clark: <em>gather the news and report to me every day at 6 AM</em> — " +
+        "he creates the cron schedule himself.</div>";
       return;
     }
     list.innerHTML = schedules.map(function (sc) {
-      const next = sc.next_run ? new Date(sc.next_run).toLocaleString() : "—";
+      const human = humanizeCron(sc.spec);
+      const next = sc.next_run ? new Date(sc.next_run).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+      const last = sc.last_run_at ? new Date(sc.last_run_at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "never";
+      const state = sc.enabled ? '<span class="origin-chip on">running</span>' : '<span class="origin-chip">paused</span>';
       return (
         '<div class="sched-row card" data-name="' + esc(sc.name) + '">' +
           '<div class="proto-head">' +
-            '<div><span class="proto-title">' + esc(sc.name) + '</span>' +
-            '<span class="proto-meta">' + esc(sc.spec) + ' · ' + (sc.enabled ? "enabled" : "paused") + '</span></div>' +
+            '<div class="proto-heading">' +
+              '<span class="proto-title">' + esc(sc.name) + "</span>" +
+              state +
+              '<span class="proto-meta mono">' + esc(sc.spec) + (human ? " · " + esc(human) : "") + "</span>" +
+            "</div>" +
             '<div class="proto-actions">' +
-              '<button class="btn sched-toggle" data-name="' + esc(sc.name) + '" data-enabled="' + (sc.enabled ? "1" : "0") + '">' + (sc.enabled ? "pause" : "resume") + '</button>' +
+              '<button class="btn sched-toggle" data-name="' + esc(sc.name) + '" data-enabled="' + (sc.enabled ? "1" : "0") + '">' + (sc.enabled ? "pause" : "resume") + "</button>" +
               '<button class="btn sched-del" data-name="' + esc(sc.name) + '">delete</button>' +
-            '</div>' +
-          '</div>' +
-          '<div class="proto-slug">next: ' + esc(next) + '</div>' +
-          '<div class="sched-task">' + esc(sc.task || "") + '</div>' +
-        '</div>'
+            "</div>" +
+          "</div>" +
+          '<div class="sched-when">next <span>' + esc(next) + "</span><span class='dot-sep'>·</span>last <span>" + esc(last) + "</span></div>" +
+          '<div class="sched-task">' + esc(sc.task || "") + "</div>" +
+        "</div>"
       );
     }).join("");
     list.querySelectorAll(".sched-toggle").forEach(function (btn) {
@@ -961,6 +1044,7 @@
     });
     list.querySelectorAll(".sched-del").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        if (!armDelete(btn)) return;
         api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "DELETE" })
           .then(function () { refreshProtocols(); })
           .catch(function (err) { toast(err.message); });
