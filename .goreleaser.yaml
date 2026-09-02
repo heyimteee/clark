@@ -42,7 +42,7 @@ brews:
       owner: heyimteee
       name: homebrew-tap
       token: '{{ .Env.GITHUB_TOKEN }}'
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/heyimteee/clark"
     description: "Personal AI butler for WhatsApp, iMessage and the web"
     license: "MIT"
