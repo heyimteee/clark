@@ -214,6 +214,18 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`},
 		{"meeting_notes_jid_idx", `CREATE INDEX IF NOT EXISTS idx_meeting_notes_jid ON meeting_notes(jid, id)`},
+		{"protocols", `CREATE TABLE IF NOT EXISTS protocols (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			slug TEXT NOT NULL UNIQUE,
+			title TEXT NOT NULL,
+			body TEXT NOT NULL,
+			origin TEXT NOT NULL DEFAULT 'master',
+			version INTEGER NOT NULL DEFAULT 1,
+			use_count INTEGER NOT NULL DEFAULT 0,
+			last_used_at DATETIME,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`},
 		{"chat_history_ts_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp ON chat_history(timestamp)`},
 		{"chat_history_jid_ts_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_jid_timestamp ON chat_history(jid, timestamp)`},
 	}
