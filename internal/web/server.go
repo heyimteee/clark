@@ -173,7 +173,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("GET /web/api/logs", s.handleLogsWS)
 
 	s.mux.HandleFunc("/web/api/", s.handleAPI404)
-	s.mux.Handle("/web/static/", http.StripPrefix("/web/static/", http.FileServer(http.FS(staticSubFS))))
+	s.mux.Handle("/web/static/", noCache(http.StripPrefix("/web/static/", http.FileServer(http.FS(staticSubFS)))))
 	if s.affirmations != "" {
 		// Pre-rendered voice clips (wake-word affirmations, "Processing, Sir.").
 		// Served like static assets: tiny, non-sensitive, cacheable. Files only
