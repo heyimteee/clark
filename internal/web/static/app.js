@@ -99,7 +99,7 @@
     // wipe a live conversation. The greeting is seeded once at boot.
     const tag = $("#env-tag") || $(".env-tag");
     if (tag && state && state.version) {
-      const ver = String(state.version);
+      const ver = String(state.version).split("-")[0]; // tag only, drop describe suffix
       tag.textContent = (ver.charAt(0) === "v" ? ver : "v" + ver) + " console";
     }
     captureState();
