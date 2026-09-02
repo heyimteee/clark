@@ -31,7 +31,20 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "console assets unavailable", http.StatusInternalServerError)
 		return
 	}
+	// no-cache: embedded assets carry no validators (no mod time), so without
+	// an explicit policy browsers heuristically cache stale JS forever.
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// noCache forces revalidation on every request. Embedded files expose no
+// Last-Modified/ETag, so permissive caching would pin old assets on clients
+// across deploys.
+func noCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		next.ServeHTTP(w, r)
+	})
 }
