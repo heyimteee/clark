@@ -237,6 +237,7 @@
             '<div class="card tile-access"><h2>Access</h2><p class="sub">tools per contact</p>' +
               '<select id="vip-picker" class="input"></select>' +
               '<div id="access-list"></div>' +
+              '<div id="access-pager"></div>' +
             "</div>" +
             '<div class="card tile-vips"><h2>VIPs</h2><p class="sub">people who reach clark</p>' +
               '<div class="vip-head-row">' +
@@ -289,6 +290,7 @@
                 '<button class="btn primary" type="submit">add</button>' +
               "</form>" +
               '<div class="todo-list" id="todo-list"></div>' +
+              '<div id="todo-pager"></div>' +
             "</div>" +
             '<div class="card tile-calendar"><h2>Calendar</h2><p class="sub">upcoming — precise, calm, authoritative</p>' +
               '<form id="calendar-form" class="todo-form">' +
@@ -451,7 +453,7 @@
 
     $("#btn-vip-add").addEventListener("click", addVIP);
     $("#btn-vip-bulk").addEventListener("click", addVIPBulk);
-    $("#vip-picker").addEventListener("change", renderAccess);
+    $("#vip-picker").addEventListener("change", function () { accessPage = 0; renderAccess(); });
     $("#btn-testtts").addEventListener("click", testTTS);
     $("#voice-toggle").addEventListener("change", onVoiceToggle);
     $("#alert-mode-toggle").addEventListener("change", onAlertModeToggle);
@@ -628,10 +630,18 @@
 
     if (!vip) {
       list.innerHTML = '<div class="a-row a-row-empty">pick a vip</div>';
+      renderPager($("#access-pager"), [], 0, function () {});
       return;
     }
     const grants = vip.access || [];
-    list.innerHTML = tools.map(function (t) {
+    const pagerEl = $("#access-pager");
+    const pages = Math.ceil(tools.length / PAGE_SIZE);
+    if (accessPage > pages - 1) accessPage = 0;
+    const visible = pages > 1 ? tools.slice(accessPage * PAGE_SIZE, (accessPage + 1) * PAGE_SIZE) : tools;
+    const labels = [];
+    for (let i = 0; i < pages; i++) labels.push(String(i + 1));
+    renderPager(pagerEl, labels, accessPage, function (i) { accessPage = i; renderAccess(); });
+    list.innerHTML = visible.map(function (t) {
       const name = t && t.name ? t.name : String(t);
       const on = grants.indexOf(name) !== -1;
       return '<div class="a-row"><span class="a-name">' + esc(name) + "</span>" +
@@ -726,11 +736,19 @@
     const count = $("#todo-count");
     const open = todos.filter(function (t) { return t.status === "open"; }).length;
     count.textContent = open + " open";
+    const pagerEl = $("#todo-pager");
     if (!todos.length) {
       list.innerHTML = '<div class="todo-empty">No todos yet — add one above</div>';
+      renderPager(pagerEl, [], 0, function () {});
       return;
     }
-    list.innerHTML = todos.map(function (t) {
+    const pages = Math.ceil(todos.length / PAGE_SIZE);
+    if (todoPage > pages - 1) todoPage = 0;
+    const visible = pages > 1 ? todos.slice(todoPage * PAGE_SIZE, (todoPage + 1) * PAGE_SIZE) : todos;
+    const labels = [];
+    for (let i = 0; i < pages; i++) labels.push(String(i + 1));
+    renderPager(pagerEl, labels, todoPage, function (i) { todoPage = i; refreshTodos(); });
+    list.innerHTML = visible.map(function (t) {
       const closed = t.status === "closed" || t.status === "done";
       const prio = t.priority || 0;
       const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
@@ -1124,6 +1142,10 @@
 
   let calDays = []; // [{key,label,short,items}] — exactly the 7 window days
   let calPage = 0;
+
+  let todoPage = 0;
+  let accessPage = 0;
+  const PAGE_SIZE = 8;
 
   function renderCalendar(events) {
     const list = $("#calendar-list");
