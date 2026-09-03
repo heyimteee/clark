@@ -131,8 +131,9 @@ func registerWebSearchTool(reg *tools.Registry, st *store.Store, client *websear
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query":       map[string]any{"type": "string", "description": "The search query"},
-				"max_results": map[string]any{"type": "integer", "description": "How many results to fetch (default 5)"},
+				"query":        map[string]any{"type": "string", "description": "The search query"},
+				"max_results":  map[string]any{"type": "integer", "description": "How many results to fetch (default 5)"},
+				"search_depth": map[string]any{"type": "string", "description": "basic for quick facts, advanced for article-level links (news digests, research citations)"},
 			},
 			"required": []string{"query"},
 		},
@@ -145,7 +146,7 @@ func registerWebSearchTool(reg *tools.Registry, st *store.Store, client *websear
 			if maxResults < 1 || maxResults > 10 {
 				maxResults = 5
 			}
-			results, err := client.Search(ctx, query, maxResults)
+			results, err := client.SearchDepth(ctx, query, maxResults, tools.StringArg(args, "search_depth"))
 			if err != nil {
 				return "", err
 			}

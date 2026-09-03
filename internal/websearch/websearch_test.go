@@ -100,3 +100,29 @@ func readAll(t *testing.T, r interface{ Read([]byte) (int, error) }) string {
 	}
 	return b.String()
 }
+
+func TestSearchDepth(t *testing.T) {
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = readAll(t, r.Body)
+		json.NewEncoder(w).Encode(searchResponse{})
+	}))
+	defer server.Close()
+
+	c := NewWithEndpoint("tvly-test", server.URL)
+	if _, err := c.SearchDepth(context.Background(), "ai news", 3, "advanced"); err != nil {
+		t.Fatalf("SearchDepth: %v", err)
+	}
+	if !strings.Contains(gotBody, `"search_depth":"advanced"`) {
+		t.Errorf("body missing advanced depth: %s", gotBody)
+	}
+
+	for _, junk := range []string{"", "deep", "ADVANCED"} {
+		if _, err := c.SearchDepth(context.Background(), "ai news", 3, junk); err != nil {
+			t.Fatalf("SearchDepth(%q): %v", junk, err)
+		}
+		if !strings.Contains(gotBody, `"search_depth":"basic"`) {
+			t.Errorf("SearchDepth(%q) should fall back to basic: %s", junk, gotBody)
+		}
+	}
+}
