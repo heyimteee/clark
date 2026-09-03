@@ -84,7 +84,8 @@ func New(version string) (*App, error) {
 	registerScheduleTools(ast, sched)
 
 	if cfg.TavilyAPIKey != "" {
-		registerWebSearchTool(ast.Tools(), websearch.New(cfg.TavilyAPIKey))
+		registerWebSearchTool(ast.Tools(), st, websearch.New(cfg.TavilyAPIKey))
+		registerRecentLinksTool(ast.Tools(), st)
 		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Web search enabled", "provider", "tavily")
 	} else {
 		logging.Log("CLARK", logging.SevWarn, "TOOLS", "Web search disabled", "reason", "no TAVILY_API_KEY in .env")
@@ -123,10 +124,10 @@ func registerCurrentTimeTool(reg *tools.Registry) {
 	)
 }
 
-func registerWebSearchTool(reg *tools.Registry, client *websearch.Client) {
+func registerWebSearchTool(reg *tools.Registry, st *store.Store, client *websearch.Client) {
 	reg.RegisterFunc(
 		"web_search",
-		"Search the web for current information and return concise, sourced results. Use whenever the answer needs up-to-date facts — news, weather, prices, sports scores, or anything the Master asks to 'google', 'look up', 'find out', or 'check'.",
+		"Search the web for current information and return concise, sourced results. Use whenever the answer needs up-to-date facts — news, weather, prices, sports scores, or anything the Master asks to 'google', 'look up', 'find out', or 'check'. Links are saved per conversation for 48h and recallable via recent_links.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -151,11 +152,89 @@ func registerWebSearchTool(reg *tools.Registry, client *websearch.Client) {
 			if len(results) == 0 {
 				return "No results found.", nil
 			}
-			return websearch.Format(results), nil
+			if st != nil {
+				jid := tools.Sender(ctx)
+				if jid == "" {
+					jid = "web"
+				}
+				pairs := make([][2]string, 0, len(results))
+				for _, r := range results {
+					pairs = append(pairs, [2]string{r.Title, r.URL})
+				}
+				// Best-effort: a store hiccup must never break a search.
+				if err := st.RecordCitations(jid, query, pairs); err != nil {
+					logging.Log("CLARK", logging.SevWarn, "RESEARCH", "Failed to record citations", "error", err)
+				}
+			}
+			return websearch.Format(results) + fmt.Sprintf("\n\n(%d links saved — use recent_links to recall their URLs.)", len(results)), nil
 		},
 	)
 }
 
+// registerRecentLinksTool lets the model recall the URLs past web searches
+// returned in this conversation. The archive is ephemeral: rows expire 48h
+// after recording and each conversation keeps at most 200.
+func registerRecentLinksTool(reg *tools.Registry, st *store.Store) {
+	reg.RegisterFunc(
+		"recent_links",
+		"List URLs from past web_search calls in this conversation (newest first), with the query they came from and their age. Use when the Master asks for a link, a source, or 'where did you read that'. Links expire 48h after saving. Only the Master may use this.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "Optional filter matching title, URL, or original query"},
+				"limit": map[string]any{"type": "integer", "description": "Max links to show (default 10)"},
+			},
+		},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if !tools.IsMaster(ctx) {
+				return "", fmt.Errorf("forbidden: only the Master may use this tool")
+			}
+			if st == nil {
+				return "", fmt.Errorf("research archive unavailable")
+			}
+			jid := tools.Sender(ctx)
+			if jid == "" {
+				jid = "web"
+			}
+			rows, err := st.ListCitations(jid, tools.StringArg(args, "query"), tools.IntArg(args, "limit", 10))
+			if err != nil {
+				return "", err
+			}
+			if len(rows) == 0 {
+				return "No saved links in this conversation. Run a web_search first — links are kept for 48h.", nil
+			}
+			var b strings.Builder
+			for _, c := range rows {
+				title := c.Title
+				if title == "" {
+					title = c.URL
+				}
+				fmt.Fprintf(&b, "- %s — %s (from %q, %s)\n", title, c.URL, c.Query, citationAge(c.CreatedAt))
+			}
+			return strings.TrimRight(b.String(), "\n"), nil
+		},
+	)
+}
+
+// citationAge renders a stored-at timestamp as a short relative age.
+func citationAge(t time.Time) string {
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Hour:
+		m := int(d / time.Minute)
+		if m < 1 {
+			return "just now"
+		}
+		return fmt.Sprintf("%dm ago", m)
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d/time.Hour))
+	default:
+		return fmt.Sprintf("%dd ago", int(d/(24*time.Hour)))
+	}
+}
 func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
 	client := calendar.NewMacosClient(baseURL, token)
 	ast.Tools().RegisterFunc(
