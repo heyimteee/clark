@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
-	"os"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +15,11 @@ import (
 	"github.com/heyimteee/clark/internal/store"
 
 	"github.com/heyimteee/clark/internal/config"
+	"github.com/heyimteee/clark/internal/tools"
 	"github.com/heyimteee/clark/internal/voice"
+	"github.com/heyimteee/clark/internal/websearch"
+	"os"
+	"strings"
 )
 
 // voiceFixture writes fake whisper runner/model and piper daemon/voice files
@@ -220,5 +226,65 @@ func TestFormatCalendarEvent(t *testing.T) {
 				t.Errorf("formatCalendarEvent() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWebSearchRecordsAndRecentLinks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{
+			{"title": "Paris", "url": "https://example.com/paris", "content": "Paris is the capital."},
+			{"title": "Lyon", "url": "https://example.com/lyon", "content": "Lyon is a city."},
+		}})
+	}))
+	defer server.Close()
+
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	reg := tools.NewRegistry()
+	registerWebSearchTool(reg, st, websearch.NewWithEndpoint("tvly-test", server.URL))
+	ctx := tools.WithSender(context.Background(), "master@master")
+
+	out, err := reg.Execute(ctx, "web_search", []byte(`{"query":"france cities","max_results":2}`))
+	if err != nil {
+		t.Fatalf("web_search: %v", err)
+	}
+	if !strings.Contains(out, "recent_links") {
+		t.Fatalf("result missing teaching line: %q", out)
+	}
+	rows, err := st.ListCitations("master@master", "", 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("recorded: %v len=%d", err, len(rows))
+	}
+
+	registerRecentLinksTool(reg, st)
+	masterCtx := tools.WithMaster(tools.WithSender(context.Background(), "master@master"))
+	listed, err := reg.Execute(masterCtx, "recent_links", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("recent_links: %v", err)
+	}
+	if !strings.Contains(listed, "https://example.com/paris") {
+		t.Fatalf("links missing: %q", listed)
+	}
+
+	// VIPs are refused.
+	vipCtx := tools.WithSender(context.Background(), "someone@vip")
+	if _, err := reg.Execute(vipCtx, "recent_links", []byte(`{}`)); err == nil {
+		t.Fatal("recent_links should refuse non-master")
+	}
+}
+
+func TestCitationAge(t *testing.T) {
+	if got := citationAge(time.Now()); got != "just now" {
+		t.Fatalf("now = %q", got)
+	}
+	if got := citationAge(time.Now().Add(-90 * time.Minute)); got != "1h ago" {
+		t.Fatalf("90m = %q", got)
+	}
+	if got := citationAge(time.Now().Add(-30 * time.Hour)); got != "1d ago" {
+		t.Fatalf("30h = %q", got)
 	}
 }
