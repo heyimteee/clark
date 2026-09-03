@@ -1111,6 +1111,33 @@ label.field .lbl {
   margin-top: 12px;
 }
 
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 0 12px;
+}
+
+.pager-tab {
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.pager-tab.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.pager-btn {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
 .calendar-day {
   display: flex;
   flex-direction: column;

@@ -1095,49 +1095,96 @@
     }
   }
 
+  // renderPager: shared list pager (calendar days, todo pages, tool pages).
+  // labels[] is one tab per page; page is the active index. onPage(i)
+  // re-renders content only — no refetch. Tabs are native buttons, so the
+  // row is keyboard-operable; arrows move pages when focus is inside.
+  function renderPager(el, labels, page, onPage) {
+    if (!el) return;
+    if (labels.length <= 1) { el.innerHTML = ""; return; }
+    el.innerHTML = '<button class="btn pager-btn" data-p="prev" aria-label="previous page">‹</button>' +
+      labels.map(function (l, i) {
+        return '<button class="btn pager-tab' + (i === page ? " active" : "") + '" data-p="' + i + '"' +
+          (i === page ? ' aria-current="page"' : "") + ">" + esc(l) + "</button>";
+      }).join("") +
+      '<button class="btn pager-btn" data-p="next" aria-label="next page">›</button>';
+    el.querySelectorAll("button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const p = btn.dataset.p;
+        if (p === "prev") onPage((page + labels.length - 1) % labels.length);
+        else if (p === "next") onPage((page + 1) % labels.length);
+        else onPage(+p);
+      });
+    });
+    el.onkeydown = function (e) {
+      if (e.key === "ArrowLeft") { e.preventDefault(); onPage((page + labels.length - 1) % labels.length); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); onPage((page + 1) % labels.length); }
+    };
+  }
+
+  let calDays = []; // [{key,label,short,items}] — exactly the 7 window days
+  let calPage = 0;
+
   function renderCalendar(events) {
     const list = $("#calendar-list");
     if (!events.length) {
+      calDays = [];
       list.innerHTML = '<div class="empty-state"><strong>Nothing scheduled this week.</strong><br>' +
         "Add an event above, or ask Clark in chat — <em>what's on my calendar?</em></div>";
       return;
     }
-    const dayLabels = {};
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const byDay = {};
+    events.forEach(function (e) {
+      const s = new Date(e.start);
+      const key = s.getFullYear() + "-" + String(s.getMonth() + 1).padStart(2, "0") + "-" + String(s.getDate()).padStart(2, "0");
+      (byDay[key] = byDay[key] || []).push(e);
+    });
+    calDays = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(today.getTime() + i * 86400000);
       const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-      const label = i === 0 ? "Today" : i === 1 ? "Tomorrow" :
-        d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
-      dayLabels[key] = label;
+      calDays.push({
+        key: key,
+        label: i === 0 ? "Today" : i === 1 ? "Tomorrow" :
+          d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }),
+        short: i === 0 ? "Today" : i === 1 ? "Tom." :
+          d.toLocaleDateString([], { weekday: "short", day: "numeric" }),
+        items: byDay[key] || [],
+      });
     }
-    const groups = [];
-    let currentDay = null;
-    events.forEach(function (e) {
-      const start = new Date(e.start);
-      const key = start.getFullYear() + "-" + String(start.getMonth() + 1).padStart(2, "0") + "-" + String(start.getDate()).padStart(2, "0");
-      if (key !== currentDay) {
-        currentDay = key;
-        groups.push({ label: dayLabels[key] || start.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }), items: [] });
-      }
-      groups[groups.length - 1].items.push(e);
-    });
-    list.innerHTML = groups.map(function (g) {
-      const rows = g.items.map(function (e) {
-        const s = new Date(e.start);
-        const t = e.allDay ? "all day" :
-          s.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "–" +
-          new Date(e.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        return '<div class="calendar-event">' +
-          '<span class="calendar-event-title">' + esc(e.title) + (e.location ? '<span class="calendar-event-loc">@ ' + esc(e.location) + "</span>" : "") + "</span>" +
-          '<span class="calendar-event-time">' + esc(t) + "</span>" +
-          "</div>";
-      }).join("");
-      return '<div class="calendar-day"><div class="calendar-day-label">' + esc(g.label) + "</div>" + rows + "</div>";
-    }).join("");
+    if (calPage < 0 || calPage > 6) calPage = 0;
+    renderCalPage();
   }
 
+  function renderCalPage() {
+    const list = $("#calendar-list");
+    if (!calDays.length) {
+      list.innerHTML = '<div class="empty-state"><strong>Nothing scheduled this week.</strong><br>' +
+        "Add an event above, or ask Clark in chat — <em>what's on my calendar?</em></div>";
+      return;
+    }
+    const g = calDays[calPage];
+    let html = '<div id="cal-pager" role="navigation" aria-label="calendar days"></div>';
+    html += '<div class="calendar-day"><div class="calendar-day-label">' + esc(g.label) + "</div>";
+    html += g.items.length ? g.items.map(function (e) {
+      const s = new Date(e.start);
+      const t = e.allDay ? "all day" :
+        s.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "–" +
+        new Date(e.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return '<div class="calendar-event">' +
+        '<span class="calendar-event-title">' + esc(e.title) + (e.location ? '<span class="calendar-event-loc">@ ' + esc(e.location) + "</span>" : "") + "</span>" +
+        '<span class="calendar-event-time">' + esc(t) + "</span>" +
+        "</div>";
+    }).join("") : '<div class="todo-empty">Nothing scheduled this day.</div>';
+    html += "</div>";
+    list.innerHTML = html;
+    renderPager($("#cal-pager"), calDays.map(function (d) { return d.short; }), calPage, function (i) {
+      calPage = i;
+      renderCalPage();
+    });
+  }
   async function addCalendarEvent(e) {
     e.preventDefault();
     const title = $("#calendar-title").value.trim();
