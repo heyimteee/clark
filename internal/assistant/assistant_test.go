@@ -1849,3 +1849,92 @@ func TestServiceFollowUpNoBoilerplate(t *testing.T) {
 		t.Error("follow-up turn still greeted as a new visitor")
 	}
 }
+
+func TestHintSatisfiedManagementFamily(t *testing.T) {
+	ran := map[string]bool{"set_status": true}
+	tests := []struct {
+		name string
+		hint string
+		ran  map[string]bool
+		want bool
+	}{
+		{"status claim backed by set_status", "set_status", ran, true},
+		{"context claim backed by family", "set_context", ran, true},
+		{"vip claim backed by family", "add_vip or delete_vip", ran, true},
+		{"generic management hint backed by family", "the appropriate management tool", ran, true},
+		{"protocol claim backed by family", "save_protocol", ran, true},
+		{"access claim backed by family", "set_access", ran, true},
+		{"send claim not backed by management", "send_message", ran, false},
+		{"search claim not backed by family", "web_search", map[string]bool{"save_protocol": true}, false},
+		{"send backed by sibling transport", "send_message", map[string]bool{"send_imessage": true}, true},
+		{"state backed by state", "get_state", map[string]bool{"get_state": true}, true},
+		{"state not backed by family", "get_state", ran, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hintSatisfied(tt.hint, tt.ran); got != tt.want {
+				t.Errorf("hintSatisfied(%q, %v) = %v, want %v", tt.hint, tt.ran, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMoonScenarioMultiActionAccepted reproduces the Moon Protocol turn: four
+// management actions executed, then a claim-flavoured success reply. The reply
+// must be accepted — no nudges, no couldNotActMessage.
+func TestMoonScenarioMultiActionAccepted(t *testing.T) {
+	s, _, fake := newService(t)
+	if err := s.AddVIP("6281267858909, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	jid := "master@master"
+	fake.results = []*ollama.ChatResult{
+		{ToolCalls: []ollama.ToolCall{
+			{ID: "call_1", Function: ollama.ToolCallFunc{Name: "set_context", Arguments: json.RawMessage(`{"text":"going to sleep"}`)}},
+			{ID: "call_2", Function: ollama.ToolCallFunc{Name: "set_status", Arguments: json.RawMessage(`{"on":true}`)}},
+			{ID: "call_3", Function: ollama.ToolCallFunc{Name: "set_status", Arguments: json.RawMessage(`{"on":false,"recipient":"Tiara"}`)}},
+		}},
+		{Content: "It shall be done, Sir. Tiara is now silenced, and the house is awake."},
+	}
+	const moonMsg = "im going to sleep, make context for it, turn status on for everyone EXCEPT for my girlfriend\n\nsave it as a moons protocol check"
+	got, err := s.Reply(context.Background(), jid, moonMsg, true)
+	if err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if strings.Contains(got, "Kindly") {
+		t.Fatalf("multi-action success wrongly refused: %q", got)
+	}
+	if !strings.Contains(got, "silenced") {
+		t.Fatalf("Reply = %q, want the model content accepted", got)
+	}
+}
+
+// TestNudgeExhaustionListsResults guards the claim-gap path: a 'sent' claim
+// with no send tool executed must still nudge, but the fallback after
+// exhaustion must list what actually ran — never couldNotActMessage.
+func TestNudgeExhaustionListsResults(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "master@master"
+	s.Tools().RegisterFunc("send_message", "send", map[string]any{"type": "object"}, func(_ context.Context, _ map[string]any) (string, error) {
+		return "sent", nil
+	})
+	// fakeLLM never shifts a single-item script; spell out every round.
+	claim := &ollama.ChatResult{Content: "The message has been delivered, Sir."}
+	fake.results = []*ollama.ChatResult{
+		{ToolCalls: []ollama.ToolCall{
+			{ID: "call_1", Function: ollama.ToolCallFunc{Name: "set_context", Arguments: json.RawMessage(`{"text":"going to sleep"}`)}},
+		}},
+		claim, claim, claim, claim,
+	}
+	fake.always = claim
+	got, err := s.Reply(context.Background(), jid, "set my context and tell Tiara goodnight", true)
+	if err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if strings.Contains(got, "Kindly _repeat your request_") {
+		t.Fatalf("exhaustion with executed tools wrongly demanded repetition: %q", got)
+	}
+	if !strings.Contains(got, "Done, Sir") || !strings.Contains(got, "set_context") {
+		t.Fatalf("Reply = %q, want a results summary", got)
+	}
+}

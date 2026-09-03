@@ -61,6 +61,17 @@ const iterationLimitMessage = "I have reached the limit of tool calls for this i
 // demanded action; the request must be repeated rather than resumed.
 const couldNotActMessage = "I beg your pardon, Sir, but I could not perform that action just now. Kindly _repeat your request_ and I shall try again at once."
 
+// completedSummary builds a truthful record of what actually executed when
+// the model failed to produce a final answer after acting. Asking the Master
+// to repeat a completed action is worse than any phrasing, so this list of
+// real tool results replaces couldNotActMessage whenever tools ran.
+func completedSummary(results []string) string {
+	if len(results) == 0 {
+		return ""
+	}
+	return "Done, Sir — here is exactly what has been carried out:\n- " + strings.Join(results, "\n- ")
+}
+
 // tooSlowMessage is returned when a turn exceeds maxTurnDuration.
 func (s *Service) tooSlowMessage() string {
 	return fmt.Sprintf("My apologies, Sir, but the %s lines are running slow tonight. Kindly _repeat your request_ and I shall try again with haste.", s.palaceName)
@@ -1144,6 +1155,7 @@ func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Messa
 
 	requestTools := toOllamaTools(available)
 	ranTools := make(map[string]bool)
+	var ranResults []string
 	nudges := 0
 	var lastThinking string
 	for round := 0; round < maxToolRounds; round++ {
@@ -1175,9 +1187,19 @@ func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Messa
 				return result.Content, lastThinking, nil, nil
 			}
 			if nudges >= maxNudges {
+				if summary := completedSummary(ranResults); summary != "" {
+					return summary, lastThinking, nil, nil
+				}
 				return couldNotActMessage, lastThinking, nil, nil
 			}
 			nudges++
+			ran := make([]string, 0, len(ranTools))
+			for name := range ranTools {
+				ran = append(ran, name)
+			}
+			sort.Strings(ran)
+			logging.Log("TOOLS", logging.SevWarn, "NUDGE", "Model narrated without a satisfied action hint",
+				"hint", hint, "nudge", nudges, "executed", strings.Join(ran, ","))
 			messages = append(messages, ollama.Message{Role: "assistant", Content: result.Content})
 			messages = append(messages, ollama.Message{Role: "system", Content: nudgeFor(hint)})
 			continue
@@ -1196,6 +1218,7 @@ func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Messa
 				logging.Log("TOOLS", logging.SevInfo, "TRIGGER", "Tool result", "tool", tc.Function.Name, "result", preview)
 			}
 			ranTools[tc.Function.Name] = true
+			ranResults = append(ranResults, tc.Function.Name+": "+logging.Brief(out, 120))
 			messages = append(messages, ollama.Message{Role: "tool", Content: out})
 		}
 	}
@@ -1311,6 +1334,7 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 
 	requestTools := toOllamaTools(available)
 	ranTools := make(map[string]bool)
+	var ranResults []string
 	nudges := 0
 	var lastThinking string
 	for round := 0; round < maxToolRounds; round++ {
@@ -1335,9 +1359,19 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 				return result.Content, lastThinking, nil, nil
 			}
 			if nudges >= maxNudges {
+				if summary := completedSummary(ranResults); summary != "" {
+					return summary, lastThinking, nil, nil
+				}
 				return couldNotActMessage, lastThinking, nil, nil
 			}
 			nudges++
+			ran := make([]string, 0, len(ranTools))
+			for name := range ranTools {
+				ran = append(ran, name)
+			}
+			sort.Strings(ran)
+			logging.Log("TOOLS", logging.SevWarn, "NUDGE", "Model narrated without a satisfied action hint",
+				"hint", hint, "nudge", nudges, "executed", strings.Join(ran, ","))
 			messages = append(messages, ollama.Message{Role: "assistant", Content: result.Content})
 			messages = append(messages, ollama.Message{Role: "system", Content: nudgeFor(hint)})
 			continue
@@ -1357,6 +1391,7 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 				logging.Log("TOOLS", logging.SevInfo, "TRIGGER", "Tool result", "tool", tc.Function.Name, "result", preview)
 			}
 			ranTools[tc.Function.Name] = true
+			ranResults = append(ranResults, tc.Function.Name+": "+logging.Brief(out, 120))
 			messages = append(messages, ollama.Message{Role: "tool", Content: out})
 		}
 	}
@@ -1537,6 +1572,12 @@ func (s *Service) guessTools(userMsg string, available []tools.Tool) []string {
 // hintSatisfied reports whether the tool category a hint names already ran in
 // this iteration, in which case a follow-up summary should not be nudged.
 func hintSatisfied(hint string, ran map[string]bool) bool {
+	// Management claims are satisfied at family level: a multi-action command
+	// legitimately spreads across set_status/set_context/VIP/protocol tools,
+	// so any ledger action having run backs a management-flavoured claim.
+	managementRan := ran["set_status"] || ran["set_context"] || ran["add_vip"] ||
+		ran["delete_vip"] || ran["set_access"] || ran["save_protocol"] ||
+		ran["delete_protocol"]
 	switch hint {
 	case "send_message":
 		return ran["send_message"] || ran["send_imessage"] || ran["relay_to_master"]
@@ -1544,24 +1585,14 @@ func hintSatisfied(hint string, ran map[string]bool) bool {
 		return ran["relay_to_master"] || ran["send_message"] || ran["send_imessage"]
 	case "web_search":
 		return ran["web_search"]
-	case "set_status":
-		return ran["set_status"]
-	case "set_context":
-		return ran["set_context"]
-	case "add_vip or delete_vip":
-		return ran["add_vip"] || ran["delete_vip"]
-	case "set_access":
-		return ran["set_access"]
+	case "set_status", "set_context", "add_vip or delete_vip", "set_access",
+		"save_protocol", "delete_protocol", "the appropriate management tool":
+		return managementRan
 	case "get_state":
 		return ran["get_state"]
 	default:
-		for _, n := range []string{"set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state"} {
-			if ran[n] {
-				return true
-			}
-		}
+		return managementRan
 	}
-	return false
 }
 
 // isRefusal reports whether a reply declined to answer rather than answering.
