@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -230,7 +231,10 @@ func TestFormatCalendarEvent(t *testing.T) {
 }
 
 func TestWebSearchRecordsAndRecentLinks(t *testing.T) {
+	var gotBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		gotBody = string(buf)
 		json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{
 			{"title": "Paris", "url": "https://example.com/paris", "content": "Paris is the capital."},
 			{"title": "Lyon", "url": "https://example.com/lyon", "content": "Lyon is a city."},
@@ -254,6 +258,16 @@ func TestWebSearchRecordsAndRecentLinks(t *testing.T) {
 	}
 	if !strings.Contains(out, "recent_links") {
 		t.Fatalf("result missing teaching line: %q", out)
+	}
+
+	if !strings.Contains(gotBody, `"search_depth":"basic"`) {
+		t.Fatalf("default depth should be basic: %s", gotBody)
+	}
+	if _, err := reg.Execute(ctx, "web_search", []byte(`{"query":"ai news","search_depth":"advanced"}`)); err != nil {
+		t.Fatalf("web_search advanced: %v", err)
+	}
+	if !strings.Contains(gotBody, `"search_depth":"advanced"`) {
+		t.Fatalf("advanced depth not passed through: %s", gotBody)
 	}
 	rows, err := st.ListCitations("master@master", "", 10)
 	if err != nil || len(rows) != 2 {

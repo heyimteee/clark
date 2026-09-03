@@ -53,20 +53,30 @@ type searchResponse struct {
 	Results []Result `json:"results"`
 }
 
-// Search performs a web search and returns up to maxResults hits.
+// Search performs a basic-depth web search and returns up to maxResults hits.
 func (c *Client) Search(ctx context.Context, query string, maxResults int) ([]Result, error) {
+	return c.SearchDepth(ctx, query, maxResults, "basic")
+}
+
+// SearchDepth performs a web search at the given depth. "advanced" returns
+// more relevant, usually article-level results at a higher credit cost;
+// anything else falls back to "basic".
+func (c *Client) SearchDepth(ctx context.Context, query string, maxResults int, depth string) ([]Result, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, fmt.Errorf("empty search query")
 	}
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("Tavily API key is not set")
 	}
+	if depth != "advanced" {
+		depth = "basic"
+	}
 
 	body, err := json.Marshal(searchRequest{
 		APIKey:      c.apiKey,
 		Query:       query,
 		MaxResults:  maxResults,
-		SearchDepth: "basic",
+		SearchDepth: depth,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode search request: %w", err)
