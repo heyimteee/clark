@@ -429,3 +429,21 @@ func TestHandlerEmptyTextDropped(t *testing.T) {
 		t.Fatalf("sent %d messages, want 0", len(msgr.sentTo))
 	}
 }
+
+func TestHandlerClarkEchoDropped(t *testing.T) {
+	msgr := &fakeMessenger{self: testSelf}
+	butler := &fakeButler{enabled: true}
+	h := newTestHandler(msgr, butler)
+
+	h.Handle(Message{ID: "echo1", Sender: testSelf, Chat: testSelf, Text: "`🤵🏻‍♂️[CLARK]`\nAt once, Sir.", IsSelf: true})
+	h.Handle(Message{ID: "echo2", Sender: testVIP, Chat: testVIP, Text: "🤵🏻‍♂️[CLARK]\n\nAt once."})
+	h.Handle(Message{ID: "human1", Sender: testSelf, Chat: testSelf, Text: "the bot said 🤵🏻‍♂️[CLARK] earlier, noted", IsSelf: true})
+	h.Close()
+
+	if len(butler.replied) != 1 {
+		t.Fatalf("butler replied %d times, want 1 (only the mid-text quote)", len(butler.replied))
+	}
+	if butler.replied[0] != "the bot said 🤵🏻‍♂️[CLARK] earlier, noted" {
+		t.Errorf("quoted message mangled to %q", butler.replied[0])
+	}
+}

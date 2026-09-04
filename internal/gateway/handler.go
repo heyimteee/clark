@@ -96,6 +96,20 @@ func (h *Handler) Handle(msg Message) {
 		h.evictDedup()
 	}
 
+	// Clark-echo filter (#136): Clark sends through the Master's own number /
+	// handle, so his branded output can loop back as inbound (missed echo ID
+	// after a restart, redelivery, bridge mirror). A leading 🤵🏻‍♂️[CLARK]
+	// prefix proves it is HIS text, not the Master's — drop it before gating,
+	// history, or the model so it is never saved as a human message nor
+	// answered. Mid-text quotes do not match (see IsClarkEcho).
+	if IsClarkEcho(msg.Text) {
+		logging.Log(h.component, logging.SevInfo, "MESSAGE", "Clark echo dropped; branded output looped back, not a human message",
+			"id", msg.ID, "chat", msg.Chat, "from", msg.Sender, "self", msg.IsSelf,
+			"preview", logging.Brief(msg.Text, 80),
+			"next", "no reply sent; original reply already stored as assistant history")
+		return
+	}
+
 	relation, isVIP := h.butler.Relation(msg.Sender)
 
 	// The Master's own chat is always trusted (whether clark is enabled or the
