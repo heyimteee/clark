@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -445,5 +446,41 @@ func TestHandlerClarkEchoDropped(t *testing.T) {
 	}
 	if butler.replied[0] != "the bot said 🤵🏻‍♂️[CLARK] earlier, noted" {
 		t.Errorf("quoted message mangled to %q", butler.replied[0])
+	}
+}
+
+func TestApologyForNamesStage(t *testing.T) {
+	for _, stage := range []string{"reading your command", "crafting my reply"} {
+		got := apologyFor(stage)
+		if !strings.Contains(got, stage) {
+			t.Errorf("apologyFor(%q) = %q, want stage named", stage, got)
+		}
+		if !strings.Contains(got, "try again") {
+			t.Errorf("apologyFor(%q) = %q, want retry hint", stage, got)
+		}
+	}
+	if got := apologyFor(""); !strings.Contains(got, "answering you") {
+		t.Errorf("apologyFor(empty) = %q, want default stage", got)
+	}
+}
+
+func TestMediaAckMessageDescriptive(t *testing.T) {
+	cases := []struct {
+		media string
+		want  []string
+	}{
+		{"image", []string{"image", "caption"}},
+		{"video", []string{"video", "caption"}},
+		{"audio", []string{"audio", "text"}},
+		{"mystery-kind", []string{"mystery-kind"}},
+		{"", []string{"empty"}},
+	}
+	for _, c := range cases {
+		got := mediaAckMessage(c.media)
+		for _, w := range c.want {
+			if !strings.Contains(strings.ToLower(got), strings.ToLower(w)) {
+				t.Errorf("mediaAckMessage(%q) = %q, want %q", c.media, got, w)
+			}
+		}
 	}
 }

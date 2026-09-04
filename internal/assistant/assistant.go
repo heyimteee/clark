@@ -916,16 +916,16 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	ctx = tools.WithSender(ctx, senderJID)
 
 	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("save inbound message from %s: %w", senderJID, err)
 	}
 
 	history, err := s.history.RecentMessages(senderJID, s.historyLimit)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("load recent history for %s (limit %d): %w", senderJID, s.historyLimit, err)
 	}
 
 	if len(history) == 0 {
-		return "", "", fmt.Errorf("no chat history available")
+		return "", "", fmt.Errorf("no chat history available for %s", senderJID)
 	}
 
 	// Resume a paused iteration when the sender says "continue".
@@ -1053,14 +1053,14 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	}
 	ctx = tools.WithSender(ctx, senderJID)
 	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("save inbound message from %s: %w", senderJID, err)
 	}
 	history, err := s.history.RecentMessages(senderJID, s.historyLimit)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("load recent history for %s (limit %d): %w", senderJID, s.historyLimit, err)
 	}
 	if len(history) == 0 {
-		return "", "", fmt.Errorf("no chat history available")
+		return "", "", fmt.Errorf("no chat history available for %s", senderJID)
 	}
 
 	if it := s.pendingIteration(senderJID); it != nil {
@@ -1225,10 +1225,12 @@ func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Messa
 	return "", lastThinking, messages, nil
 }
 
-// saveReply persists an assistant reply and returns it.
+// saveReply persists an assistant reply and returns it. A persist failure is
+// wrapped with the sender so the gateway log names whose reply was lost
+// instead of surfacing a bare store error.
 func (s *Service) saveReply(senderJID, reply string) (string, error) {
 	if err := s.history.SaveMessage(senderJID, "assistant", reply); err != nil {
-		return "", err
+		return "", fmt.Errorf("save assistant reply for %s: %w", senderJID, err)
 	}
 	return reply, nil
 }

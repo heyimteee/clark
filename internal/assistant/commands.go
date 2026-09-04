@@ -65,7 +65,7 @@ func (s *Service) Prehandle(senderJID, userMsg string, isSelf bool) (string, boo
 		return reply, ok, err
 	}
 	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("save inbound message from %s: %w", senderJID, err)
 	}
 	if _, err := s.saveReply(senderJID, reply); err != nil {
 		return "", false, err

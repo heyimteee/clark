@@ -88,7 +88,9 @@ func (h *Handler) Handle(msg Message) {
 		h.dedupMu.Lock()
 		if _, seen := h.dedup[msg.ID]; seen {
 			h.dedupMu.Unlock()
-			logging.Log(h.component, logging.SevInfo, "DEDUP", "Duplicate message dropped", "id", msg.ID)
+			logging.Log(h.component, logging.SevInfo, "DEDUP", "Duplicate message dropped; already processed within dedup window",
+				"id", msg.ID, "chat", msg.Chat, "from", msg.Sender,
+				"next", "no reply sent; original delivery stands")
 			return
 		}
 		h.dedup[msg.ID] = time.Now()
@@ -117,11 +119,17 @@ func (h *Handler) Handle(msg Message) {
 	// with wake/context/VIP commands. Everyone else must be an enabled VIP in a
 	// private chat.
 	if !msg.IsSelf && (!h.butler.EnabledFor(msg.Sender) || !isVIP || msg.IsGroup) {
+		logging.Log(h.component, logging.SevInfo, "GATE", "Message ignored by gating rule; not eligible for a reply",
+			"chat", msg.Chat, "from", msg.Sender, "self", msg.IsSelf, "group", msg.IsGroup,
+			"enabled_for_sender", h.butler.EnabledFor(msg.Sender), "is_vip", isVIP,
+			"next", "enable Clark for this sender or check VIP list / group rule")
 		return
 	}
 
 	logging.Log(h.component, logging.SevInfo, "RECEIVED", "Message received",
-		"from", msg.Sender, "self", msg.IsSelf, "group", msg.IsGroup)
+		"id", msg.ID, "chat", msg.Chat,
+		"from", msg.Sender, "self", msg.IsSelf, "group", msg.IsGroup,
+		"preview", logging.Brief(msg.Text, 80))
 
 	if msg.Text == "" {
 		if len(msg.Media) > 0 {
@@ -132,12 +140,18 @@ func (h *Handler) Handle(msg Message) {
 			ctx := context.Background()
 			reply := mediaAckMessage(msg.MediaType)
 			if err := h.msgr.Send(ctx, msg.Chat, reply); err != nil {
-				logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send media ack", "to", msg.Chat, "error", err)
+				logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send media ack; sender got no acknowledgement for unprocessable media",
+					"to", msg.Chat, "from", msg.Sender, "media", msg.MediaType, "error", err,
+					"next", "check transport connection, then ask sender to resend with a caption")
+			} else {
+				logging.Log(h.component, logging.SevInfo, "MESSAGE", "Media message acked; asked sender for a caption",
+					"media", msg.MediaType, "from", msg.Sender, "to", msg.Chat)
 			}
-			logging.Log(h.component, logging.SevInfo, "MESSAGE", "Media message acked", "media", msg.MediaType, "from", msg.Sender)
 			return
 		} else {
-			logging.Log(h.component, logging.SevWarn, "MESSAGE", "Message discarded", "reason", "no text content")
+			logging.Log(h.component, logging.SevWarn, "MESSAGE", "Message discarded; no text and no media to answer",
+				"id", msg.ID, "chat", msg.Chat, "from", msg.Sender,
+				"next", "sender must resend with text or a captioned attachment")
 			return
 		}
 	}
@@ -152,7 +166,11 @@ func (h *Handler) Handle(msg Message) {
 	if h.bypassRe.MatchString(msg.Text) {
 		if !h.alertAllowed(msg.Chat) {
 			if err := h.msgr.Send(ctx, msg.Chat, "_One moment._ I have only just alerted the Master — he has heard you."); err != nil {
-				logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send cooldown reply", "to", msg.Chat, "error", err)
+				logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send alert-cooldown reply; sender got no cooldown notice",
+					"to", msg.Chat, "from", msg.Sender, "error", err)
+			} else {
+				logging.Log(h.component, logging.SevInfo, "ALERT", "Alert cooldown held; repeat bypass suppressed",
+					"chat", msg.Chat, "from", msg.Sender)
 			}
 			return
 		}
@@ -162,12 +180,19 @@ func (h *Handler) Handle(msg Message) {
 
 	// Fast path: deterministic commands answered with hardcoded messages.
 	if reply, handled, err := h.butler.Prehandle(msg.Sender, msg.Text, msg.IsSelf); err != nil {
-		logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "Prehandle error", "error", err)
-		h.msgr.Send(ctx, msg.Chat, apologyMessage)
+		logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "Prehandle failed while reading the command; sending apology",
+			"chat", msg.Chat, "from", msg.Sender, "preview", logging.Brief(msg.Text, 80), "error", err,
+			"next", "sender should repeat the command; check assistant store health")
+		if serr := h.msgr.Send(ctx, msg.Chat, apologyFor("reading your command")); serr != nil {
+			logging.Log(h.component, logging.SevErr, "SEND", "Failed to send prehandle apology; sender got no failure notice",
+				"to", msg.Chat, "error", serr, "cause", err)
+		}
 		return
 	} else if handled {
 		if err := h.msgr.Send(ctx, msg.Chat, reply); err != nil {
-			logging.Log(h.component, logging.SevErr, "SEND", "Failed to send fast reply", "to", msg.Chat, "error", err)
+			logging.Log(h.component, logging.SevErr, "SEND", "Failed to send fast-path reply; command ran but answer was lost",
+				"to", msg.Chat, "from", msg.Sender, "preview", logging.Brief(reply, 80), "error", err,
+				"next", "check transport connection; sender may repeat the command")
 		}
 		return
 	}
@@ -177,10 +202,12 @@ func (h *Handler) Handle(msg Message) {
 	// Master gets the "one moment" ack; VIPs get nothing until the reply.
 	if msg.IsSelf {
 		if err := h.msgr.Send(ctx, msg.Chat, ackMaster); err != nil {
-			logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send ack", "to", msg.Chat, "error", err)
+			logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send master ack; reply still queued in background",
+				"to", msg.Chat, "error", err, "next", "check transport connection")
 		}
 	}
 	h.disp.enqueue(inbound{
+		id:        msg.ID,
 		chat:      msg.Chat,
 		senderJID: msg.Sender,
 		userMsg:   msg.Text,
@@ -192,34 +219,48 @@ func (h *Handler) Handle(msg Message) {
 // --- background dispatcher -------------------------------------------------
 
 const (
-	ackMaster      = "_One moment, Sir..._"
-	apologyMessage = "_My apologies, but I am experiencing technical difficulties._ Please try again later."
+	ackMaster = "_One moment, Sir..._"
 	// rateLimitMasterMessage is delivered to the Master's own chat when the
 	// model throttles the request; clark switches himself off at the same time.
 	rateLimitMasterMessage = "🚨 Attention Sir!\n\nI have been silenced: the model is rate-limiting my requests. I have turned myself *Off* to stay reliable. Say _wake up buddy_ when you need me again."
 )
 
+// apologyFor names the failed stage so the human knows what broke instead of
+// reading a bare "technical difficulties". Keeps butler voice; the full error
+// goes to logs, never hidden.
+func apologyFor(stage string) string {
+	stage = strings.TrimSpace(stage)
+	if stage == "" {
+		stage = "answering you"
+	}
+	return "_My apologies, Sir — I failed while " + stage + "._ The fault is mine, not yours. Please try again in a moment, and tell me exactly what you sent if it fails twice."
+}
+
 func mediaAckMessage(mediaType string) string {
-	switch mediaType {
+	kind := strings.TrimSpace(mediaType)
+	switch kind {
 	case "image":
-		return "_My apologies — I can only read text at the moment._ If you add a caption I can reply to that, Sir."
+		return "_My apologies — I can only read text at the moment, so your image went unanswered._ If you add a caption I can reply to that, Sir."
 	case "video":
-		return "_My apologies — video needs a caption for me to reply at the moment, Sir._"
+		return "_My apologies — your video needs a caption for me to reply at the moment, Sir._ Please resend it with a line of text."
 	case "gif":
-		return "_My apologies — GIFs need a caption for me to reply at the moment, Sir._"
+		return "_My apologies — your GIF needs a caption for me to reply at the moment, Sir._ Please resend it with a line of text."
 	case "document":
-		return "_My apologies — files need a caption for me to reply at the moment, Sir._"
+		return "_My apologies — your file needs a caption for me to reply at the moment, Sir._ Please resend it with a line of text."
 	case "audio":
-		return "_My apologies — I cannot transcribe audio yet, Sir._"
+		return "_My apologies — I cannot transcribe audio yet, so your voice note went unanswered, Sir._ Please send it as text for now."
 	case "sticker":
 		return "_Noted, Sir._ — I cannot read stickers, but I am here for your message."
+	case "":
+		return "_My apologies — I received something I cannot read (empty message), Sir._ Please send it as text."
 	default:
-		return "_My apologies — I can only read text at the moment, Sir._"
+		return "_My apologies — I cannot read your " + kind + " at the moment, Sir._ Please resend it with a text caption."
 	}
 }
 
 // inbound is one message awaiting a slow, model-backed reply.
 type inbound struct {
+	id        string
 	chat      string
 	senderJID string
 	userMsg   string
@@ -271,6 +312,9 @@ func (d *dispatcher) enqueue(in inbound) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
+		logging.Log(d.component, logging.SevWarn, "DISPATCH", "Dispatcher closed; message refused instead of queued",
+			"id", in.id, "chat", in.chat, "sender", in.senderJID,
+			"next", "restart Clark; sender should resend")
 		return
 	}
 	ch, ok := d.queues[in.senderJID]
@@ -283,8 +327,10 @@ func (d *dispatcher) enqueue(in inbound) {
 	select {
 	case ch <- in:
 	default:
-		logging.Log(d.component, logging.SevWarn, "DISPATCH", "Sender queue full; message dropped",
-			"sender", in.senderJID)
+		logging.Log(d.component, logging.SevWarn, "DISPATCH", "Sender queue full; message dropped instead of stalling transport",
+			"id", in.id, "chat", in.chat, "sender", in.senderJID, "queue_depth", len(ch), "queue_cap", cap(ch),
+			"preview", logging.Brief(in.userMsg, 80),
+			"next", "sender should resend; dedup window still guards double-delivery")
 	}
 }
 
@@ -320,9 +366,9 @@ func (d *dispatcher) worker(sender string, ch chan inbound) {
 
 // processMedia converts each attachment into a bracketed context line using
 // the Butler's optional local-processing capabilities. Returns the context
-// lines, and the first attachment that could not be processed — nil when
-// everything succeeded or nothing needed processing.
-func (d *dispatcher) processMedia(in inbound) (lines []string, failed *MediaAttachment) {
+// lines, the first attachment that could not be processed (nil when everything
+// succeeded), and a human-readable failure detail for the sender notice.
+func (d *dispatcher) processMedia(in inbound) (lines []string, failed *MediaAttachment, detail string) {
 	var audio, docs, visual []MediaAttachment
 	for i := range in.media {
 		switch in.media[i].Type {
@@ -338,23 +384,28 @@ func (d *dispatcher) processMedia(in inbound) (lines []string, failed *MediaAtta
 	addLine := func(prefix, body string) {
 		lines = append(lines, "["+prefix+": "+strings.TrimSpace(body)+"]")
 	}
-	fail := func(stage string, m MediaAttachment, err error, capability string) *MediaAttachment {
+	fail := func(stage string, m MediaAttachment, err error, capability, human string) (*MediaAttachment, string) {
 		logging.Log(d.component, logging.SevErr, "MEDIA",
-			"LOCAL MEDIA PROCESSING FAILED — degrading message to caption-only fallback",
-			"stage", stage, "type", m.Type, "mime", m.MIME,
-			"capability", capability, "has_caption", strings.TrimSpace(in.userMsg) != "", "error", err)
-		return &m
+			"Local media processing failed; degrading to caption-only fallback instead of ghosting",
+			"id", in.id, "chat", in.chat, "sender", in.senderJID,
+			"stage", stage, "type", m.Type, "mime", m.MIME, "name", m.Name,
+			"capability", capability, "has_caption", strings.TrimSpace(in.userMsg) != "", "error", err,
+			"next", "sender can resend with a text caption; check the local capability health")
+		cpy := m
+		return &cpy, human
 	}
 
 	if len(audio) > 0 {
 		tr, ok := d.butler.(AudioTranscriber)
 		for _, m := range audio {
 			if !ok {
-				return lines, fail("capability-missing", m, errLocalProcessorUnavailable, "AudioTranscriber")
+				f, h := fail("capability-missing", m, errLocalProcessorUnavailable, "AudioTranscriber", "voice-note transcription is not configured")
+				return lines, f, h
 			}
 			text, err := tr.TranscribeVoice(d.ctx, m.MIME, m.Data)
 			if err != nil {
-				return lines, fail("transcribe", m, err, "AudioTranscriber")
+				f, h := fail("transcribe", m, err, "AudioTranscriber", "voice-note transcription failed ("+err.Error()+")")
+				return lines, f, h
 			}
 			addLine("voice note", text)
 		}
@@ -364,11 +415,13 @@ func (d *dispatcher) processMedia(in inbound) (lines []string, failed *MediaAtta
 		dg, ok := d.butler.(DocDigester)
 		for _, m := range docs {
 			if !ok {
-				return lines, fail("capability-missing", m, errLocalProcessorUnavailable, "DocDigester")
+				f, h := fail("capability-missing", m, errLocalProcessorUnavailable, "DocDigester", "document reading is not configured")
+				return lines, f, h
 			}
 			digest, err := dg.DigestDocument(d.ctx, m.Name, string(m.Data))
 			if err != nil {
-				return lines, fail("digest", m, err, "DocDigester")
+				f, h := fail("digest", m, err, "DocDigester", "document reading failed ("+err.Error()+")")
+				return lines, f, h
 			}
 			addLine("document "+m.Name+" | compacted", digest)
 		}
@@ -377,11 +430,13 @@ func (d *dispatcher) processMedia(in inbound) (lines []string, failed *MediaAtta
 	if len(visual) > 0 {
 		de, ok := d.butler.(MediaDescriber)
 		if !ok {
-			return lines, fail("capability-missing", visual[0], errLocalProcessorUnavailable, "MediaDescriber")
+			f, h := fail("capability-missing", visual[0], errLocalProcessorUnavailable, "MediaDescriber", "image description is not configured")
+			return lines, f, h
 		}
 		desc, err := de.Describe(d.ctx, visual)
 		if err != nil {
-			return lines, fail("describe", visual[0], err, "MediaDescriber")
+			f, h := fail("describe", visual[0], err, "MediaDescriber", "image description failed ("+err.Error()+")")
+			return lines, f, h
 		}
 		prefix := visual[0].Type
 		if prefix == "" || prefix == "image" && len(visual) > 1 {
@@ -389,7 +444,7 @@ func (d *dispatcher) processMedia(in inbound) (lines []string, failed *MediaAtta
 		}
 		addLine(prefix, desc)
 	}
-	return lines, nil
+	return lines, nil, ""
 }
 
 // errLocalProcessorUnavailable marks a missing local capability distinctly
@@ -399,19 +454,27 @@ var errLocalProcessorUnavailable = errors.New("local processor not configured")
 func (d *dispatcher) process(in inbound) {
 	userMsg := in.userMsg
 	if len(in.media) > 0 {
-		lines, failed := d.processMedia(in)
+		lines, failed, detail := d.processMedia(in)
 		if failed != nil {
 			caption := strings.TrimSpace(userMsg)
 			if caption == "" {
 				// No caption to fall back on — acknowledge with kind text.
-				_ = d.msgr.Send(d.ctx, in.chat, mediaAckMessage(failed.Type))
+				if serr := d.msgr.Send(d.ctx, in.chat, mediaAckMessage(failed.Type)); serr != nil {
+					logging.Log(d.component, logging.SevErr, "SEND", "Failed to send no-caption media ack; sender got no notice",
+						"id", in.id, "to", in.chat, "sender", in.senderJID, "media", failed.Type, "cause", detail, "error", serr,
+						"next", "check transport connection")
+				} else {
+					logging.Log(d.component, logging.SevInfo, "MESSAGE", "Uncaptioned media acked after processing failure",
+						"id", in.id, "chat", in.chat, "sender", in.senderJID, "media", failed.Type, "cause", detail)
+				}
 				return
 			}
 			// Caption fallback: answer from the caption but explicitly tell
-			// the sender their asset could not be processed right now.
-			note := "_My apologies — I could not process your " + failed.Type + " due to internal issues just now._ I will answer based on your caption alone."
+			// the sender which asset step failed and why.
+			note := "_My apologies — I could not process your " + failed.Type + " just now (" + detail + ")._ I will answer based on your caption alone; resend the file if you need it read properly."
 			if err := d.msgr.Send(d.ctx, in.chat, note); err != nil {
-				logging.Log(d.component, logging.SevWarn, "SEND", "Failed to send asset-failure notice", "to", in.chat, "error", err)
+				logging.Log(d.component, logging.SevWarn, "SEND", "Failed to send asset-failure notice; answering from caption anyway",
+					"id", in.id, "to", in.chat, "sender", in.senderJID, "media", failed.Type, "cause", detail, "error", err)
 			}
 		}
 		for _, l := range lines {
@@ -420,26 +483,40 @@ func (d *dispatcher) process(in inbound) {
 		userMsg = strings.TrimSpace(userMsg)
 	}
 	if userMsg == "" {
-		logging.Log(d.component, logging.SevWarn, "MESSAGE", "Message discarded after media", "reason", "no text content")
+		logging.Log(d.component, logging.SevWarn, "MESSAGE", "Message discarded after media; no caption text left to answer",
+			"id", in.id, "chat", in.chat, "sender", in.senderJID,
+			"next", "sender must resend with a text caption")
 		return
 	}
 	reply, err := d.butler.Reply(d.ctx, in.senderJID, userMsg, in.isSelf)
 	if err != nil {
 		if errors.Is(err, ollama.ErrRateLimited) {
-			logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Model rate limited; master alerted and clark switched off", "error", err)
+			logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Model rate limited; master alerted and clark switched off",
+				"id", in.id, "chat", in.chat, "sender", in.senderJID,
+				"preview", logging.Brief(userMsg, 80), "error", err,
+				"next", "master says wake up buddy when ready; check model quota")
 			if serr := d.msgr.SendSelf(d.ctx, rateLimitMasterMessage); serr != nil {
-				logging.Log(d.component, logging.SevErr, "SEND", "Failed to alert master about rate limit", "error", serr)
+				logging.Log(d.component, logging.SevErr, "SEND", "Failed to alert master about rate limit",
+					"sender", in.senderJID, "error", serr, "cause", err)
 			}
 		} else {
-			logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "AI response error", "error", err)
+			logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "Model reply failed; sending staged apology",
+				"id", in.id, "chat", in.chat, "sender", in.senderJID,
+				"preview", logging.Brief(userMsg, 80), "error", err,
+				"next", "sender should repeat the message; check model health")
 		}
-		if err := d.msgr.Send(d.ctx, in.chat, apologyMessage); err != nil {
-			logging.Log(d.component, logging.SevErr, "SEND", "Failed to send apology", "to", in.chat, "error", err)
+		if err := d.msgr.Send(d.ctx, in.chat, apologyFor("crafting my reply")); err != nil {
+			logging.Log(d.component, logging.SevErr, "SEND", "Failed to send reply-failure apology; sender got no failure notice",
+				"id", in.id, "to", in.chat, "sender", in.senderJID, "error", err, "cause", err,
+				"next", "check transport connection")
 		}
 		return
 	}
 	if err := d.msgr.Send(d.ctx, in.chat, reply); err != nil {
-		logging.Log(d.component, logging.SevErr, "SEND", "Failed to deliver reply", "to", in.chat, "error", err)
+		logging.Log(d.component, logging.SevErr, "SEND", "Model reply generated but delivery failed",
+			"id", in.id, "to", in.chat, "sender", in.senderJID,
+			"preview", logging.Brief(reply, 80), "error", err,
+			"next", "check transport connection; reply was saved to history")
 	}
 }
 
@@ -465,15 +542,27 @@ func (h *Handler) alert(ctx context.Context, chat, relation string) {
 	// notification but still answers the sender.
 	if an, ok := h.notifier.(AlertNotifier); ok && an != nil {
 		an.Alert(ctx, "bypass", title, body)
+		logging.Log(h.component, logging.SevInfo, "ALERT", "Urgent bypass fired via kind-aware alerter",
+			"chat", chat, "relation", relation)
 	} else {
 		if h.notifier != nil {
 			if err := h.notifier.Notify(title, body); err != nil {
-				logging.Log("CLARK", logging.SevWarn, "NOTIFY", "Notification failed", "error", err)
+				logging.Log("CLARK", logging.SevWarn, "NOTIFY", "Desktop notification failed; falling back to self-chat message",
+					"chat", chat, "relation", relation, "error", err,
+					"next", "check desktop notifier config")
 			}
 		}
-		h.msgr.SendSelf(ctx, "🚨 "+title+"\n"+body)
+		if err := h.msgr.SendSelf(ctx, "🚨 "+title+"\n"+body); err != nil {
+			logging.Log(h.component, logging.SevErr, "SEND", "Failed to send urgent alert to master self-chat",
+				"chat", chat, "relation", relation, "error", err,
+				"next", "check transport connection immediately")
+		}
 	}
-	h.msgr.Send(ctx, chat, "_One moment._ I've alerted the Master.")
+	if err := h.msgr.Send(ctx, chat, "_One moment._ I've alerted the Master."); err != nil {
+		logging.Log(h.component, logging.SevErr, "SEND", "Urgent alert fired but sender acknowledgement failed",
+			"to", chat, "relation", relation, "error", err,
+			"next", "master was still alerted; check transport connection")
+	}
 }
 
 // alertAllowed reports whether chat may fire the alert cascade now, marking
