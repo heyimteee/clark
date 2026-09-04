@@ -355,7 +355,7 @@ func (s *Service) DigestDocument(ctx context.Context, name, text string) (string
 func (s *Service) SetRelayFunc(fn func(ctx context.Context, fromJID, text string) error) {
 	s.relayFn = fn
 	s.tools.RegisterFunc("relay_to_master",
-		"Relay a message from you (a VIP) to the Master through Clark. Use when the VIP says 'tell him …', 'let him know …', 'pass a message to him', 'tell the master …', etc. The message will be delivered to the Master via both WhatsApp and iMessage as a custom Clark relay. Only VIPs may use this.",
+		"Relay a message from you (a VIP) to the Master through Clark. Use when the VIP says 'tell him …', 'let him know …', 'pass a message to him', 'tell the master …', etc. Also use for implicit personal asks meant for the Master (a pickup, favor, gift, meeting, or personal news for him) once the VIP confirms the relay offer. The message will be delivered to the Master via both WhatsApp and iMessage as a custom Clark relay. Only VIPs may use this.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1553,6 +1553,14 @@ func (s *Service) guessTools(userMsg string, available []tools.Tool) []string {
 			hints = append(hints, "send_message")
 		}
 	}
+	// Relay confirmation (#137): turn 1 offers "shall I pass it to the Master",
+	// turn 2 is a bare "yes / please do". That follow-up carries no tell-him
+	// wording, so hint the relay tool on confirmation phrasing alone. The hint
+	// is non-enforcing — the model still decides — so a stray "yes" elsewhere
+	// costs nothing.
+	if hasTool("relay_to_master") && isRelayConfirmation(m) {
+		hints = append(hints, "relay_to_master")
+	}
 	if h := manageHint(userMsg); h != "the appropriate management tool" && hasTool("set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state") {
 		// manageHint maps to a specific tool; expose it as a hint when available.
 		for _, n := range strings.Split(h, " or ") {
@@ -1647,6 +1655,20 @@ func hasAny(s string, subs ...string) bool {
 		}
 	}
 	return false
+}
+
+// isRelayConfirmation reports whether a short VIP message confirms a pending
+// proxy offer ("shall I pass it to the Master?"). Input must already be
+// lowercased. Kept deliberately narrow: bare affirmations plus an explicit
+// relay verb, so unrelated chat is never mis-hinted.
+func isRelayConfirmation(lower string) bool {
+	m := strings.TrimSpace(lower)
+	if m == "yes" || m == "yes please" || m == "yeah" || m == "please do" ||
+		m == "yes, please" || m == "yes pls" || m == "ok pass it on" {
+		return true
+	}
+	return hasAny(m, "pass it on", "pass it to him", "tell him", "let him know",
+		"relay it", "forward it", "please relay", "yes relay", "yes, relay")
 }
 
 // statusLabel renders clark's operational state for the prompt.

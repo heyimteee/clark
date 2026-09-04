@@ -1767,6 +1767,61 @@ func TestPromptConversationalResponsiveness(t *testing.T) {
 	}
 }
 
+func TestPromptAddresseeProxy(t *testing.T) {
+	for _, want := range []string{
+		"Addressee & Proxy",
+		"you cannot pick anyone up",
+		"relay_to_master",
+		"Shall I pass",
+		"pick me up after class",
+		"gift for you",
+	} {
+		if !strings.Contains(promptTemplate, want) {
+			t.Errorf("prompt missing addressee-proxy directive %q", want)
+		}
+	}
+}
+
+func TestGuessToolsRelayConfirmation(t *testing.T) {
+	s, _, _ := newService(t)
+	vip := "6281234567890@s.whatsapp.net"
+	available := s.toolsForSender(vip, false)
+	hasRelay := func(hints []string) bool {
+		for _, h := range hints {
+			if h == "relay_to_master" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, msg := range []string{"yes", "yes please pass it on", "please relay it to him"} {
+		if hints := s.guessTools(msg, available); !hasRelay(hints) {
+			t.Errorf("guessTools(%q) = %v, want relay_to_master hint", msg, hints)
+		}
+	}
+	if hints := s.guessTools("thanks, see you later", available); hasRelay(hints) {
+		t.Errorf("guessTools(small talk) = %v, want no relay hint", hints)
+	}
+}
+
+func TestServiceVIPTurnCarriesProxyInstruction(t *testing.T) {
+	s, _, fake := newService(t)
+	fake.always = &ollama.ChatResult{Content: "Noted."}
+	jid := "6281234567890@s.whatsapp.net"
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	if _, err := s.Reply(context.Background(), jid, "can you pick me up after class", false); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	sys := systemPromptOf(fake)
+	for _, want := range []string{"Addressee & Proxy", "relay_to_master"} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("VIP system prompt missing %q", want)
+		}
+	}
+}
+
 func TestPromptWhatsAppRichText(t *testing.T) {
 	for _, want := range []string{
 		"WhatsApp rich text",
