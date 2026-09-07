@@ -892,6 +892,9 @@ label.field .lbl {
 
 #kanban {
   padding: var(--space-5) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
 /* ---------- protocols mode ---------- */
@@ -927,6 +930,10 @@ label.field .lbl {
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 1px 8px;
+}
+
+.list-search {
+  max-width: 420px;
 }
 
 .protocol-list,
@@ -1306,6 +1313,26 @@ label.field .lbl {
   font-size: 13px;
 }
 
+#access-pager,
+#todo-pager,
+#cal-pager,
+#proto-pager,
+#sched-pager {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+#access-pager:empty,
+#todo-pager:empty,
+#cal-pager:empty,
+#proto-pager:empty,
+#sched-pager:empty {
+  margin-top: 0;
+}
+
 .calendar-day {
   display: flex;
   flex-direction: column;
@@ -1585,6 +1612,48 @@ label.field .lbl {
 }
 
 #session-new { width: 100%; }
+
+#sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+#sidebar-hide,
+#sidebar-reopen {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  flex: none;
+}
+
+#sidebar-hide:hover,
+#sidebar-reopen:hover {
+  border-color: var(--ink-faint);
+  color: var(--ink);
+}
+
+#sidebar-reopen {
+  display: none;
+  align-self: flex-start;
+}
+
+#chat-wrap.sidebar-collapsed #chat-sidebar {
+  display: none;
+}
+
+#chat-wrap.sidebar-collapsed #sidebar-reopen {
+  display: block;
+}
 
 #session-list {
   display: flex;
