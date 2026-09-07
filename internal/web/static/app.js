@@ -1003,28 +1003,15 @@
       const prio = Math.min(t.priority || 0, 3);
       const prioNames = ["", "low", "normal", "high"];
       const due = closed ? null : todoDueLabel(t.due_at);
-      const hasDesc = !!(t.description && t.description.trim());
-      const desc = hasDesc ? '<div class="todo-desc">' + esc(t.description) + "</div>" : "";
-      const check = '<button class="todo-check' + (closed ? " done" : "") + '" data-id="' + t.id + '" data-done="' + closed + '" aria-label="mark done"></button>';
-      const meta = '<span class="todo-meta">' +
-        (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
-        (due ? '<span class="due-pill ' + due.cls + '" title="due ' + esc(due.full) + '">' + esc(due.text) + "</span>" : "") +
-        "</span>";
-      const del = '<button class="todo-del" data-id="' + t.id + '" aria-label="delete">×</button>';
-      // Descriptions get their own line under a thin divider, carrying the
-      // due pill and delete; bare titles keep the compact single line.
-      if (hasDesc) {
-        return '<div class="todo-row' + (closed ? " done" : "") + '">' +
-          check +
-          '<div class="todo-main"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span>" +
-          '<div class="todo-div"></div>' +
-          '<div class="todo-sub">' + desc + meta + del + "</div>" +
-          "</div></div>";
-      }
+      const desc = t.description ? '<div class="todo-desc">' + esc(t.description) + "</div>" : "";
       return '<div class="todo-row' + (closed ? " done" : "") + '">' +
-        check +
-        '<div class="todo-main"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span></div>" +
-        meta + del +
+        '<button class="todo-check' + (closed ? " done" : "") + '" data-id="' + t.id + '" data-done="' + closed + '" aria-label="mark done"></button>' +
+        '<div class="todo-main"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span>" + desc + "</div>" +
+        '<span class="todo-meta">' +
+          (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
+          (due ? '<span class="due-pill ' + due.cls + '" title="due ' + esc(due.full) + '">' + esc(due.text) + "</span>" : "") +
+        "</span>" +
+        '<button class="todo-del" data-id="' + t.id + '" aria-label="delete">×</button>' +
         "</div>";
     }).join("");
     list.querySelectorAll(".todo-check").forEach(function (btn) {
@@ -1111,7 +1098,8 @@
     const desc = t.description ? '<div class="todo-desc kanban-desc">' + esc(t.description) + '</div>' : "";
     const statusLabel = closed ? "closed" : doing ? "in progress" : "open";
     return '<div class="kanban-card' + (closed ? " closed" : doing ? " doing" : "") + '" draggable="true" tabindex="0" data-id="' + t.id + '" aria-label="' + esc(t.text) + ", status " + statusLabel + ". Press left or right arrow to move." + '">' +
-      '<div class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</div>" + desc +
+      '<div class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</div>" +
+      (desc ? '<div class="todo-div"></div>' + desc : desc) +
       '<div class="todo-meta">' +
         (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
         (due ? '<span class="due-pill ' + due.cls + '" title="due ' + esc(due.full) + '">' + esc(due.text) + "</span>" : "") +
