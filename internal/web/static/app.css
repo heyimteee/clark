@@ -703,6 +703,24 @@ label.field .lbl {
   align-self: flex-start;
 }
 
+.tile-todos .todo-options {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.tile-todos .todo-options .field {
+  margin-bottom: 0;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.tile-todos .todo-options .btn {
+  flex: none;
+  align-self: flex-end;
+}
+
 .tile-calendar .todo-form .btn {
   flex: none;
   align-self: center;
@@ -725,7 +743,7 @@ label.field .lbl {
 
 .tile-todos .todo-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   padding: 10px 12px;
   background: var(--surface-2);
@@ -740,6 +758,7 @@ label.field .lbl {
 .tile-todos .todo-check {
   width: 18px;
   height: 18px;
+  margin-top: 1px;
   border-radius: 50%;
   border: 2px solid var(--line-strong);
   flex: none;
@@ -753,11 +772,25 @@ label.field .lbl {
 }
 
 .tile-todos .todo-text {
-  flex: 1;
   font-size: 13px;
+  font-weight: 500;
   color: var(--ink);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.tile-todos .todo-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.tile-todos .todo-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 2px;
 }
 
 .tile-todos .todo-text.done {
@@ -765,10 +798,15 @@ label.field .lbl {
   color: var(--ink-faint);
 }
 
+.tile-todos .todo-row.done .todo-desc {
+  color: var(--ink-faint);
+}
+
 .tile-todos .todo-meta {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: 2px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-faint);
@@ -787,6 +825,32 @@ label.field .lbl {
 .tile-todos .todo-prio.p2 { background: oklch(0.75 0.13 60); }
 .tile-todos .todo-prio.p3 { background: var(--err-ink); }
 
+.tile-todos .due-pill {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.tile-todos .due-pill.soon {
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  color: var(--accent);
+}
+
+.tile-todos .due-pill.today {
+  border-color: color-mix(in oklch, var(--warn-ink) 60%, transparent);
+  color: var(--warn-ink);
+}
+
+.tile-todos .due-pill.overdue {
+  border-color: color-mix(in oklch, var(--err-ink) 60%, transparent);
+  color: var(--err-ink);
+}
+
 .tile-todos .todo-del {
   border: 0;
   background: transparent;
@@ -795,6 +859,7 @@ label.field .lbl {
   font-size: 14px;
   line-height: 1;
   padding: 2px 6px;
+  margin-top: -1px;
   border-radius: 6px;
 }
 
@@ -1743,6 +1808,11 @@ label.field .lbl {
     min-width: 44px;
     min-height: 44px;
     font-size: 18px;
+  }
+
+  .tile-todos .todo-check {
+    width: 24px;
+    height: 24px;
   }
 
   /* iOS-scale toggle: 46x28 hit box (knob travel = 46 - 22 - 2*3 = 18px) */

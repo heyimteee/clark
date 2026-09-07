@@ -295,7 +295,18 @@
               '<form id="todo-form" class="todo-form">' +
                 '<input id="todo-input" class="input" placeholder="Add a todo — e.g. Review Tiara’s deck by Friday" aria-label="Add todo">' +
                 '<textarea id="todo-desc" class="input" placeholder="Optional description" rows="2" aria-label="Description"></textarea>' +
-                '<button class="btn primary" type="submit">add</button>' +
+                '<div class="todo-options">' +
+                  '<label class="field"><span class="lbl">due</span>' +
+                  '<input id="todo-due" class="input" type="date" aria-label="Due date"></label>' +
+                  '<label class="field"><span class="lbl">priority</span>' +
+                  '<select id="todo-prio" class="input" aria-label="Priority">' +
+                    '<option value="0" selected>none</option>' +
+                    '<option value="1">low</option>' +
+                    '<option value="2">normal</option>' +
+                    '<option value="3">high</option>' +
+                  "</select></label>" +
+                  '<button class="btn primary" type="submit">add</button>' +
+                "</div>" +
               "</form>" +
               '<div class="todo-list" id="todo-list"></div>' +
               '<div id="todo-pager"></div>' +
@@ -925,6 +936,25 @@
 
   /* ---------------- todos ---------------- */
 
+  // todoDueLabel renders a due date as a relative pill: {text, cls} with cls
+  // "", "soon", "today", or "overdue". Null when there is no due date.
+  function todoDueLabel(dueAt) {
+    if (!dueAt) return null;
+    const d = new Date(dueAt);
+    if (isNaN(d.getTime())) return null;
+    const now = new Date();
+    const day = function (dt) { return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime(); };
+    const diff = Math.round((day(d) - day(now)) / 86400000);
+    if (diff < 0) {
+      const n = -diff;
+      return { text: n === 1 ? "overdue 1d" : "overdue " + n + "d", cls: "overdue" };
+    }
+    if (diff === 0) return { text: "today", cls: "today" };
+    if (diff === 1) return { text: "tomorrow", cls: "soon" };
+    if (diff <= 7) return { text: "in " + diff + "d", cls: "soon" };
+    return { text: d.toLocaleDateString([], { month: "short", day: "numeric" }), cls: "" };
+  }
+
   async function refreshTodos() {
     try {
       const d = await api("/web/api/todos");
@@ -954,15 +984,16 @@
     renderPager(pagerEl, labels, todoPage, function (i) { todoPage = i; refreshTodos(); });
     list.innerHTML = visible.map(function (t) {
       const closed = t.status === "closed" || t.status === "done";
-      const prio = t.priority || 0;
-      const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
-      const desc = t.description ? '<div class="todo-desc">' + esc(t.description) + '</div>' : "";
+      const prio = Math.min(t.priority || 0, 3);
+      const prioNames = ["", "low", "normal", "high"];
+      const due = closed ? null : todoDueLabel(t.due_at);
+      const desc = t.description ? '<div class="todo-desc">' + esc(t.description) + "</div>" : "";
       return '<div class="todo-row' + (closed ? " done" : "") + '">' +
-        '<button class="todo-check' + (closed ? " done" : "") + '" data-id="' + t.id + '" data-done="' + closed + '" aria-label="toggle done"></button>' +
-        '<div style="flex:1"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span>" + desc + "</div>" +
+        '<button class="todo-check' + (closed ? " done" : "") + '" data-id="' + t.id + '" data-done="' + closed + '" aria-label="mark done"></button>' +
+        '<div class="todo-main"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span>" + desc + "</div>" +
         '<span class="todo-meta">' +
-          '<span class="todo-prio p' + Math.min(prio, 3) + '"></span>' +
-          (due ? "<span>" + esc(due) + "</span>" : "") +
+          (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
+          (due ? '<span class="due-pill ' + due.cls + '">' + esc(due.text) + "</span>" : "") +
         "</span>" +
         '<button class="todo-del" data-id="' + t.id + '" aria-label="delete">×</button>' +
         "</div>";
@@ -988,13 +1019,26 @@
     e.preventDefault();
     const input = $("#todo-input");
     const descInput = $("#todo-desc");
+    const prioInput = $("#todo-prio");
+    const dueInput = $("#todo-due");
     const text = input.value.trim();
     const desc = descInput ? descInput.value.trim() : "";
     if (!text) return;
+    const priority = prioInput ? parseInt(prioInput.value, 10) || 0 : 0;
+    let due = "";
+    if (dueInput && dueInput.value) {
+      // Date-only picker -> midday local so the day survives the UTC round-trip.
+      const dt = new Date(dueInput.value + "T12:00:00");
+      if (!isNaN(dt.getTime())) due = dt.toISOString();
+    }
     try {
-      await api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text, description: desc }) });
+      const payload = { text: text, description: desc, priority: priority };
+      if (due) payload.due = due;
+      await api("/web/api/todos", { method: "POST", body: JSON.stringify(payload) });
       input.value = "";
       if (descInput) descInput.value = "";
+      if (dueInput) dueInput.value = "";
+      if (prioInput) prioInput.value = "0";
       toastOk("todo added");
       refreshTodos();
       refreshKanban();
