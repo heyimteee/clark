@@ -159,6 +159,38 @@ func SlugifyProtocolTitle(s string) string {
 	return out
 }
 
+// RenameProtocolByID changes a protocol's slug, title, and body in place,
+// keeping its id, use count, and history. A slug owned by another protocol
+// is rejected so renames can never merge two protocols.
+func (s *Store) RenameProtocolByID(id int64, newSlug, title, body string) (Protocol, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if newSlug == "" || title == "" {
+		return Protocol{}, fmt.Errorf("protocol slug and title are required")
+	}
+	if len(body) > maxProtocolBody {
+		return Protocol{}, fmt.Errorf("protocol body is %d bytes, max is %d", len(body), maxProtocolBody)
+	}
+	var owner int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM protocols WHERE slug = ?`, newSlug).Scan(&owner)
+	if err != nil && err != sql.ErrNoRows {
+		return Protocol{}, fmt.Errorf("fail to check protocol slug: %w", err)
+	}
+	if err == nil && owner != id {
+		return Protocol{}, fmt.Errorf("another protocol already uses that title")
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE protocols SET slug = ?, title = ?, body = ?, origin = 'master',
+		version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		newSlug, title, body, id)
+	if err != nil {
+		return Protocol{}, fmt.Errorf("fail to rename protocol: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Protocol{}, fmt.Errorf("protocol id %d not found", id)
+	}
+	return s.GetProtocolByID(id)
+}
+
 // GetProtocolByID fetches a protocol by primary key (web console edits).
 func (s *Store) GetProtocolByID(id int64) (Protocol, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
