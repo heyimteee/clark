@@ -670,16 +670,17 @@ func (s *Server) handleProtocolAction(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title and body are required"})
 			return
 		}
-		p, err := s.store.GetProtocolByID(id)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		slug := store.SlugifyProtocolTitle(body.Title)
+		if len(slug) < 2 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title must contain letters or digits"})
 			return
 		}
-		p.Title = body.Title
-		p.Body = body.Body
-		p.Origin = "master"
-		saved, err := s.store.UpsertProtocol(p)
+		saved, err := s.store.RenameProtocolByID(id, slug, body.Title, body.Body)
 		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+				return
+			}
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}

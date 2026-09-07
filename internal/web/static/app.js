@@ -112,17 +112,22 @@
 
   /* ---------------- toast ---------------- */
 
-  function toast(msg) {
+  function toast(msg, kind) {
     let t = $("#toast");
     if (!t) {
       t = el('<div id="toast" role="status"></div>');
       document.body.appendChild(t);
     }
     t.textContent = msg;
+    t.classList.remove("ok", "err");
+    if (kind) t.classList.add(kind);
     t.classList.add("show");
     clearTimeout(t._timer);
     t._timer = setTimeout(function () { t.classList.remove("show"); }, TOAST_MS);
   }
+
+  function toastOk(msg) { toast(msg, "ok"); }
+  function toastErr(msg) { toast(msg, "err"); }
 
   /* ---------------- login ---------------- */
 
@@ -416,7 +421,7 @@
       refreshKanban();
       refreshCalendar();
     } catch (e) {
-      toast(e.message);
+      toastErr(e.message);
     }
   }
 
@@ -464,19 +469,19 @@
     const cfgForm = $("#config-form");
 
     cfgStatus.addEventListener("change", function () {
-      mutate("/web/api/status", { enabled: cfgStatus.checked });
+      mutate("/web/api/status", { enabled: cfgStatus.checked }, cfgStatus.checked ? "status on" : "status off");
     });
     cfgThinking.addEventListener("change", function () {
-      mutate("/web/api/thinking", { enabled: cfgThinking.checked });
+      mutate("/web/api/thinking", { enabled: cfgThinking.checked }, cfgThinking.checked ? "thinking on" : "thinking off");
     });
     cfgLimit.addEventListener("change", function () {
       const n = parseInt(cfgLimit.value, 10);
-      if (!n || n < 1 || n > 30) { toast("limit must be 1\u201330"); captureState(); return; }
-      mutate("/web/api/history-limit", { limit: n });
+      if (!n || n < 1 || n > 30) { toastErr("limit must be 1–30"); captureState(); return; }
+      mutate("/web/api/history-limit", { limit: n }, "history limit set");
     });
     cfgForm.addEventListener("submit", function (e) {
       e.preventDefault();
-      mutate("/web/api/context", { context: $("#cfg-ctx").value });
+      mutate("/web/api/context", { context: $("#cfg-ctx").value }, "context saved");
     });
 
     $("#btn-vip-add").addEventListener("click", addVIP);
@@ -519,7 +524,7 @@
       const input = $("#kanban-input");
       const text = input.value.trim();
       if (!text) return;
-      api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text }) }).then(function () { input.value = ""; refreshTodos(); refreshKanban(); }).catch(function (e) { toast(e.message); });
+      api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text }) }).then(function () { input.value = ""; toastOk("todo added"); refreshTodos(); refreshKanban(); }).catch(function (e) { toastErr(e.message); });
     });
     const calRefresh = $("#calendar-refresh");
     if (calRefresh) calRefresh.addEventListener("click", refreshCalendar);
@@ -545,9 +550,9 @@
         if (!armDelete(btn)) return;
         mutate("/web/api/vip/delete", { jid: jid }, "deleted " + jid);
       } else if (act === "on") {
-        mutate("/web/api/vip/status", { jid: jid, enabled: true });
+        mutate("/web/api/vip/status", { jid: jid, enabled: true }, "vip enabled");
       } else if (act === "off") {
-        mutate("/web/api/vip/status", { jid: jid, enabled: false });
+        mutate("/web/api/vip/status", { jid: jid, enabled: false }, "vip disabled");
       }
     });
   }
@@ -555,7 +560,7 @@
   async function mutate(path, body, note) {
     try {
       const d = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (d && d.error) { toast(d.error); return; }
+      if (d && d.error) { toastErr(d.error); return; }
     if (d && d.state) {
       state = d.state;
       captureState();
@@ -563,9 +568,9 @@
       renderAccess();
       renderVoiceMeta();
     }
-      if (note) toast(note);
+      if (note) toastOk(note);
     } catch (e) {
-      toast(e.message);
+      toastErr(e.message);
       captureState();
     }
   }
@@ -574,14 +579,14 @@
     const num = $("#vip-num").value.trim();
     const name = $("#vip-name").value.trim();
     const rel = $("#vip-rel").value.trim();
-    if (!num) { toast("number required"); return; }
+    if (!num) { toastErr("number required"); return; }
     await mutate("/web/api/vip/add", { input: [num, name, rel].filter(Boolean).join(",") }, "vip added");
     $("#vip-num").value = $("#vip-name").value = $("#vip-rel").value = "";
   }
 
   async function addVIPBulk() {
     const entries = $("#vip-bulk").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
-    if (!entries.length) { toast("paste lines first"); return; }
+    if (!entries.length) { toastErr("paste lines first"); return; }
     await mutate("/web/api/vip/add-bulk", { entries: entries }, entries.length + " vips added");
     $("#vip-bulk").value = "";
   }
@@ -679,7 +684,7 @@
 
     list.querySelectorAll("input[data-tool]").forEach(function (cb) {
       cb.addEventListener("change", function () {
-        mutate("/web/api/access", { jid: cb.dataset.jid, tool: cb.dataset.tool, enabled: cb.checked });
+        mutate("/web/api/access", { jid: cb.dataset.jid, tool: cb.dataset.tool, enabled: cb.checked }, "access updated");
       });
     });
   }
@@ -718,7 +723,7 @@
       }
       renderSessions();
     } catch (e) {
-      if (e.message !== "session expired") toast(e.message);
+      if (e.message !== "session expired") toastErr(e.message);
     }
   }
 
@@ -758,7 +763,7 @@
         const id = +btn.dataset.id;
         api("/web/api/chat/sessions/" + id, { method: "DELETE" })
           .then(function (d) {
-            toast("chat deleted");
+            toastOk("chat deleted");
             if (id === chatSessionId) {
               chatSessionId = (d && d.next && d.next.id) || 0;
               persistChatSession();
@@ -766,7 +771,7 @@
             }
             refreshSessions();
           })
-          .catch(function (err) { toast(err.message); });
+          .catch(function (err) { toastErr(err.message); });
       });
     });
   }
@@ -787,8 +792,8 @@
       const title = inp.value.trim();
       if (!title || title === cur.title) { renderSessions(); return; }
       api("/web/api/chat/sessions/" + id, { method: "PUT", body: JSON.stringify({ title: title }) })
-        .then(function () { toast("chat renamed"); refreshSessions(); })
-        .catch(function (err) { toast(err.message); renderSessions(); });
+        .then(function () { toastOk("chat renamed"); refreshSessions(); })
+        .catch(function (err) { toastErr(err.message); renderSessions(); });
     }
     inp.addEventListener("keydown", function (e) {
       if (e.key === "Enter") done(true);
@@ -828,7 +833,7 @@
       scrollChat();
     } catch (e) {
       renderChatMeta();
-      if (e.message !== "session expired") toast(e.message);
+      if (e.message !== "session expired") toastErr(e.message);
     }
   }
 
@@ -845,13 +850,13 @@
         if (d && d.session) {
           chatSessionId = d.session.id;
           persistChatSession();
-          toast("new chat");
+          toastOk("new chat");
           await refreshSessions();
           await loadSessionTranscript();
           $("#chat-input").focus();
         }
       } catch (e) {
-        toast(e.message);
+        toastErr(e.message);
       }
     });
   }
@@ -890,7 +895,7 @@
       }).join("");
       list.scrollTop = keepScroll;
     } catch (e) {
-      if (e.message !== "session expired") toast(e.message);
+      if (e.message !== "session expired") toastErr(e.message);
     } finally {
       historyLoading = false;
     }
@@ -914,7 +919,7 @@
       const todos = (d && d.todos) || [];
       renderTodos(todos);
     } catch (e) {
-      if (e.message !== "session expired") toast(e.message);
+      if (e.message !== "session expired") toastErr(e.message);
     }
   }
 
@@ -955,14 +960,14 @@
         const id = btn.dataset.id;
         const done = btn.dataset.done === "true";
         if (done) return;
-        api("/web/api/todos/" + id + "/complete", { method: "POST" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (e) { toast(e.message); });
+        api("/web/api/todos/" + id + "/complete", { method: "POST" }).then(function () { toastOk("todo completed"); refreshTodos(); refreshKanban(); }).catch(function (e) { toastErr(e.message); });
       });
     });
     list.querySelectorAll(".todo-del").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (!armDelete(btn)) return;
         const id = btn.dataset.id;
-        api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (e) { toast(e.message); });
+        api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { toastOk("todo deleted"); refreshTodos(); refreshKanban(); }).catch(function (e) { toastErr(e.message); });
       });
     });
   }
@@ -978,10 +983,11 @@
       await api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text, description: desc }) });
       input.value = "";
       if (descInput) descInput.value = "";
+      toastOk("todo added");
       refreshTodos();
       refreshKanban();
     } catch (err) {
-      toast(err.message);
+      toastErr(err.message);
     }
   }
 
@@ -993,7 +999,7 @@
       const todos = (d && d.todos) || [];
       renderKanban(todos);
     } catch (e) {
-      if (e.message !== "session expired") toast(e.message);
+      if (e.message !== "session expired") toastErr(e.message);
     }
   }
 
@@ -1047,8 +1053,8 @@
         if (!next || next === col.dataset.status) return;
         e.preventDefault();
         api("/web/api/todos/" + card.dataset.id + "/status", { method: "POST", body: JSON.stringify({ status: next }) })
-          .then(function () { refreshTodos(); refreshKanban(); })
-          .catch(function (err) { toast(err.message); });
+          .then(function () { toastOk("todo moved"); refreshTodos(); refreshKanban(); })
+          .catch(function (err) { toastErr(err.message); });
       });
     });
     document.querySelectorAll(".kanban-col").forEach(function (col) {
@@ -1060,7 +1066,7 @@
         const id = e.dataTransfer.getData("text/plain");
         const status = col.dataset.status;
         if (!id || !status) return;
-        api("/web/api/todos/" + id + "/status", { method: "POST", body: JSON.stringify({ status: status }) }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (err) { toast(err.message); });
+        api("/web/api/todos/" + id + "/status", { method: "POST", body: JSON.stringify({ status: status }) }).then(function () { toastOk("todo moved"); refreshTodos(); refreshKanban(); }).catch(function (err) { toastErr(err.message); });
       });
     });
     document.querySelectorAll(".kanban-card .todo-del").forEach(function (btn) {
@@ -1068,7 +1074,7 @@
         e.stopPropagation();
         if (!armDelete(btn)) return;
         const id = btn.dataset.id || btn.closest(".kanban-card").dataset.id;
-        api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { refreshTodos(); refreshKanban(); }).catch(function (err) { toast(err.message); });
+        api("/web/api/todos/" + id, { method: "DELETE" }).then(function () { toastOk("todo deleted"); refreshTodos(); refreshKanban(); }).catch(function (err) { toastErr(err.message); });
       });
     });
   }
@@ -1130,7 +1136,7 @@
       const data = await api("/web/api/protocols");
       renderProtocols(data.protocols || []);
     } catch (err) {
-      toast(err.message);
+      toastErr(err.message);
     }
     refreshSchedules();
   }
@@ -1143,7 +1149,7 @@
       const sdata = await api("/web/api/schedules");
       renderSchedules(sdata.schedules || []);
     } catch (err) {
-      toast(err.message);
+      toastErr(err.message);
     }
   }
 
@@ -1179,6 +1185,7 @@
           "</div>" +
           '<div class="proto-slug">' + esc(p.slug) + "</div>" +
           '<pre class="proto-view">' + esc(p.body) + "</pre>" +
+          '<input class="input proto-title-input hidden" data-id="' + p.id + '" value="' + esc(p.title) + '" aria-label="Protocol title">' +
           '<textarea class="input proto-body-input hidden" data-id="' + p.id + '" rows="8" aria-label="Protocol body for ' + esc(p.title) + '">' + esc(p.body) + "</textarea>" +
           '<button class="btn primary proto-save hidden" data-id="' + p.id + '">save changes</button>' +
         "</div>"
@@ -1189,13 +1196,17 @@
         const card = btn.closest(".proto-card");
         const editing = card.classList.toggle("proto-editing");
         btn.textContent = editing ? "cancel" : "edit";
+        const titleInput = card.querySelector(".proto-title-input");
         const ta = card.querySelector(".proto-body-input");
         if (editing) {
+          titleInput.value = card.querySelector(".proto-title").textContent;
           ta.value = card.querySelector(".proto-view").textContent;
+          titleInput.classList.remove("hidden");
           ta.classList.remove("hidden");
           card.querySelector(".proto-save").classList.remove("hidden");
-          ta.focus();
+          titleInput.focus();
         } else {
+          titleInput.classList.add("hidden");
           ta.classList.add("hidden");
           card.querySelector(".proto-save").classList.add("hidden");
         }
@@ -1206,18 +1217,25 @@
         const id = btn.dataset.id;
         const card = btn.closest(".proto-card");
         const body = card.querySelector(".proto-body-input").value;
-        const title = card.querySelector(".proto-title").textContent;
+        const title = card.querySelector(".proto-title-input").value.trim();
+        if (!title || !body.trim()) { toastErr("title and body are required"); return; }
+        btn.disabled = true;
         api("/web/api/protocols/" + id, { method: "PUT", body: JSON.stringify({ title: title, body: body }) })
-          .then(function () { toast("protocol saved"); refreshProtocols(); })
-          .catch(function (err) { toast(err.message); });
+          .then(function () {
+            // Clear the draft guard BEFORE re-rendering or the fresh list is skipped.
+            card.classList.remove("proto-editing");
+            toastOk("protocol saved");
+            refreshProtocols();
+          })
+          .catch(function (err) { toastErr(err.message); btn.disabled = false; });
       });
     });
     list.querySelectorAll(".proto-del").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (!armDelete(btn)) return;
         api("/web/api/protocols/" + btn.dataset.id, { method: "DELETE" })
-          .then(function () { refreshProtocols(); })
-          .catch(function (err) { toast(err.message); });
+          .then(function () { toastOk("protocol deleted"); refreshProtocols(); })
+          .catch(function (err) { toastErr(err.message); });
       });
     });
   }
@@ -1479,34 +1497,34 @@
         var form = card.querySelector("[data-sched-form]");
         var newName = form.querySelector("[data-edit-name]").value.trim();
         var task = form.querySelector("[data-edit-task]").value;
-        if (!newName) { toast("name is required"); return; }
+        if (!newName) { toastErr("name is required"); return; }
         var res = schedPayload(form, newName, task);
-        if (res.error) { toast(res.error); return; }
+        if (res.error) { toastErr(res.error); return; }
         if (newName !== btn.dataset.name) res.body.new_name = newName;
         btn.disabled = true;
         api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "PUT", body: JSON.stringify(res.body) })
           .then(function () {
             card.classList.remove("sched-editing");
-            toast("schedule updated");
+            toastOk("schedule updated");
             refreshSchedules();
           })
-          .catch(function (err) { toast(err.message); btn.disabled = false; });
+          .catch(function (err) { toastErr(err.message); btn.disabled = false; });
       });
     });
     list.querySelectorAll(".sched-toggle").forEach(function (btn) {
       btn.addEventListener("click", function () {
         const enable = btn.dataset.enabled !== "1";
         api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "PUT", body: JSON.stringify({ enabled: enable }) })
-          .then(function () { toast(enable ? "schedule resumed" : "schedule paused"); refreshSchedules(); })
-          .catch(function (err) { toast(err.message); });
+          .then(function () { toastOk(enable ? "schedule resumed" : "schedule paused"); refreshSchedules(); })
+          .catch(function (err) { toastErr(err.message); });
       });
     });
     list.querySelectorAll(".sched-del").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (!armDelete(btn)) return;
         api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "DELETE" })
-          .then(function () { toast("schedule deleted"); refreshSchedules(); })
-          .catch(function (err) { toast(err.message); });
+          .then(function () { toastOk("schedule deleted"); refreshSchedules(); })
+          .catch(function (err) { toastErr(err.message); });
       });
     });
   }
@@ -1563,31 +1581,31 @@
     $("#proto-add").addEventListener("click", function () {
       const title = $("#proto-title").value.trim();
       const body = $("#proto-body").value;
-      if (!title || !body) { toast("title and body are required"); return; }
+      if (!title || !body) { toastErr("title and body are required"); return; }
       api("/web/api/protocols", { method: "POST", body: JSON.stringify({ title: title, body: body, origin: "master" }) })
         .then(function () {
           $("#proto-title").value = "";
           $("#proto-body").value = "";
-          toast("protocol saved");
+          toastOk("protocol saved");
           refreshProtocols();
         })
-        .catch(function (err) { toast(err.message); });
+        .catch(function (err) { toastErr(err.message); });
     });
     $("#sched-add").addEventListener("click", function () {
       const form = $("#sched-add").closest(".proto-form");
       const name = $("#sched-name").value.trim();
       const task = $("#sched-task").value;
-      if (!name) { toast("name is required"); return; }
+      if (!name) { toastErr("name is required"); return; }
       const res = schedPayload(form, name, task);
-      if (res.error) { toast(res.error); return; }
-      if (!task.trim()) { toast("task is required for a new schedule"); return; }
+      if (res.error) { toastErr(res.error); return; }
+      if (!task.trim()) { toastErr("task is required for a new schedule"); return; }
       api("/web/api/schedules", { method: "POST", body: JSON.stringify(res.body) })
         .then(function () {
           resetSchedCreate();
-          toast("schedule saved");
+          toastOk("schedule saved");
           refreshSchedules();
         })
-        .catch(function (err) { toast(err.message); });
+        .catch(function (err) { toastErr(err.message); });
     });
   }
 
@@ -1704,10 +1722,10 @@
     const title = $("#calendar-title").value.trim();
     const startV = $("#calendar-start").value;
     const endV = $("#calendar-end").value;
-    if (!title || !startV || !endV) { toast("title, start, and end are required"); return; }
+    if (!title || !startV || !endV) { toastErr("title, start, and end are required"); return; }
     const start = new Date(startV);
     const end = new Date(endV);
-    if (!(end > start)) { toast("end must be after start"); return; }
+    if (!(end > start)) { toastErr("end must be after start"); return; }
     try {
       await api("/web/api/calendar/events", {
         method: "POST",
@@ -1716,10 +1734,10 @@
       $("#calendar-title").value = "";
       $("#calendar-start").value = "";
       $("#calendar-end").value = "";
-      toast("event added");
+      toastOk("event added");
       refreshCalendar();
     } catch (err) {
-      toast(err.message);
+      toastErr(err.message);
     }
   }
 
@@ -2055,7 +2073,7 @@
       const text = input.value.trim();
       if (!text || chatBusy) return;
       if (!chatWs || chatWs.readyState !== WebSocket.OPEN) {
-        toast("chat link offline");
+        toastErr("chat link offline");
         return;
       }
       chatBusy = true;
@@ -2066,7 +2084,7 @@
       if (!sendFrame("chat", { text: text, session_id: chatSessionId })) {
         chatBusy = false;
         setTyping(false);
-        toast("could not send");
+        toastErr("could not send");
       }
     }
     send.addEventListener("click", submit);
@@ -2266,8 +2284,9 @@
         body: JSON.stringify({ mode: voice ? "voice" : "silent" }),
       });
       renderVoiceMeta();
+      toastOk(voice ? "alerts will speak" : "alerts silent");
     } catch (e) {
-      toast(e.message);
+      toastErr(e.message);
       $("#alert-mode-toggle").checked = !voice;
     }
   }
@@ -2275,14 +2294,14 @@
   async function armVoice() {
     const status = $("#voice-status");
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast("mic unavailable in this browser");
+      toastErr("mic unavailable in this browser");
       $("#voice-toggle").checked = false;
       return;
     }
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
-      toast("mic permission denied: " + e.message);
+      toastErr("mic permission denied: " + e.message);
       $("#voice-toggle").checked = false;
       if (status) status.textContent = "mic unavailable";
       return;
@@ -2587,7 +2606,7 @@
 
   function startRecording() {
     if (!micStream || recording) return;
-    if (typeof MediaRecorder === "undefined") { toast("recording unsupported"); return; }
+    if (typeof MediaRecorder === "undefined") { toastErr("recording unsupported"); return; }
     recording = true;
     recStartAt = performance.now();
     silenceStart = 0;
@@ -2666,7 +2685,7 @@
   }
 
   function sendVoiceText(text) {
-    if (!chatWs || chatWs.readyState !== WebSocket.OPEN) { toast("chat link offline"); return; }
+    if (!chatWs || chatWs.readyState !== WebSocket.OPEN) { toastErr("chat link offline"); return; }
     chatBusy = true;
     setTyping(true);
     sendFrame("chat", { text: text });

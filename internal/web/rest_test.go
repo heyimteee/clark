@@ -406,6 +406,56 @@ func TestProtocolsWebCRUD(t *testing.T) {
 	}
 }
 
+func TestProtocolsWebRename(t *testing.T) {
+	ts, _, _, _ := newTestServer(t)
+	tok := login(t, ts)
+
+	code, out := postJSON(t, ts, "/web/api/protocols", tok, map[string]any{"title": "Alpha Guide", "body": "steps", "origin": "master"})
+	if code != 201 {
+		t.Fatalf("create alpha = %d (%v)", code, out)
+	}
+	alphaID := int(out["protocol"].(map[string]any)["id"].(float64))
+	code, out = postJSON(t, ts, "/web/api/protocols", tok, map[string]any{"title": "Beta Guide", "body": "steps", "origin": "master"})
+	if code != 201 {
+		t.Fatalf("create beta = %d (%v)", code, out)
+	}
+
+	put := func(id int, body string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPut, ts.URL+"/web/api/protocols/"+itoa(id), strings.NewReader(body))
+		req = bearer(req, tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT: %v", err)
+		}
+		defer resp.Body.Close()
+		var decoded map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&decoded)
+		out = decoded
+		return resp.StatusCode
+	}
+
+	// Rename changes the slug in place, keeping the id.
+	if code := put(alphaID, `{"title":"Alpha Handbook","body":"new steps"}`); code != 200 {
+		t.Fatalf("rename = %d (%v), want 200", code, out)
+	}
+	renamed := out["protocol"].(map[string]any)
+	if renamed["slug"] != "alpha-handbook" || int(renamed["id"].(float64)) != alphaID {
+		t.Fatalf("renamed wrong: %v", renamed)
+	}
+
+	// Colliding with another protocol's title is rejected.
+	if code := put(alphaID, `{"title":"Beta Guide","body":"x"}`); code != 400 {
+		t.Fatalf("collision = %d, want 400", code)
+	}
+
+	// Unknown id is 404.
+	if code := put(99999, `{"title":"Ghost","body":"x"}`); code != 404 {
+		t.Fatalf("unknown = %d, want 404", code)
+	}
+}
+
 func TestSchedulesWebUnavailableWithoutScheduler(t *testing.T) {
 	ts, _, _, _ := newTestServer(t)
 	tok := login(t, ts)
