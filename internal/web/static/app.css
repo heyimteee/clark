@@ -427,7 +427,11 @@ label.field .lbl {
 /* access tile */
 
 #vip-picker {
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+#tool-search {
+  margin-bottom: var(--space-3);
 }
 
 #access-list {
