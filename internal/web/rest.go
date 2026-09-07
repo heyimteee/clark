@@ -496,8 +496,123 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-/* ---------------- protocols + schedules ---------------- */
+/* ---------------- chat sessions ---------------- */
 
+// sessionPreview truncates the latest message for sidebar display.
+func sessionPreview(entries []store.Message) string {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(entries[i].Content); s != "" {
+			if len(s) > 80 {
+				return s[:80] + "…"
+			}
+			return s
+		}
+	}
+	return ""
+}
+
+// handleChatSessions serves GET (list) and POST (create) on the collection.
+func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.store.EnsureDefaultWebSession(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to load sessions"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := s.store.ListWebSessions()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list sessions"})
+			return
+		}
+		views := make([]map[string]any, 0, len(rows))
+		for _, ws := range rows {
+			msgs, err := s.store.RecentMessages(store.WebSessionJID(ws.ID), 1)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to load session preview"})
+				return
+			}
+			views = append(views, map[string]any{
+				"id":         ws.ID,
+				"title":      ws.Title,
+				"preview":    sessionPreview(msgs),
+				"updated_at": ws.UpdatedAt,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": views})
+	case http.MethodPost:
+		var body struct {
+			Title string `json:"title"`
+		}
+		_ = decodeBody(w, r, &body)
+		ws, err := s.store.CreateWebSession(body.Title)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to create session"})
+			return
+		}
+		s.broadcastChanged("sessions_changed")
+		writeJSON(w, http.StatusCreated, map[string]any{"session": ws})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+// handleChatSessionAction serves one session: GET messages, PUT rename,
+// DELETE with history.
+func (s *Server) handleChatSessionAction(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/web/api/chat/sessions/")
+	parts := strings.SplitN(rest, "/", 2)
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id is required"})
+		return
+	}
+	if _, err := s.store.GetWebSession(id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		return
+	}
+	switch {
+	case r.Method == http.MethodGet && len(parts) == 2 && parts[1] == "messages":
+		msgs, err := s.store.Messages(store.WebSessionJID(id))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to load messages"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
+	case r.Method == http.MethodPut && len(parts) == 1:
+		var body struct {
+			Title string `json:"title"`
+		}
+		if err := decodeBody(w, r, &body); err != nil || body.Title == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title is required"})
+			return
+		}
+		ws, err := s.store.RenameWebSession(id, body.Title)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			return
+		}
+		s.broadcastChanged("sessions_changed")
+		writeJSON(w, http.StatusOK, map[string]any{"session": ws})
+	case r.Method == http.MethodDelete && len(parts) == 1:
+		if err := s.store.DeleteWebSession(id); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			return
+		}
+		// Never leave the sidebar empty: hand the client a fresh session
+		// to switch to when it just deleted the last one.
+		next, err := s.store.EnsureDefaultWebSession()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to load sessions"})
+			return
+		}
+		s.broadcastChanged("sessions_changed")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "next": next})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+/* ---------------- protocols + schedules ---------------- */
 func (s *Server) broadcastChanged(kind string) {
 	s.hub.broadcast(map[string]any{"type": kind})
 }

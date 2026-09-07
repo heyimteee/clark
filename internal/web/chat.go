@@ -6,18 +6,22 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/ollama"
+	"github.com/heyimteee/clark/internal/store"
 )
 
-// chatFrame is one message from the browser to the console.
+// chatFrame is one message from the browser to the console. SessionID selects
+// a web-chat conversation (>0); 0 keeps the legacy single "web" transcript.
 type chatFrame struct {
-	Type  string `json:"type"`
-	Token string `json:"token"`
-	Text  string `json:"text"`
+	Type      string `json:"type"`
+	Token     string `json:"token"`
+	Text      string `json:"text"`
+	SessionID int64  `json:"session_id"`
 }
 
 // handleChatWS runs the chat socket: auth first, then a serial
@@ -163,11 +167,28 @@ func (s *Server) handleChatTurn(ctx context.Context, c *websocket.Conn, frame ch
 		s.writeFrame(ctx, c, map[string]any{"type": "error", "message": "empty message"})
 		return
 	}
+	jid := webJID
+	if frame.SessionID > 0 {
+		ws, err := s.store.GetWebSession(frame.SessionID)
+		if err != nil {
+			s.writeFrame(ctx, c, map[string]any{"type": "error", "message": "unknown chat session"})
+			return
+		}
+		jid = store.WebSessionJID(ws.ID)
+		// First turn names an untitled conversation so the sidebar stays
+		// readable; explicit renames are never overwritten.
+		if ws.Title == "" || ws.Title == "New chat" {
+			if title := firstLine(frame.Text, 40); title != "" {
+				_, _ = s.store.RenameWebSession(ws.ID, title)
+			}
+		}
+		_ = s.store.TouchWebSession(ws.ID)
+	}
 	s.writeFrame(ctx, c, map[string]any{"type": "ack"})
 	turnCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	reply, thinking, err := s.butler.ReplyLLMStream(turnCtx, webJID, frame.Text, true, func(token string) {
+	reply, thinking, err := s.butler.ReplyLLMStream(turnCtx, jid, frame.Text, true, func(token string) {
 		s.writeFrame(ctx, c, map[string]any{"type": "token", "text": token})
 	})
 	if err != nil {
@@ -186,6 +207,10 @@ func (s *Server) handleChatTurn(ctx context.Context, c *websocket.Conn, frame ch
 
 	s.writeFrame(ctx, c, map[string]any{"type": "reply", "text": reply})
 	s.writeFrame(ctx, c, map[string]any{"type": "done"})
+	if frame.SessionID > 0 {
+		// Sidebar previews/order changed — nudge other open consoles.
+		s.broadcastChanged("sessions_changed")
+	}
 }
 
 func (s *Server) writeFrame(ctx context.Context, c *websocket.Conn, v any) {
@@ -200,4 +225,16 @@ func (s *Server) writeFrame(ctx context.Context, c *websocket.Conn, v any) {
 
 func base64Decode(data []byte) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(string(data))
+}
+
+// firstLine condenses text to one short line for auto-titling.
+func firstLine(text string, max int) string {
+	line := strings.TrimSpace(text)
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	if len(line) > max {
+		line = strings.TrimSpace(line[:max]) + "…"
+	}
+	return line
 }

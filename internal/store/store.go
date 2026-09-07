@@ -183,6 +183,12 @@ func (s *Store) migrate() error {
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`},
 		{"chat_history_jid_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_jid ON chat_history(jid, id)`},
+		{"web_sessions", `CREATE TABLE IF NOT EXISTS web_sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL DEFAULT 'New chat',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`},
 		{"imessage_outbound", `CREATE TABLE IF NOT EXISTS imessage_outbound (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			recipient TEXT NOT NULL,

@@ -147,6 +147,9 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("/web/api/schedules/", s.requireAuth(s.handleScheduleAction))
 	s.mux.HandleFunc("GET /web/api/calendar", s.requireAuth(s.handleCalendarEvents))
 	s.mux.HandleFunc("POST /web/api/calendar/events", s.requireAuth(s.handleCalendarAdd))
+	s.mux.HandleFunc("GET /web/api/chat/sessions", s.requireAuth(s.handleChatSessions))
+	s.mux.HandleFunc("POST /web/api/chat/sessions", s.requireAuth(s.handleChatSessions))
+	s.mux.HandleFunc("/web/api/chat/sessions/", s.requireAuth(s.handleChatSessionAction))
 	s.mux.HandleFunc("GET /web/api/voice", s.requireAuth(s.handleVoiceStatus))
 
 	s.mux.HandleFunc("POST /web/api/status", s.requireAuth(s.handleSetStatus))

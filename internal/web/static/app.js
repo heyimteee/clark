@@ -20,6 +20,8 @@
   let historyLoading = false;
   let vipSort = "default";
   let voiceOn = localStorage.getItem("clark-voiceOn") === "true";
+  let chatSessionId = parseInt(localStorage.getItem("clark.chatSession") || "0", 10) || 0;
+  let chatSessions = [];
   let recording = false;
   let mediaRecorder = null;
   let audioCtx = null;
@@ -304,8 +306,14 @@
             "</div>" +
           "</section>" +
           '<section id="chat" class="hidden">' +
-            '<div id="chat-scroll"><div id="chat-list" role="log" aria-live="polite"></div></div>' +
-            '<div id="quick-msgs">' +
+            '<div id="chat-wrap">' +
+              '<aside id="chat-sidebar" aria-label="chat sessions">' +
+                '<button id="session-new" class="btn primary">+ new chat</button>' +
+                '<div id="session-list" role="listbox" aria-label="chat sessions"></div>' +
+              "</aside>" +
+              '<div id="chat-main">' +
+                '<div id="chat-scroll"><div id="chat-list" role="log" aria-live="polite"></div></div>' +
+                '<div id="quick-msgs">' +
               '<button class="chip" data-msg="What is your status?">status</button>' +
               '<button class="chip" data-msg="Turn on thinking mode">thinking</button>' +
               '<button class="chip" data-msg="Set my context: Available">context</button>' +
@@ -316,6 +324,8 @@
             '<div id="chat-input-bar">' +
               '<textarea id="chat-input" rows="1" placeholder="message clark…" aria-label="message clark"></textarea>' +
               '<button id="chat-send" class="btn primary">send</button>' +
+            "</div>" +
+              "</div>" +
             "</div>" +
           "</section>" +
           '<section id="kanban" class="hidden">' +
@@ -391,15 +401,16 @@
     bindHeader();
     bindBento();
     bindChat();
+    bindSessions();
     bindLogs();
     bindProtocols();
 
     try {
       await api("/web/api/state");
       renderState();
-      renderChatMeta();
       connectChat();
       connectLogs();
+      initChatSessions();
       refreshHistory();
       refreshTodos();
       refreshKanban();
@@ -684,6 +695,165 @@
         "</div></div>"
     );
     $("#chat-list").appendChild(seed);
+  }
+
+  /* ---------------- chat sessions ---------------- */
+
+  function persistChatSession() {
+    try {
+      if (chatSessionId) localStorage.setItem("clark.chatSession", String(chatSessionId));
+      else localStorage.removeItem("clark.chatSession");
+    } catch (e) { /* private mode */ }
+  }
+
+  async function refreshSessions() {
+    // Never wipe a rename draft: live updates wait until it saves/cancels.
+    if (document.querySelector(".session-row.renaming")) return;
+    try {
+      const d = await api("/web/api/chat/sessions");
+      chatSessions = (d && d.sessions) || [];
+      if (!chatSessions.some(function (s) { return s.id === chatSessionId; })) {
+        chatSessionId = chatSessions.length ? chatSessions[0].id : 0;
+        persistChatSession();
+      }
+      renderSessions();
+    } catch (e) {
+      if (e.message !== "session expired") toast(e.message);
+    }
+  }
+
+  function renderSessions() {
+    const list = $("#session-list");
+    if (!list) return;
+    if (!chatSessions.length) {
+      list.innerHTML = '<div class="todo-empty">no chats</div>';
+      return;
+    }
+    list.innerHTML = chatSessions.map(function (s) {
+      const active = s.id === chatSessionId;
+      return '<div class="session-row' + (active ? " active" : "") + '" role="option" aria-selected="' + String(active) + '" data-id="' + s.id + '" tabindex="0" title="' + esc(s.preview || s.title) + '">' +
+        '<div class="session-text"><span class="session-title">' + esc(s.title) + "</span>" +
+        (s.preview ? '<span class="session-preview">' + esc(s.preview) + "</span>" : "") +
+        "</div>" +
+        '<button class="session-del" data-id="' + s.id + '" aria-label="delete ' + esc(s.title) + '">×</button>' +
+        "</div>";
+    }).join("");
+    list.querySelectorAll(".session-row").forEach(function (row) {
+      row.addEventListener("click", function (e) {
+        if (e.target.closest(".session-del")) return;
+        if (e.target.closest(".session-rename")) return;
+        switchSession(+row.dataset.id);
+      });
+      row.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.target.closest(".session-rename")) switchSession(+row.dataset.id);
+      });
+      row.addEventListener("dblclick", function (e) {
+        if (e.target.closest(".session-del")) return;
+        startSessionRename(row);
+      });
+    });
+    list.querySelectorAll(".session-del").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (!armDelete(btn)) return;
+        const id = +btn.dataset.id;
+        api("/web/api/chat/sessions/" + id, { method: "DELETE" })
+          .then(function (d) {
+            toast("chat deleted");
+            if (id === chatSessionId) {
+              chatSessionId = (d && d.next && d.next.id) || 0;
+              persistChatSession();
+              loadSessionTranscript();
+            }
+            refreshSessions();
+          })
+          .catch(function (err) { toast(err.message); });
+      });
+    });
+  }
+
+  function startSessionRename(row) {
+    const id = +row.dataset.id;
+    const cur = chatSessions.find(function (s) { return s.id === id; });
+    if (!cur) return;
+    row.classList.add("renaming");
+    const text = row.querySelector(".session-text");
+    text.innerHTML = '<input class="input session-rename" value="' + esc(cur.title) + '" aria-label="rename chat">';
+    const inp = text.querySelector("input");
+    inp.focus();
+    inp.select();
+    function done(save) {
+      row.classList.remove("renaming");
+      if (!save) { renderSessions(); return; }
+      const title = inp.value.trim();
+      if (!title || title === cur.title) { renderSessions(); return; }
+      api("/web/api/chat/sessions/" + id, { method: "PUT", body: JSON.stringify({ title: title }) })
+        .then(function () { toast("chat renamed"); refreshSessions(); })
+        .catch(function (err) { toast(err.message); renderSessions(); });
+    }
+    inp.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") done(true);
+      else if (e.key === "Escape") done(false);
+    });
+    inp.addEventListener("blur", function () { done(true); });
+  }
+
+  async function switchSession(id) {
+    if (id === chatSessionId && $("#chat-list").children.length) {
+      renderSessions();
+      return;
+    }
+    chatSessionId = id;
+    persistChatSession();
+    renderSessions();
+    await loadSessionTranscript();
+  }
+
+  async function loadSessionTranscript() {
+    const list = $("#chat-list");
+    list.innerHTML = "";
+    if (!chatSessionId) {
+      renderChatMeta();
+      return;
+    }
+    try {
+      const d = await api("/web/api/chat/sessions/" + chatSessionId + "/messages");
+      const msgs = (d && d.messages) || [];
+      if (!msgs.length) {
+        renderChatMeta();
+        return;
+      }
+      msgs.forEach(function (m) {
+        appendChat(m.role === "user" ? "user" : "clark", m.content || "");
+      });
+      scrollChat();
+    } catch (e) {
+      renderChatMeta();
+      if (e.message !== "session expired") toast(e.message);
+    }
+  }
+
+  async function initChatSessions() {
+    await refreshSessions();
+    await loadSessionTranscript();
+  }
+
+  function bindSessions() {
+    const btn = $("#session-new");
+    if (btn) btn.addEventListener("click", async function () {
+      try {
+        const d = await api("/web/api/chat/sessions", { method: "POST", body: JSON.stringify({}) });
+        if (d && d.session) {
+          chatSessionId = d.session.id;
+          persistChatSession();
+          toast("new chat");
+          await refreshSessions();
+          await loadSessionTranscript();
+          $("#chat-input").focus();
+        }
+      } catch (e) {
+        toast(e.message);
+      }
+    });
   }
 
   /* ---------------- history ---------------- */
@@ -1702,6 +1872,8 @@
         streamText = "";
         spokenUpTo = 0;
         spokenCount = 0;
+        // Turn landed in this session — sidebar preview/title may have changed.
+        refreshSessions();
         // If TTS had nothing to play (empty reply or fetch failure), playBuffer
         // never fired its onended fallback. Ensure wake resumes.
         setTimeout(function () {
@@ -1715,6 +1887,7 @@
           appendChat("clark", f.text || "");
           if (voiceOn && f.text) speakTTS(f.text);
           refreshAfterTurn();
+          refreshSessions();
         }
       } else if (f.type === "error") {
         chatBusy = false;
@@ -1762,6 +1935,8 @@
         if (mode === "protocols") refreshProtocols();
       } else if (f.type === "schedules_changed") {
         if (mode === "protocols") refreshSchedules();
+      } else if (f.type === "sessions_changed") {
+        if (mode === "chat") refreshSessions();
       } else if (f.type === "pong") {
         /* keepalive ok */
       }
@@ -1888,7 +2063,7 @@
       input.style.height = "auto";
       appendChat("user", text);
       setTyping(true);
-      if (!sendFrame("chat", { text: text })) {
+      if (!sendFrame("chat", { text: text, session_id: chatSessionId })) {
         chatBusy = false;
         setTyping(false);
         toast("could not send");

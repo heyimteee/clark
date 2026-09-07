@@ -1481,6 +1481,106 @@ label.field .lbl {
 
 #chat-send { border-radius: 12px; padding: 11px 22px; }
 
+#chat-wrap {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  gap: var(--space-4);
+}
+
+#chat-sidebar {
+  width: 260px;
+  flex: none;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  padding-right: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+#session-new { width: 100%; }
+
+#session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.session-row:hover { border-color: var(--ink-faint); }
+
+.session-row.active {
+  border-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 10%, var(--surface));
+}
+
+.session-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.session-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-preview {
+  font-size: 12px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-del {
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.session-del:hover { background: var(--line); color: var(--ink); }
+
+.session-del.armed {
+  background: var(--err-bg);
+  color: var(--err-ink);
+  font-size: 11px;
+}
+
+.session-rename { font-size: 13px; }
+
+#chat-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 /* ---------- logs strip ---------- */
 
 #logs {
@@ -1567,6 +1667,25 @@ label.field .lbl {
 
 @media (max-width: 1080px) {
   .tile-config, .tile-voice, .tile-access, .tile-calendar { grid-column: span 12; }
+}
+
+@media (max-width: 900px) {
+  #chat-wrap { flex-direction: column; }
+  #chat-sidebar {
+    width: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding-right: 0;
+    padding-bottom: var(--space-3);
+    overflow-y: visible;
+  }
+  #session-list {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .session-row { min-width: 190px; max-width: 240px; }
+  #session-new { width: auto; align-self: flex-start; }
 }
 
 /* ---------- narrow viewports ---------- */
