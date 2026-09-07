@@ -323,6 +323,11 @@
             "</div>" +
           "</section>" +
           '<section id="kanban" class="hidden">' +
+            '<div class="kanban-board">' +
+              '<div class="kanban-col" data-status="open"><h3>Open</h3><div class="kanban-list" id="kanban-open"></div></div>' +
+              '<div class="kanban-col" data-status="in_progress"><h3>In Progress</h3><div class="kanban-list" id="kanban-doing"></div></div>' +
+              '<div class="kanban-col" data-status="closed"><h3>Closed</h3><div class="kanban-list" id="kanban-closed"></div></div>' +
+            '</div>' +
             '<div class="card tile-todos"><h2>Todos</h2><p class="sub">your list — precise, calm, authoritative</p>' +
               '<div class="todo-head">' +
                 '<div class="todo-count" id="todo-count">0 open</div>' +
@@ -348,15 +353,6 @@
               '<div class="todo-list" id="todo-list"></div>' +
               '<div id="todo-pager"></div>' +
             "</div>" +
-            '<div class="kanban-board">' +
-              '<div class="kanban-col" data-status="open"><h3>Open</h3><div class="kanban-list" id="kanban-open"></div></div>' +
-              '<div class="kanban-col" data-status="in_progress"><h3>In Progress</h3><div class="kanban-list" id="kanban-doing"></div></div>' +
-              '<div class="kanban-col" data-status="closed"><h3>Closed</h3><div class="kanban-list" id="kanban-closed"></div></div>' +
-            '</div>' +
-            '<div class="kanban-add">' +
-              '<input id="kanban-input" class="input" placeholder="Add a todo to kanban…">' +
-              '<button class="btn primary" id="kanban-add">add</button>' +
-            '</div>' +
           "</section>" +
           '<section id="protocols" class="hidden">' +
             '<div class="section-head"><h2 class="section-title">Protocols <span class="count-chip" id="protocol-count">0</span></h2>' +
@@ -543,13 +539,6 @@
     if (todoRefresh) todoRefresh.addEventListener("click", refreshTodos);
     const todoForm = $("#todo-form");
     if (todoForm) todoForm.addEventListener("submit", addTodo);
-    const kanbanAdd = $("#kanban-add");
-    if (kanbanAdd) kanbanAdd.addEventListener("click", function () {
-      const input = $("#kanban-input");
-      const text = input.value.trim();
-      if (!text) return;
-      api("/web/api/todos", { method: "POST", body: JSON.stringify({ text: text }) }).then(function () { input.value = ""; toastOk("todo added"); refreshTodos(); refreshKanban(); }).catch(function (e) { toastErr(e.message); });
-    });
     const calRefresh = $("#calendar-refresh");
     if (calRefresh) calRefresh.addEventListener("click", refreshCalendar);
     const calForm = $("#calendar-form");
@@ -1014,15 +1003,28 @@
       const prio = Math.min(t.priority || 0, 3);
       const prioNames = ["", "low", "normal", "high"];
       const due = closed ? null : todoDueLabel(t.due_at);
-      const desc = t.description ? '<div class="todo-desc">' + esc(t.description) + "</div>" : "";
+      const hasDesc = !!(t.description && t.description.trim());
+      const desc = hasDesc ? '<div class="todo-desc">' + esc(t.description) + "</div>" : "";
+      const check = '<button class="todo-check' + (closed ? " done" : "") + '" data-id="' + t.id + '" data-done="' + closed + '" aria-label="mark done"></button>';
+      const meta = '<span class="todo-meta">' +
+        (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
+        (due ? '<span class="due-pill ' + due.cls + '" title="due ' + esc(due.full) + '">' + esc(due.text) + "</span>" : "") +
+        "</span>";
+      const del = '<button class="todo-del" data-id="' + t.id + '" aria-label="delete">×</button>';
+      // Descriptions get their own line under a thin divider, carrying the
+      // due pill and delete; bare titles keep the compact single line.
+      if (hasDesc) {
+        return '<div class="todo-row' + (closed ? " done" : "") + '">' +
+          check +
+          '<div class="todo-main"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span>" +
+          '<div class="todo-div"></div>' +
+          '<div class="todo-sub">' + desc + meta + del + "</div>" +
+          "</div></div>";
+      }
       return '<div class="todo-row' + (closed ? " done" : "") + '">' +
-        '<button class="todo-check' + (closed ? " done" : "") + '" data-id="' + t.id + '" data-done="' + closed + '" aria-label="mark done"></button>' +
-        '<div class="todo-main"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span>" + desc + "</div>" +
-        '<span class="todo-meta">' +
-          (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
-          (due ? '<span class="due-pill ' + due.cls + '" title="due ' + esc(due.full) + '">' + esc(due.text) + "</span>" : "") +
-        "</span>" +
-        '<button class="todo-del" data-id="' + t.id + '" aria-label="delete">×</button>' +
+        check +
+        '<div class="todo-main"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span></div>" +
+        meta + del +
         "</div>";
     }).join("");
     list.querySelectorAll(".todo-check").forEach(function (btn) {

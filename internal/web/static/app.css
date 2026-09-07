@@ -798,6 +798,32 @@ label.field .lbl {
   margin-top: 2px;
 }
 
+.tile-todos .todo-div {
+  height: 1px;
+  background: var(--line);
+  margin: 8px 0;
+}
+
+.tile-todos .todo-sub {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tile-todos .todo-sub .todo-desc {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+}
+
+.tile-todos .todo-sub .todo-meta {
+  margin-top: 0;
+}
+
+.tile-todos .todo-sub .todo-del {
+  margin-top: 0;
+}
+
 .todo-text.done {
   text-decoration: line-through;
   color: var(--ink-faint);
@@ -820,6 +846,10 @@ label.field .lbl {
 
 #kanban .todo-meta {
   margin-top: 10px;
+}
+
+#kanban .todo-del {
+  margin-top: 0;
 }
 
 /* Every .spacer in the markup lives in a flex row where it pushes siblings
@@ -1273,12 +1303,6 @@ label.field .lbl {
   border-color: var(--accent);
 }
 
-.kanban-add {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
-}
-
 .tile-calendar .calendar-list {
   display: flex;
   flex-direction: column;
@@ -1372,10 +1396,6 @@ label.field .lbl {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-faint);
-}
-
-.kanban-add .input {
-  flex: 1;
 }
 
 /* ---------- chat mode ---------- */
