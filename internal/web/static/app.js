@@ -243,6 +243,7 @@
             "</div>" +
             '<div class="card tile-access"><h2>Access</h2><p class="sub">tools per contact</p>' +
               '<select id="vip-picker" class="input"></select>' +
+              '<input id="tool-search" class="input" placeholder="search tools…" aria-label="search tools">' +
               '<div id="access-list"></div>' +
               '<div id="access-pager"></div>' +
             "</div>" +
@@ -488,6 +489,12 @@
     $("#btn-vip-bulk").addEventListener("click", addVIPBulk);
     $("#vip-picker").addEventListener("change", function () { accessPage = 0; renderAccess(); });
     $("#btn-testtts").addEventListener("click", testTTS);
+    const toolSearch = $("#tool-search");
+    if (toolSearch) toolSearch.addEventListener("input", function () {
+      toolQuery = toolSearch.value;
+      accessPage = 0;
+      renderAccess();
+    });
     $("#voice-toggle").addEventListener("change", onVoiceToggle);
     $("#alert-mode-toggle").addEventListener("change", onAlertModeToggle);
 
@@ -658,7 +665,6 @@
     const jid = picker.value;
     const vips = (state && state.vips) || [];
     const vip = vips.find(function (v) { return v.jid === jid; });
-    const tools = (state && state.tools) || [];
     const list = $("#access-list");
 
     if (!vip) {
@@ -667,6 +673,12 @@
       return;
     }
     const grants = vip.access || [];
+    const q = toolQuery.trim().toLowerCase();
+    const tools = ((state && state.tools) || []).filter(function (t) {
+      if (!q) return true;
+      const name = t && t.name ? t.name : String(t);
+      return name.toLowerCase().indexOf(q) !== -1;
+    });
     const pagerEl = $("#access-pager");
     const pages = Math.ceil(tools.length / PAGE_SIZE);
     if (accessPage > pages - 1) accessPage = 0;
@@ -680,7 +692,7 @@
       return '<div class="a-row"><span class="a-name">' + esc(name) + "</span>" +
         '<label class="switch"><input type="checkbox" data-tool="' + esc(name) + '" data-jid="' + esc(jid) + '"' + (on ? " checked" : "") + ">" +
         '<span class="track"></span><span class="knob"></span></label></div>';
-    }).join("") || '<div class="a-row a-row-empty">no tools</div>';
+    }).join("") || '<div class="a-row a-row-empty">' + (q ? "no tools match" : "no tools") + "</div>";
 
     list.querySelectorAll("input[data-tool]").forEach(function (cb) {
       cb.addEventListener("change", function () {
@@ -1655,6 +1667,7 @@
 
   let todoPage = 0;
   let accessPage = 0;
+  let toolQuery = "";
   const PAGE_SIZE = 8;
 
   function renderCalendar(events) {
