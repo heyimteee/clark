@@ -286,6 +286,43 @@
               "</div>" +
               '<div class="hist-list" id="hist-list"></div>' +
             "</div>" +
+            '<div class="card tile-calendar"><h2>Calendar</h2><p class="sub">upcoming — precise, calm, authoritative</p>' +
+              '<form id="calendar-form" class="todo-form">' +
+                '<input id="calendar-title" class="input" placeholder="Event title" aria-label="Event title">' +
+                '<input id="calendar-start" class="input" type="datetime-local" aria-label="Start">' +
+                '<input id="calendar-end" class="input" type="datetime-local" aria-label="End">' +
+                '<button class="btn primary" type="submit">add</button>' +
+              "</form>" +
+              '<div class="calendar-list" id="calendar-list"><div class="todo-empty">No upcoming events</div></div>' +
+              '<button class="btn mini" id="calendar-refresh">refresh</button>' +
+            "</div>" +
+          "</section>" +
+          '<section id="chat" class="hidden">' +
+            '<div id="chat-wrap">' +
+              '<button id="sidebar-reopen" aria-label="show chats">»</button>' +
+              '<aside id="chat-sidebar" aria-label="chat sessions">' +
+                '<div id="sidebar-head"><span>chats</span><button id="sidebar-hide" aria-label="hide chats">«</button></div>' +
+                '<button id="session-new" class="btn primary">+ new chat</button>' +
+                '<div id="session-list" role="listbox" aria-label="chat sessions"></div>' +
+              "</aside>" +
+              '<div id="chat-main">' +
+                '<div id="chat-scroll"><div id="chat-list" role="log" aria-live="polite"></div></div>' +
+                '<div id="quick-msgs">' +
+              '<button class="chip" data-msg="What is your status?">status</button>' +
+              '<button class="chip" data-msg="Turn on thinking mode">thinking</button>' +
+              '<button class="chip" data-msg="Set my context: Available">context</button>' +
+              '<button class="chip" data-msg="Google the latest news today">search</button>' +
+              '<button class="chip" data-msg="Show me all the VIPs">vip list</button>' +
+              '<button class="chip" data-msg="Send a WhatsApp message to myself saying testing">send msg</button>' +
+            '</div>' +
+            '<div id="chat-input-bar">' +
+              '<textarea id="chat-input" rows="1" placeholder="message clark…" aria-label="message clark"></textarea>' +
+              '<button id="chat-send" class="btn primary">send</button>' +
+            "</div>" +
+              "</div>" +
+            "</div>" +
+          "</section>" +
+          '<section id="kanban" class="hidden">' +
             '<div class="card tile-todos"><h2>Todos</h2><p class="sub">your list — precise, calm, authoritative</p>' +
               '<div class="todo-head">' +
                 '<div class="todo-count" id="todo-count">0 open</div>' +
@@ -311,41 +348,6 @@
               '<div class="todo-list" id="todo-list"></div>' +
               '<div id="todo-pager"></div>' +
             "</div>" +
-            '<div class="card tile-calendar"><h2>Calendar</h2><p class="sub">upcoming — precise, calm, authoritative</p>' +
-              '<form id="calendar-form" class="todo-form">' +
-                '<input id="calendar-title" class="input" placeholder="Event title" aria-label="Event title">' +
-                '<input id="calendar-start" class="input" type="datetime-local" aria-label="Start">' +
-                '<input id="calendar-end" class="input" type="datetime-local" aria-label="End">' +
-                '<button class="btn primary" type="submit">add</button>' +
-              "</form>" +
-              '<div class="calendar-list" id="calendar-list"><div class="todo-empty">No upcoming events</div></div>' +
-              '<button class="btn mini" id="calendar-refresh">refresh</button>' +
-            "</div>" +
-          "</section>" +
-          '<section id="chat" class="hidden">' +
-            '<div id="chat-wrap">' +
-              '<aside id="chat-sidebar" aria-label="chat sessions">' +
-                '<button id="session-new" class="btn primary">+ new chat</button>' +
-                '<div id="session-list" role="listbox" aria-label="chat sessions"></div>' +
-              "</aside>" +
-              '<div id="chat-main">' +
-                '<div id="chat-scroll"><div id="chat-list" role="log" aria-live="polite"></div></div>' +
-                '<div id="quick-msgs">' +
-              '<button class="chip" data-msg="What is your status?">status</button>' +
-              '<button class="chip" data-msg="Turn on thinking mode">thinking</button>' +
-              '<button class="chip" data-msg="Set my context: Available">context</button>' +
-              '<button class="chip" data-msg="Google the latest news today">search</button>' +
-              '<button class="chip" data-msg="Show me all the VIPs">vip list</button>' +
-              '<button class="chip" data-msg="Send a WhatsApp message to myself saying testing">send msg</button>' +
-            '</div>' +
-            '<div id="chat-input-bar">' +
-              '<textarea id="chat-input" rows="1" placeholder="message clark…" aria-label="message clark"></textarea>' +
-              '<button id="chat-send" class="btn primary">send</button>' +
-            "</div>" +
-              "</div>" +
-            "</div>" +
-          "</section>" +
-          '<section id="kanban" class="hidden">' +
             '<div class="kanban-board">' +
               '<div class="kanban-col" data-status="open"><h3>Open</h3><div class="kanban-list" id="kanban-open"></div></div>' +
               '<div class="kanban-col" data-status="in_progress"><h3>In Progress</h3><div class="kanban-list" id="kanban-doing"></div></div>' +
@@ -359,7 +361,9 @@
           '<section id="protocols" class="hidden">' +
             '<div class="section-head"><h2 class="section-title">Protocols <span class="count-chip" id="protocol-count">0</span></h2>' +
             '<p class="sub">Step-by-step procedures clark saves and follows. He reports every protocol he creates himself.</p></div>' +
+            '<input id="proto-search" class="input list-search" placeholder="search protocols…" aria-label="search protocols">' +
             '<div id="protocol-list" class="protocol-list"></div>' +
+            '<div id="proto-pager"></div>' +
             '<div class="proto-form card">' +
               '<h3>new protocol</h3>' +
               '<label class="field"><span class="lbl">title</span>' +
@@ -370,7 +374,9 @@
             '</div>' +
             '<div class="section-head"><h2 class="section-title">Schedules <span class="count-chip" id="schedule-count">0</span></h2>' +
             '<p class="sub">Recurring tasks clark runs as you, on cron. He confirms the next run when he creates one.</p></div>' +
+            '<input id="sched-search" class="input list-search" placeholder="search schedules…" aria-label="search schedules">' +
             '<div id="schedule-list" class="schedule-list"></div>' +
+            '<div id="sched-pager"></div>' +
             '<div class="proto-form card">' +
               '<h3>new schedule</h3>' +
               '<label class="field"><span class="lbl">name</span>' +
@@ -462,7 +468,7 @@
     $("#kanban").classList.toggle("hidden", m !== "kanban");
     $("#protocols").classList.toggle("hidden", m !== "protocols");
     if (m === "chat") $("#chat-input").focus();
-    if (m === "kanban") refreshKanban();
+    if (m === "kanban") { refreshKanban(); refreshTodos(); }
     if (m === "protocols") refreshProtocols();
   }
 
@@ -866,6 +872,20 @@
   }
 
   function bindSessions() {
+    const wrap = $("#chat-wrap");
+    try {
+      if (localStorage.getItem("clark.sidebarCollapsed") === "1" && wrap) wrap.classList.add("sidebar-collapsed");
+    } catch (e) { /* private mode */ }
+    const hide = $("#sidebar-hide");
+    if (hide) hide.addEventListener("click", function () {
+      wrap.classList.add("sidebar-collapsed");
+      try { localStorage.setItem("clark.sidebarCollapsed", "1"); } catch (e) {}
+    });
+    const reopen = $("#sidebar-reopen");
+    if (reopen) reopen.addEventListener("click", function () {
+      wrap.classList.remove("sidebar-collapsed");
+      try { localStorage.removeItem("clark.sidebarCollapsed"); } catch (e) {}
+    });
     const btn = $("#session-new");
     if (btn) btn.addEventListener("click", async function () {
       try {
@@ -1223,17 +1243,40 @@
       : '<span class="origin-chip">master</span>';
   }
 
+  function filterProtocols(protocols) {
+    const q = protoQuery.trim().toLowerCase();
+    if (!q) return protocols;
+    return protocols.filter(function (p) {
+      return (p.title + " " + p.slug + " " + p.body).toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
   function renderProtocols(protocols) {
     const list = $("#protocol-list");
     const count = $("#protocol-count");
+    const pagerEl = $("#proto-pager");
     if (count) count.textContent = String(protocols.length);
     if (!protocols.length) {
       list.innerHTML = '<div class="empty-state"><strong>No protocols yet.</strong><br>' +
         "After Clark solves something reusable, tell him <em>save that as a protocol</em> — " +
         "it lands here, and he follows it next time.</div>";
+      renderPager(pagerEl, [], 0, function () {});
       return;
     }
-    list.innerHTML = protocols.map(function (p) {
+    const filtered = filterProtocols(protocols);
+    if (!filtered.length) {
+      list.innerHTML = '<div class="empty-state"><strong>No protocols match.</strong><br>' +
+        "Try a different search.</div>";
+      renderPager(pagerEl, [], 0, function () {});
+      return;
+    }
+    const pages = Math.ceil(filtered.length / PROTO_PAGE_SIZE);
+    if (protoPage > pages - 1) protoPage = 0;
+    const visible = filtered.slice(protoPage * PROTO_PAGE_SIZE, (protoPage + 1) * PROTO_PAGE_SIZE);
+    const labels = [];
+    for (let i = 0; i < pages; i++) labels.push(String(i + 1));
+    renderPager(pagerEl, labels, protoPage, function (i) { protoPage = i; refreshProtocols(); });
+    list.innerHTML = visible.map(function (p) {
       return (
         '<div class="proto-card card" data-id="' + p.id + '">' +
           '<div class="proto-head">' +
@@ -1440,17 +1483,41 @@
     return { body: body };
   }
 
+  function filterSchedules(schedules) {
+    const q = schedQuery.trim().toLowerCase();
+    if (!q) return schedules;
+    return schedules.filter(function (sc) {
+      const human = sc.kind === "once" ? "" : humanizeCron(sc.spec);
+      return (sc.name + " " + (sc.task || "") + " " + (sc.spec || "") + " " + human).toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
   function renderSchedules(schedules) {
     const list = $("#schedule-list");
     const count = $("#schedule-count");
+    const pagerEl = $("#sched-pager");
     if (count) count.textContent = String(schedules.length);
     if (!schedules.length) {
       list.innerHTML = '<div class="empty-state"><strong>No schedules.</strong><br>' +
         "Ask Clark: <em>gather the news and report to me every day at 6 AM</em> — " +
         "he creates the cron schedule himself.</div>";
+      renderPager(pagerEl, [], 0, function () {});
       return;
     }
-    list.innerHTML = schedules.map(function (sc) {
+    const filtered = filterSchedules(schedules);
+    if (!filtered.length) {
+      list.innerHTML = '<div class="empty-state"><strong>No schedules match.</strong><br>' +
+        "Try a different search.</div>";
+      renderPager(pagerEl, [], 0, function () {});
+      return;
+    }
+    const pages = Math.ceil(filtered.length / SCHED_PAGE_SIZE);
+    if (schedPage > pages - 1) schedPage = 0;
+    const visible = filtered.slice(schedPage * SCHED_PAGE_SIZE, (schedPage + 1) * SCHED_PAGE_SIZE);
+    const labels = [];
+    for (let i = 0; i < pages; i++) labels.push(String(i + 1));
+    renderPager(pagerEl, labels, schedPage, function (i) { schedPage = i; refreshSchedules(); });
+    list.innerHTML = visible.map(function (sc) {
       const once = sc.kind === "once";
       const human = once ? "" : humanizeCron(sc.spec);
       const next = sc.next_run ? new Date(sc.next_run).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -1642,6 +1709,18 @@
 
   function bindProtocols() {
     initSchedCreate();
+    const protoSearch = $("#proto-search");
+    if (protoSearch) protoSearch.addEventListener("input", function () {
+      protoQuery = protoSearch.value;
+      protoPage = 0;
+      refreshProtocols();
+    });
+    const schedSearch = $("#sched-search");
+    if (schedSearch) schedSearch.addEventListener("input", function () {
+      schedQuery = schedSearch.value;
+      schedPage = 0;
+      refreshSchedules();
+    });
     $("#proto-add").addEventListener("click", function () {
       const title = $("#proto-title").value.trim();
       const body = $("#proto-body").value;
@@ -1720,6 +1799,12 @@
   let todoPage = 0;
   let accessPage = 0;
   let toolQuery = "";
+  let protoPage = 0;
+  let protoQuery = "";
+  let schedPage = 0;
+  let schedQuery = "";
+  const PROTO_PAGE_SIZE = 1;
+  const SCHED_PAGE_SIZE = 5;
   const PAGE_SIZE = 8;
 
   function renderCalendar(events) {
