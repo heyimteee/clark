@@ -245,6 +245,8 @@ func (s *Store) migrate() error {
 			last_run_at DATETIME,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`},
+		{"schedules_kind_migrate", `ALTER TABLE schedules ADD COLUMN kind TEXT NOT NULL DEFAULT 'recurring'`},
+		{"schedules_run_at_migrate", `ALTER TABLE schedules ADD COLUMN run_at DATETIME`},
 		{"chat_history_ts_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp ON chat_history(timestamp)`},
 		{"chat_history_jid_ts_idx", `CREATE INDEX IF NOT EXISTS idx_chat_history_jid_timestamp ON chat_history(jid, timestamp)`},
 	}
@@ -252,7 +254,7 @@ func (s *Store) migrate() error {
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt.sql); err != nil {
 			// Ignore duplicate column error for idempotent migrations (e.g., description).
-			if stmt.name == "todos_desc_migrate" && isDuplicateColumnError(err) {
+			if isDuplicateColumnError(err) {
 				continue
 			}
 			return fmt.Errorf("fail to create table <%s>: %w", stmt.name, err)

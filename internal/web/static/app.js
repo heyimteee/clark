@@ -348,9 +348,26 @@
               '<h3>new schedule</h3>' +
               '<label class="field"><span class="lbl">name</span>' +
               '<input id="sched-name" class="input" placeholder="morning-news"></label>' +
-              '<label class="field"><span class="lbl">cron spec</span>' +
-              '<input id="sched-spec" class="input mono" placeholder="0 6 * * *">' +
-              '<span class="field-hint">5 fields, local time — <code>0 6 * * *</code> = every day at 06:00</span></label>' +
+              '<label class="field"><span class="lbl">timing</span></label>' +
+              '<div class="sched-kind" role="group" aria-label="schedule kind">' +
+                '<button class="btn pager-tab active" data-kind="recurring" aria-pressed="true">repeat</button>' +
+                '<button class="btn pager-tab" data-kind="once" aria-pressed="false">once</button>' +
+              "</div>" +
+              '<div id="sched-repeat" data-pane="repeat">' +
+                '<div class="day-pills" id="sched-days" role="group" aria-label="days of week"></div>' +
+                '<label class="field"><span class="lbl">time</span>' +
+                '<input id="sched-time" class="input" type="time" value="06:00" data-repeat-time></label>' +
+              "</div>" +
+              '<div id="sched-once" class="hidden" data-pane="once">' +
+                '<label class="field"><span class="lbl">date</span>' +
+                '<input id="sched-date" class="input" type="date" data-once-date></label>' +
+                '<label class="field"><span class="lbl">time</span>' +
+                '<input id="sched-time-once" class="input" type="time" value="06:00" data-once-time></label>' +
+              "</div>" +
+              '<div class="sched-preview" id="sched-preview" data-preview aria-live="polite"></div>' +
+              '<details class="sched-adv"><summary>advanced: raw cron</summary>' +
+              '<input id="sched-spec" class="input mono" placeholder="0 6 * * *" data-raw-spec">' +
+              '<span class="field-hint">Leave empty to use the picker above. Raw spec overrides it.</span></details>' +
               '<label class="field"><span class="lbl">task</span>' +
               '<textarea id="sched-task" class="input" rows="3" placeholder="Run the morning-news protocol: gather current news and report a digest."></textarea></label>' +
               '<button class="btn primary" id="sched-add">save schedule</button>' +
@@ -913,11 +930,18 @@
     const min = p[0], hr = p[1], dom = p[2], mon = p[3], dow = p[4];
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const hhmm = function (h, m) { return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0"); };
-    if (/^\d+$/.test(min) && /^\d+$/.test(hr) && dom === "*" && mon === "*" && dow === "*") {
-      return "daily at " + hhmm(hr, min);
-    }
-    if (min === "0" && /^\d+$/.test(hr) && dom === "*" && mon === "*" && /^\d+$/.test(dow)) {
-      return days[+dow % 7] + " at " + hhmm(hr, min);
+    if (/^\d+$/.test(min) && /^\d+$/.test(hr) && dom === "*" && mon === "*") {
+      if (dow === "*") return "daily at " + hhmm(hr, min);
+      var parts = dow.split(",");
+      var allNum = parts.length > 0;
+      for (var i = 0; i < parts.length; i++) {
+        if (!/^\d+$/.test(parts[i])) { allNum = false; break; }
+      }
+      if (allNum) {
+        var names = parts.map(function (p) { return days[+p % 7]; });
+        if (names.length === 7) return "daily at " + hhmm(hr, min);
+        return names.join(", ") + " at " + hhmm(hr, min);
+      }
     }
     if (min.startsWith("*/") && hr === "*" && dom === "*" && mon === "*" && dow === "*") {
       return "every " + min.slice(2) + " min";
@@ -935,6 +959,17 @@
     try {
       const data = await api("/web/api/protocols");
       renderProtocols(data.protocols || []);
+    } catch (err) {
+      toast(err.message);
+    }
+    refreshSchedules();
+  }
+
+  async function refreshSchedules() {
+    // Own guard so a protocol draft never blocks schedule updates and
+    // vice versa.
+    if (document.querySelector(".sched-row.sched-editing")) return;
+    try {
       const sdata = await api("/web/api/schedules");
       renderSchedules(sdata.schedules || []);
     } catch (err) {
@@ -1017,6 +1052,142 @@
     });
   }
 
+  var SCHED_DAYS = [["Mon", 1], ["Tue", 2], ["Wed", 3], ["Thu", 4], ["Fri", 5], ["Sat", 6], ["Sun", 0]];
+
+  function fmtDateInput(dt) {
+    var p = function (n) { return String(n).padStart(2, "0"); };
+    return dt.getFullYear() + "-" + p(dt.getMonth() + 1) + "-" + p(dt.getDate());
+  }
+  function fmtTimeInput(dt) {
+    var p = function (n) { return String(n).padStart(2, "0"); };
+    return p(dt.getHours()) + ":" + p(dt.getMinutes());
+  }
+
+  function schedDayPillsHTML(selected) {
+    return SCHED_DAYS.map(function (d) {
+      var on = selected.indexOf(d[1]) !== -1;
+      return '<button type="button" class="btn pager-tab day-pill' + (on ? " active" : "") + '" data-day="' + d[1] + '"' +
+        ' aria-pressed="' + String(on) + '">' + d[0] + "</button>";
+    }).join("");
+  }
+
+  function bindDayPills(root) {
+    root.querySelectorAll(".day-pill").forEach(function (b) {
+      b.addEventListener("click", function () {
+        b.classList.toggle("active");
+        b.setAttribute("aria-pressed", String(b.classList.contains("active")));
+        var form = b.closest("[data-sched-form]");
+        if (form) updateSchedPreview(form);
+      });
+    });
+  }
+
+  function schedFormDays(form) {
+    var days = [];
+    form.querySelectorAll(".day-pill.active").forEach(function (b) { days.push(+b.dataset.day); });
+    return days;
+  }
+
+  // parseSpecTiming extracts picker values from a plain "M H * * DOW" spec.
+  // Returns {days, time} or null when the spec is too complex for the picker
+  // (those keep the raw-spec field instead).
+  function parseSpecTiming(spec) {
+    var p = (spec || "").trim().split(/\s+/);
+    if (p.length !== 5) return null;
+    if (!/^\d+$/.test(p[0]) || !/^\d+$/.test(p[1])) return null;
+    if (p[2] !== "*" || p[3] !== "*") return null;
+    var time = String(p[1]).padStart(2, "0") + ":" + String(p[0]).padStart(2, "0");
+    var days;
+    if (p[4] === "*") {
+      days = [0, 1, 2, 3, 4, 5, 6];
+    } else {
+      days = [];
+      var parts = p[4].split(",");
+      for (var i = 0; i < parts.length; i++) {
+        if (!/^\d+$/.test(parts[i])) return null;
+        days.push(+parts[i] % 7);
+      }
+    }
+    return { days: days, time: time };
+  }
+
+  function schedKindOf(form) {
+    var active = form.querySelector('.sched-kind [data-kind].active');
+    return active ? active.dataset.kind : "recurring";
+  }
+
+  function setSchedKind(form, kind) {
+    form.querySelectorAll(".sched-kind [data-kind]").forEach(function (b) {
+      var on = b.dataset.kind === kind;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
+    var rep = form.querySelector("[data-pane=repeat]");
+    var once = form.querySelector("[data-pane=once]");
+    if (rep) rep.classList.toggle("hidden", kind !== "recurring");
+    if (once) once.classList.toggle("hidden", kind !== "once");
+    updateSchedPreview(form);
+  }
+
+  function updateSchedPreview(form) {
+    var prev = form.querySelector("[data-preview]");
+    if (!prev) return;
+    var kind = schedKindOf(form);
+    if (kind === "once") {
+      var d = form.querySelector("[data-once-date]");
+      var t = form.querySelector("[data-once-time]");
+      var dv = d && d.value ? d.value : "";
+      var tv = t && t.value ? t.value : "";
+      if (!dv || !tv) { prev.textContent = "pick a date and time"; return; }
+      var dt = new Date(dv + "T" + tv);
+      if (isNaN(dt.getTime())) { prev.textContent = "invalid date"; return; }
+      prev.textContent = "runs once on " + dt.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      return;
+    }
+    var raw = form.querySelector("[data-raw-spec]");
+    if (raw && raw.value.trim()) {
+      var human = humanizeCron(raw.value.trim());
+      prev.textContent = human ? "runs " + human : "runs on " + raw.value.trim();
+      return;
+    }
+    var days = schedFormDays(form);
+    var timeEl = form.querySelector("[data-repeat-time]");
+    var time = timeEl && timeEl.value ? timeEl.value : "";
+    if (!days.length) { prev.textContent = "pick at least one day"; return; }
+    if (!time) { prev.textContent = "pick a time"; return; }
+    var hhmm = time.split(":");
+    var spec = parseInt(hhmm[1], 10) + " " + parseInt(hhmm[0], 10) + " * * " +
+      (days.length === 7 ? "*" : days.slice().sort(function (a, b) { return a - b; }).join(","));
+    var h = humanizeCron(spec);
+    prev.textContent = h ? "runs " + h : "runs on " + spec;
+  }
+
+  function schedPayload(form, name, task) {
+    var kind = schedKindOf(form);
+    var body = { name: name, task: task };
+    if (kind === "once") {
+      var d = form.querySelector("[data-once-date]");
+      var t = form.querySelector("[data-once-time]");
+      if (!d || !d.value || !t || !t.value) return { error: "date and time are required for a one-time schedule" };
+      body.kind = "once";
+      body.run_at = d.value + "T" + t.value;
+      return { body: body };
+    }
+    var raw = form.querySelector("[data-raw-spec]");
+    if (raw && raw.value.trim()) {
+      body.spec = raw.value.trim();
+      return { body: body };
+    }
+    var days = schedFormDays(form);
+    var timeEl = form.querySelector("[data-repeat-time]");
+    if (!days.length) return { error: "pick at least one day" };
+    if (!timeEl || !timeEl.value) return { error: "pick a time" };
+    body.kind = "recurring";
+    body.days = days;
+    body.time = timeEl.value;
+    return { body: body };
+  }
+
   function renderSchedules(schedules) {
     const list = $("#schedule-list");
     const count = $("#schedule-count");
@@ -1028,33 +1199,135 @@
       return;
     }
     list.innerHTML = schedules.map(function (sc) {
-      const human = humanizeCron(sc.spec);
+      const once = sc.kind === "once";
+      const human = once ? "" : humanizeCron(sc.spec);
       const next = sc.next_run ? new Date(sc.next_run).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "—";
       const last = sc.last_run_at ? new Date(sc.last_run_at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "never";
       const state = sc.enabled ? '<span class="origin-chip on">running</span>' : '<span class="origin-chip">paused</span>';
+      const kindChip = '<span class="kind-chip">' + (once ? "once" : "repeat") + "</span>";
+      var when;
+      if (once && sc.run_at) {
+        when = "once · " + esc(new Date(sc.run_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }));
+      } else {
+        when = esc(sc.spec) + (human ? " · " + esc(human) : "");
+      }
+      // Edit-form prefill: picker values for plain specs, raw field for
+      // complex ones, date/time for one-time jobs.
+      var timing = parseSpecTiming(sc.spec || "");
+      var editDays = timing ? timing.days : [0, 1, 2, 3, 4, 5, 6];
+      var editTime = timing ? timing.time : "06:00";
+      var editRaw = timing ? "" : (sc.spec || "");
+      var editDate = "";
+      var editOnceTime = "06:00";
+      if (once && sc.run_at) {
+        var rdt = new Date(sc.run_at);
+        if (!isNaN(rdt.getTime())) {
+          editDate = fmtDateInput(rdt);
+          editOnceTime = fmtTimeInput(rdt);
+        }
+      }
       return (
         '<div class="sched-row card" data-name="' + esc(sc.name) + '">' +
           '<div class="proto-head">' +
             '<div class="proto-heading">' +
               '<span class="proto-title">' + esc(sc.name) + "</span>" +
               state +
-              '<span class="proto-meta mono">' + esc(sc.spec) + (human ? " · " + esc(human) : "") + "</span>" +
+              kindChip +
+              '<span class="proto-meta mono">' + when + "</span>" +
             "</div>" +
             '<div class="proto-actions">' +
+              '<button class="btn sched-edit" data-name="' + esc(sc.name) + '">edit</button>' +
               '<button class="btn sched-toggle" data-name="' + esc(sc.name) + '" data-enabled="' + (sc.enabled ? "1" : "0") + '">' + (sc.enabled ? "pause" : "resume") + "</button>" +
               '<button class="btn sched-del" data-name="' + esc(sc.name) + '">delete</button>' +
             "</div>" +
           "</div>" +
           '<div class="sched-when">next <span>' + esc(next) + "</span><span class='dot-sep'>·</span>last <span>" + esc(last) + "</span></div>" +
           '<div class="sched-task">' + esc(sc.task || "") + "</div>" +
+          '<div class="sched-edit-form hidden" data-sched-form>' +
+            '<label class="field"><span class="lbl">name</span>' +
+            '<input class="input" data-edit-name value="' + esc(sc.name) + '"></label>' +
+            '<div class="sched-kind" role="group" aria-label="schedule kind">' +
+              '<button type="button" class="btn pager-tab' + (once ? "" : " active") + '" data-kind="recurring" aria-pressed="' + String(!once) + '">repeat</button>' +
+              '<button type="button" class="btn pager-tab' + (once ? " active" : "") + '" data-kind="once" aria-pressed="' + String(once) + '">once</button>' +
+            "</div>" +
+            '<div data-pane="repeat"' + (once ? ' class="hidden"' : "") + ">" +
+              '<div class="day-pills">' + schedDayPillsHTML(editDays) + "</div>" +
+              '<label class="field"><span class="lbl">time</span>' +
+              '<input class="input" type="time" data-repeat-time value="' + esc(editTime) + '"></label>' +
+              '<details class="sched-adv"><summary>advanced: raw cron</summary>' +
+              '<input class="input mono" data-raw-spec value="' + esc(editRaw) + '" placeholder="0 6 * * *"></details>' +
+            "</div>" +
+            '<div data-pane="once"' + (once ? "" : ' class="hidden"') + ">" +
+              '<label class="field"><span class="lbl">date</span>' +
+              '<input class="input" type="date" data-once-date value="' + esc(editDate) + '"></label>' +
+              '<label class="field"><span class="lbl">time</span>' +
+              '<input class="input" type="time" data-once-time value="' + esc(editOnceTime) + '"></label>' +
+            "</div>" +
+            '<div class="sched-preview" data-preview aria-live="polite"></div>' +
+            '<label class="field"><span class="lbl">task</span>' +
+            '<textarea class="input" data-edit-task rows="3">' + esc(sc.task || "") + "</textarea></label>" +
+            '<div class="proto-actions"><button class="btn primary sched-save" data-name="' + esc(sc.name) + '">save changes</button>' +
+            '<button class="btn sched-cancel">cancel</button></div>' +
+          "</div>" +
         "</div>"
       );
     }).join("");
+    bindDayPills(list);
+    list.querySelectorAll(".sched-kind [data-kind]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var form = b.closest("[data-sched-form]");
+        if (form) setSchedKind(form, b.dataset.kind);
+      });
+    });
+    list.querySelectorAll("[data-sched-form] input, [data-sched-form] textarea").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var form = inp.closest("[data-sched-form]");
+        if (form) updateSchedPreview(form);
+      });
+    });
+    list.querySelectorAll(".sched-edit").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var card = btn.closest(".sched-row");
+        var editing = card.classList.toggle("sched-editing");
+        btn.textContent = editing ? "cancel" : "edit";
+        var form = card.querySelector("[data-sched-form]");
+        form.classList.toggle("hidden", !editing);
+        if (editing) updateSchedPreview(form);
+      });
+    });
+    list.querySelectorAll(".sched-cancel").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var card = btn.closest(".sched-row");
+        card.classList.remove("sched-editing");
+        card.querySelector("[data-sched-form]").classList.add("hidden");
+        card.querySelector(".sched-edit").textContent = "edit";
+      });
+    });
+    list.querySelectorAll(".sched-save").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var card = btn.closest(".sched-row");
+        var form = card.querySelector("[data-sched-form]");
+        var newName = form.querySelector("[data-edit-name]").value.trim();
+        var task = form.querySelector("[data-edit-task]").value;
+        if (!newName) { toast("name is required"); return; }
+        var res = schedPayload(form, newName, task);
+        if (res.error) { toast(res.error); return; }
+        if (newName !== btn.dataset.name) res.body.new_name = newName;
+        btn.disabled = true;
+        api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "PUT", body: JSON.stringify(res.body) })
+          .then(function () {
+            card.classList.remove("sched-editing");
+            toast("schedule updated");
+            refreshSchedules();
+          })
+          .catch(function (err) { toast(err.message); btn.disabled = false; });
+      });
+    });
     list.querySelectorAll(".sched-toggle").forEach(function (btn) {
       btn.addEventListener("click", function () {
         const enable = btn.dataset.enabled !== "1";
         api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "PUT", body: JSON.stringify({ enabled: enable }) })
-          .then(function () { refreshProtocols(); })
+          .then(function () { toast(enable ? "schedule resumed" : "schedule paused"); refreshSchedules(); })
           .catch(function (err) { toast(err.message); });
       });
     });
@@ -1062,13 +1335,61 @@
       btn.addEventListener("click", function () {
         if (!armDelete(btn)) return;
         api("/web/api/schedules/" + encodeURIComponent(btn.dataset.name), { method: "DELETE" })
-          .then(function () { refreshProtocols(); })
+          .then(function () { toast("schedule deleted"); refreshSchedules(); })
           .catch(function (err) { toast(err.message); });
       });
     });
   }
 
+  // initSchedCreate wires the builder controls of the new-schedule card:
+  // kind pills, day pills, and the live preview.
+  function initSchedCreate() {
+    var card = $("#sched-add");
+    if (!card) return;
+    var form = card.closest(".proto-form");
+    form.setAttribute("data-sched-form", "");
+    var daysEl = $("#sched-days");
+    if (daysEl && !daysEl.children.length) {
+      daysEl.innerHTML = schedDayPillsHTML([0, 1, 2, 3, 4, 5, 6]);
+      // Owned by the static create form, not a re-rendered list.
+      daysEl.querySelectorAll(".day-pill").forEach(function (b) {
+        b.addEventListener("click", function () {
+          b.classList.toggle("active");
+          b.setAttribute("aria-pressed", String(b.classList.contains("active")));
+          updateSchedPreview(form);
+        });
+      });
+    }
+    form.querySelectorAll(".sched-kind [data-kind]").forEach(function (b) {
+      b.addEventListener("click", function () { setSchedKind(form, b.dataset.kind); });
+    });
+    ["#sched-time", "#sched-date", "#sched-time-once", "#sched-spec", "#sched-task"].forEach(function (sel) {
+      var inp = $(sel);
+      if (inp) inp.addEventListener("input", function () { updateSchedPreview(form); });
+    });
+    var dateEl = $("#sched-date");
+    if (dateEl && !dateEl.value) {
+      var now = new Date();
+      dateEl.value = fmtDateInput(new Date(now.getTime() + 86400000));
+    }
+    updateSchedPreview(form);
+  }
+
+  function resetSchedCreate() {
+    $("#sched-name").value = "";
+    $("#sched-spec").value = "";
+    $("#sched-task").value = "";
+    var form = $("#sched-add").closest(".proto-form");
+    setSchedKind(form, "recurring");
+    form.querySelectorAll("#sched-days .day-pill").forEach(function (b) {
+      b.classList.add("active");
+      b.setAttribute("aria-pressed", "true");
+    });
+    updateSchedPreview(form);
+  }
+
   function bindProtocols() {
+    initSchedCreate();
     $("#proto-add").addEventListener("click", function () {
       const title = $("#proto-title").value.trim();
       const body = $("#proto-body").value;
@@ -1083,17 +1404,18 @@
         .catch(function (err) { toast(err.message); });
     });
     $("#sched-add").addEventListener("click", function () {
+      const form = $("#sched-add").closest(".proto-form");
       const name = $("#sched-name").value.trim();
-      const spec = $("#sched-spec").value.trim();
       const task = $("#sched-task").value;
-      if (!name || !spec) { toast("name and cron spec are required"); return; }
-      api("/web/api/schedules", { method: "POST", body: JSON.stringify({ name: name, spec: spec, task: task }) })
+      if (!name) { toast("name is required"); return; }
+      const res = schedPayload(form, name, task);
+      if (res.error) { toast(res.error); return; }
+      if (!task.trim()) { toast("task is required for a new schedule"); return; }
+      api("/web/api/schedules", { method: "POST", body: JSON.stringify(res.body) })
         .then(function () {
-          $("#sched-name").value = "";
-          $("#sched-spec").value = "";
-          $("#sched-task").value = "";
+          resetSchedCreate();
           toast("schedule saved");
-          refreshProtocols();
+          refreshSchedules();
         })
         .catch(function (err) { toast(err.message); });
     });
@@ -1439,7 +1761,7 @@
         // — refresh the Protocols page live if it is open.
         if (mode === "protocols") refreshProtocols();
       } else if (f.type === "schedules_changed") {
-        if (mode === "protocols") refreshProtocols();
+        if (mode === "protocols") refreshSchedules();
       } else if (f.type === "pong") {
         /* keepalive ok */
       }

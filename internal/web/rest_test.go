@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -472,6 +474,112 @@ func TestSchedulesWebCRUD(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("DELETE schedule = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestSchedulesBuilderAndOnce(t *testing.T) {
+	st := testStore(t)
+	sched := scheduler.New(st, func(_ context.Context, _, _ string) {})
+	srv := New(Options{
+		ListenAddr: ":0",
+		WebToken:   testWebToken,
+		Store:      st,
+		STTModel:   "whisper-turbo",
+		TTSEngine:  "kokoro-remote",
+		Voice:      &voice.Engine{},
+		Scheduler:  sched,
+	})
+	ts := newServerFor(t, srv)
+	tok := login(t, ts)
+	put := func(path string, body any) (int, map[string]any) {
+		t.Helper()
+		buf, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		req, err := http.NewRequest(http.MethodPut, ts.URL+path, bytes.NewReader(buf))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req = bearer(req, tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do request: %v", err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+
+	// Builder payload: weekdays + time become a cron spec server-side.
+	code, out := postJSON(t, ts, "/web/api/schedules", tok, map[string]any{
+		"name": "weekdays", "task": "work", "kind": "recurring",
+		"days": []int{1, 3, 5}, "time": "06:30",
+	})
+	if code != 201 {
+		t.Fatalf("builder create = %d (%v), want 201", code, out)
+	}
+	sc := out["schedule"].(map[string]any)
+	if sc["spec"] != "30 6 * * 1,3,5" {
+		t.Fatalf("built spec = %v, want 30 6 * * 1,3,5", sc["spec"])
+	}
+
+	// All seven days collapse to *.
+	code, out = postJSON(t, ts, "/web/api/schedules", tok, map[string]any{
+		"name": "daily", "task": "work", "days": []int{0, 1, 2, 3, 4, 5, 6}, "time": "8:00",
+	})
+	if code != 201 {
+		t.Fatalf("daily create = %d (%v), want 201", code, out)
+	}
+	if sc := out["schedule"].(map[string]any); sc["spec"] != "0 8 * * *" {
+		t.Fatalf("daily spec = %v, want 0 8 * * *", sc["spec"])
+	}
+
+	// No days picked is rejected.
+	if code, _ := postJSON(t, ts, "/web/api/schedules", tok, map[string]any{
+		"name": "nodays", "task": "work", "kind": "recurring", "days": []int{}, "time": "06:00",
+	}); code != 400 {
+		t.Fatalf("empty days = %d, want 400", code)
+	}
+
+	// One-time schedule with a future run time.
+	future := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
+	code, out = postJSON(t, ts, "/web/api/schedules", tok, map[string]any{
+		"name": "once-job", "task": "remind me", "kind": "once", "run_at": future,
+	})
+	if code != 201 {
+		t.Fatalf("once create = %d (%v), want 201", code, out)
+	}
+	if sc := out["schedule"].(map[string]any); sc["kind"] != "once" || sc["run_at"] == nil {
+		t.Fatalf("once schedule wrong: %v", sc)
+	}
+
+	// Past one-time run is rejected.
+	past := time.Now().Add(-time.Hour).Format(time.RFC3339)
+	if code, _ := postJSON(t, ts, "/web/api/schedules", tok, map[string]any{
+		"name": "past-job", "task": "x", "kind": "once", "run_at": past,
+	}); code != 400 {
+		t.Fatalf("past run_at = %d, want 400", code)
+	}
+
+	// Rename via PUT new_name.
+	code, out = put("/web/api/schedules/weekdays", map[string]any{"new_name": "workdays"})
+	if code != 200 {
+		t.Fatalf("rename = %d (%v), want 200", code, out)
+	}
+	if sc := out["schedule"].(map[string]any); sc["name"] != "workdays" {
+		t.Fatalf("renamed = %v, want workdays", sc["name"])
+	}
+
+	// Retiming via builder fields on PUT.
+	code, out = put("/web/api/schedules/workdays", map[string]any{"days": []int{0, 6}, "time": "09:15"})
+	if code != 200 {
+		t.Fatalf("retime = %d (%v), want 200", code, out)
+	}
+	if sc := out["schedule"].(map[string]any); sc["spec"] != "15 9 * * 0,6" {
+		t.Fatalf("retimed spec = %v, want 15 9 * * 0,6", sc["spec"])
 	}
 }
 

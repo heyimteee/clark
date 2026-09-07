@@ -500,7 +500,7 @@ func registerProtocolsTools(ast *assistant.Service, st *store.Store) {
 func registerScheduleTools(ast *assistant.Service, sched *scheduler.Scheduler) {
 	ast.Tools().RegisterFunc(
 		"list_schedules",
-		"List recurring scheduled tasks with their cron spec and next run time. Only the Master may use this.",
+		"List scheduled tasks with their timing and next run time (recurring cron plus one-time jobs). Only the Master may use this.",
 		map[string]any{"type": "object", "properties": map[string]any{}},
 		func(ctx context.Context, _ map[string]any) (string, error) {
 			if err := masterOnlyForTool(ctx, ast); err != nil {
@@ -527,21 +527,29 @@ func registerScheduleTools(ast *assistant.Service, sched *scheduler.Scheduler) {
 				if len(task) > 80 {
 					task = task[:80] + "…"
 				}
-				fmt.Fprintf(&b, "- %s | %s | %s | next: %s\n  task: %s\n", sc.Name, sc.Spec, state, nextStr, task)
+				timing := sc.Spec
+				if sc.IsOnce() {
+					timing = "once"
+					if sc.RunAt != nil {
+						timing = "once at " + sc.RunAt.Format("2006-01-02 15:04 (-07:00)")
+					}
+				}
+				fmt.Fprintf(&b, "- %s | %s | %s | next: %s\n  task: %s\n", sc.Name, timing, state, nextStr, task)
 			}
 			return strings.TrimRight(b.String(), "\n"), nil
 		},
 	)
 	ast.Tools().RegisterFunc(
 		"create_schedule",
-		"Create or update a recurring scheduled task. spec is 5-field cron ('0 6 * * *' = every day 06:00 local). Omitted task/spec keep existing values on update — pause by passing enabled=false. Confirm the schedule and its next run to the Master after creating. Only the Master may use this.",
+		"Create or update a scheduled task. Recurring: pass spec as 5-field cron ('0 6 * * *' = every day 06:00 local). One-time: pass run_at as 'YYYY-MM-DD HH:MM' local instead of spec — it fires once then auto-disables. Omitted task/spec keep existing values on update — pause by passing enabled=false. Confirm the schedule and its next run to the Master after creating. Only the Master may use this.",
 		map[string]any{
 			"type":     "object",
-			"required": []string{"name", "spec"},
+			"required": []string{"name"},
 			"properties": map[string]any{
 				"name":    map[string]any{"type": "string", "description": "Short schedule name, e.g. morning-news"},
 				"task":    map[string]any{"type": "string", "description": "The instruction executed at fire time, e.g. 'Run the morning-news protocol: gather current news and report a digest.'"},
-				"spec":    map[string]any{"type": "string", "description": "5-field cron spec in local time, e.g. '0 6 * * *'"},
+				"spec":    map[string]any{"type": "string", "description": "5-field cron spec in local time for recurring schedules, e.g. '0 6 * * *'"},
+				"run_at":  map[string]any{"type": "string", "description": "One-time run moment 'YYYY-MM-DD HH:MM' local; pass instead of spec for a job that fires once"},
 				"enabled": map[string]any{"type": "boolean", "description": "Whether the schedule runs (default true; false pauses it)"},
 			},
 		},
@@ -552,15 +560,31 @@ func registerScheduleTools(ast *assistant.Service, sched *scheduler.Scheduler) {
 			name := tools.StringArg(args, "name")
 			task := tools.StringArg(args, "task")
 			spec := tools.StringArg(args, "spec")
-			if name == "" || spec == "" {
-				return "", fmt.Errorf("name and spec are required")
+			runAtStr := tools.StringArg(args, "run_at")
+			if name == "" {
+				return "", fmt.Errorf("name is required")
+			}
+			kind := "recurring"
+			var runAt *time.Time
+			if runAtStr != "" {
+				kind = "once"
+				t, err := time.ParseInLocation("2006-01-02 15:04", runAtStr, time.Local)
+				if err != nil {
+					return "", fmt.Errorf("run_at must be 'YYYY-MM-DD HH:MM': %w", err)
+				}
+				runAt = &t
+			} else if spec == "" {
+				// Spec may be omitted only when updating an existing schedule.
+				if _, err := sched.Get(name); err != nil {
+					return "", fmt.Errorf("spec or run_at is required for a new schedule")
+				}
 			}
 			var enabled *bool
 			if _, ok := args["enabled"]; ok {
 				v := tools.BoolArg(args, "enabled")
 				enabled = &v
 			}
-			sc, err := sched.Upsert(name, task, spec, enabled)
+			sc, err := sched.UpsertFull(name, task, spec, kind, runAt, enabled)
 			if err != nil {
 				return "", err
 			}
@@ -568,11 +592,18 @@ func registerScheduleTools(ast *assistant.Service, sched *scheduler.Scheduler) {
 			if !sc.Enabled {
 				state = "disabled (paused)"
 			}
+			timing := sc.Spec
 			next := "—"
-			if n, err := sched.NextRun(sc.Spec); err == nil && sc.Enabled {
+			if n := sched.NextRunFor(sc); !n.IsZero() && sc.Enabled {
 				next = n.Format("2006-01-02 15:04 (-07:00)")
 			}
-			return fmt.Sprintf("Schedule %q saved (%s, %s). Next run: %s.", sc.Name, sc.Spec, state, next), nil
+			if sc.IsOnce() {
+				timing = "one-time"
+				if sc.RunAt != nil {
+					timing = "one-time at " + sc.RunAt.Format("2006-01-02 15:04 (-07:00)")
+				}
+			}
+			return fmt.Sprintf("Schedule %q saved (%s, %s). Next run: %s.", sc.Name, timing, state, next), nil
 		},
 	)
 	ast.Tools().RegisterFunc(

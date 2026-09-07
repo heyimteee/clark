@@ -7,23 +7,30 @@ import (
 	"time"
 )
 
-// Schedule is one recurring master task: a cron spec plus the prompt executed
-// with master privileges when it fires.
+// Schedule is one master task: either recurring (a cron spec) or one-time
+// (a run_at timestamp). Kind is "recurring" or "once".
 type Schedule struct {
 	ID        int64      `json:"id"`
 	Name      string     `json:"name"`
 	Task      string     `json:"task"`
 	Spec      string     `json:"spec"`
+	Kind      string     `json:"kind"`
+	RunAt     *time.Time `json:"run_at,omitempty"`
 	Enabled   bool       `json:"enabled"`
 	LastRunAt *time.Time `json:"last_run_at,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 }
 
-// ScheduleStore persists recurring task definitions.
+// IsOnce reports whether this schedule fires a single time.
+func (s Schedule) IsOnce() bool { return s.Kind == "once" }
+
+// ScheduleStore persists recurring and one-time task definitions.
 type ScheduleStore interface {
 	UpsertSchedule(s Schedule) (Schedule, error)
 	ListSchedules() ([]Schedule, error)
 	GetSchedule(name string) (Schedule, error)
+	GetScheduleByID(id int64) (Schedule, error)
+	RenameSchedule(id int64, newName string) error
 	DeleteSchedule(id int64) error
 	SetScheduleEnabled(id int64, enabled bool) error
 	MarkScheduleRun(id int64) error
@@ -35,27 +42,64 @@ func (s *Store) UpsertSchedule(sc Schedule) (Schedule, error) {
 	if sc.Name == "" {
 		return Schedule{}, fmt.Errorf("schedule name is required")
 	}
+	if sc.Kind == "" {
+		sc.Kind = "recurring"
+	}
 	enabled := 0
 	if sc.Enabled {
 		enabled = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO schedules (name, task, spec, enabled)
-		VALUES (?, ?, ?, ?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO schedules (name, task, spec, kind, run_at, enabled)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			task = excluded.task,
 			spec = excluded.spec,
+			kind = excluded.kind,
+			run_at = excluded.run_at,
 			enabled = excluded.enabled`,
-		sc.Name, sc.Task, sc.Spec, enabled)
+		sc.Name, sc.Task, sc.Spec, sc.Kind, sc.RunAt, enabled)
 	if err != nil {
 		return Schedule{}, fmt.Errorf("fail to upsert schedule: %w", err)
 	}
 	return s.GetSchedule(sc.Name)
 }
 
+// RenameSchedule changes a schedule's name, keeping its id.
+func (s *Store) RenameSchedule(id int64, newName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if newName == "" {
+		return fmt.Errorf("schedule name is required")
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE schedules SET name = ? WHERE id = ?`, newName, id)
+	if err != nil {
+		return fmt.Errorf("fail to rename schedule: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("schedule id %d not found", id)
+	}
+	return nil
+}
+
+// GetScheduleByID fetches one schedule by id.
+func (s *Store) GetScheduleByID(id int64) (Schedule, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, task, spec, kind, run_at, enabled, last_run_at, created_at FROM schedules WHERE id = ?`, id)
+	sc, err := scanSchedule(row.Scan)
+	if err == sql.ErrNoRows {
+		return Schedule{}, fmt.Errorf("schedule id %d not found", id)
+	}
+	if err != nil {
+		return Schedule{}, fmt.Errorf("fail to get schedule: %w", err)
+	}
+	return sc, nil
+}
+
 func (s *Store) ListSchedules() ([]Schedule, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, task, spec, enabled, last_run_at, created_at FROM schedules ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, task, spec, kind, run_at, enabled, last_run_at, created_at FROM schedules ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("fail to list schedules: %w", err)
 	}
@@ -74,7 +118,7 @@ func (s *Store) ListSchedules() ([]Schedule, error) {
 func (s *Store) GetSchedule(name string) (Schedule, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, task, spec, enabled, last_run_at, created_at FROM schedules WHERE name = ?`, name)
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, task, spec, kind, run_at, enabled, last_run_at, created_at FROM schedules WHERE name = ?`, name)
 	sc, err := scanSchedule(row.Scan)
 	if err == sql.ErrNoRows {
 		return Schedule{}, fmt.Errorf("schedule %q not found", name)
@@ -128,9 +172,17 @@ func (s *Store) MarkScheduleRun(id int64) error {
 func scanSchedule(scan func(dest ...any) error) (Schedule, error) {
 	var sc Schedule
 	var lastRun sql.NullTime
+	var runAt sql.NullTime
 	var enabled int
-	if err := scan(&sc.ID, &sc.Name, &sc.Task, &sc.Spec, &enabled, &lastRun, &sc.CreatedAt); err != nil {
+	if err := scan(&sc.ID, &sc.Name, &sc.Task, &sc.Spec, &sc.Kind, &runAt, &enabled, &lastRun, &sc.CreatedAt); err != nil {
 		return Schedule{}, err
+	}
+	if sc.Kind == "" {
+		sc.Kind = "recurring"
+	}
+	if runAt.Valid {
+		t := runAt.Time
+		sc.RunAt = &t
 	}
 	sc.Enabled = enabled == 1
 	if lastRun.Valid {

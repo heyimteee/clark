@@ -964,6 +964,90 @@ label.field .lbl {
   border-left: 0;
 }
 
+.sched-kind {
+  display: flex;
+  gap: 6px;
+  margin-bottom: var(--space-3);
+}
+
+.sched-kind .pager-tab {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 5px 16px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.sched-kind .pager-tab.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.day-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.day-pills .day-pill {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  min-height: 0;
+}
+
+.day-pills .day-pill.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.sched-preview {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ok-ink);
+  margin: 2px 0 var(--space-3);
+  min-height: 18px;
+}
+
+.sched-adv {
+  margin-bottom: var(--space-3);
+}
+
+.sched-adv summary {
+  font-size: 12px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 6px;
+}
+
+.kind-chip {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklch, var(--accent) 55%, transparent);
+  color: var(--accent);
+}
+
+.sched-edit-form {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .proto-form {
   display: flex;
   flex-direction: column;

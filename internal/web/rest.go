@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -581,6 +582,107 @@ func (s *Server) handleProtocolAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// resolveScheduleTiming turns schedule-builder fields (or a legacy raw cron
+// spec) into the (spec, kind, runAt) triple for Scheduler.UpsertFull. Empty
+// everything means "no timing change" — kind comes back "" and the scheduler
+// keeps the existing timing via merge semantics.
+func resolveScheduleTiming(kind, spec string, days []int, timeStr, runAtStr string) (string, string, *time.Time, error) {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind != "" && kind != "recurring" && kind != "once" {
+		return "", "", nil, fmt.Errorf("kind must be recurring or once")
+	}
+	if kind == "once" || (kind == "" && runAtStr != "" && spec == "" && timeStr == "" && days == nil) {
+		if runAtStr == "" {
+			return "", "", nil, fmt.Errorf("run date and time are required for a one-time schedule")
+		}
+		runAt, err := parseRunAt(runAtStr)
+		if err != nil {
+			return "", "", nil, err
+		}
+		return "", "once", &runAt, nil
+	}
+	if kind == "" && spec == "" && timeStr == "" && runAtStr == "" && days == nil {
+		return "", "", nil, nil
+	}
+	if timeStr != "" || days != nil {
+		built, err := buildCronFromDays(days, timeStr)
+		if err != nil {
+			return "", "", nil, err
+		}
+		return built, "recurring", nil, nil
+	}
+	if spec == "" {
+		return "", "", nil, fmt.Errorf("time or cron spec is required")
+	}
+	return spec, "recurring", nil, nil
+}
+
+// buildCronFromDays builds "M H * * DOW" from weekday numbers (0=Sunday)
+// and a "HH:MM" time. All seven days collapse to "*".
+func buildCronFromDays(days []int, timeStr string) (string, error) {
+	hour, min, err := parseTimeOfDay(timeStr)
+	if err != nil {
+		return "", err
+	}
+	if len(days) == 0 {
+		return "", fmt.Errorf("pick at least one day")
+	}
+	seen := map[int]bool{}
+	uniq := []int{}
+	for _, d := range days {
+		if d < 0 || d > 6 {
+			return "", fmt.Errorf("invalid day %d: must be 0-6 (Sun-Sat)", d)
+		}
+		if !seen[d] {
+			seen[d] = true
+			uniq = append(uniq, d)
+		}
+	}
+	sort.Ints(uniq)
+	dow := "*"
+	if len(uniq) < 7 {
+		parts := make([]string, len(uniq))
+		for i, d := range uniq {
+			parts[i] = strconv.Itoa(d)
+		}
+		dow = strings.Join(parts, ",")
+	}
+	return fmt.Sprintf("%d %d * * %s", min, hour, dow), nil
+}
+
+// parseTimeOfDay parses "HH:MM" 24-hour time.
+func parseTimeOfDay(s string) (hour, min int, err error) {
+	parts := strings.Split(strings.TrimSpace(s), ":")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("time must be HH:MM")
+	}
+	hour, err = strconv.Atoi(parts[0])
+	if err != nil || hour < 0 || hour > 23 {
+		return 0, 0, fmt.Errorf("hour must be 00-23")
+	}
+	min, err = strconv.Atoi(parts[1])
+	if err != nil || min < 0 || min > 59 {
+		return 0, 0, fmt.Errorf("minute must be 00-59")
+	}
+	return hour, min, nil
+}
+
+// parseRunAt parses a one-time run moment: RFC3339 or the datetime-local
+// "2006-01-02T15:04" form (interpreted in local time).
+func parseRunAt(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04", s, time.Local); err == nil {
+		return t, nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02 15:04", s, time.Local); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("run date must be a valid date and time")
+}
+
 func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	if s.sched == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "scheduler not available"})
@@ -612,13 +714,22 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			Name    string `json:"name"`
 			Task    string `json:"task"`
 			Spec    string `json:"spec"`
+			Kind    string `json:"kind"`
+			Days    []int  `json:"days"`
+			Time    string `json:"time"`
+			RunAt   string `json:"run_at"`
 			Enabled *bool  `json:"enabled"`
 		}
 		if err := decodeBody(w, r, &body); err != nil || body.Name == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name is required"})
 			return
 		}
-		sc, err := s.sched.Upsert(body.Name, body.Task, body.Spec, body.Enabled)
+		spec, kind, runAt, err := resolveScheduleTiming(body.Kind, body.Spec, body.Days, body.Time, body.RunAt)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		sc, err := s.sched.UpsertFull(body.Name, body.Task, spec, kind, runAt, body.Enabled)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
@@ -645,13 +756,33 @@ func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Task    string `json:"task"`
 			Spec    string `json:"spec"`
+			Kind    string `json:"kind"`
+			Days    []int  `json:"days"`
+			Time    string `json:"time"`
+			RunAt   string `json:"run_at"`
+			NewName string `json:"new_name"`
 			Enabled *bool  `json:"enabled"`
 		}
 		if err := decodeBody(w, r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid body"})
 			return
 		}
-		sc, err := s.sched.Upsert(name, body.Task, body.Spec, body.Enabled)
+		// Rename first so timing validation errors don't orphan a rename.
+		target := name
+		if body.NewName != "" && body.NewName != name {
+			renamed, err := s.sched.Rename(name, body.NewName)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+				return
+			}
+			target = renamed.Name
+		}
+		spec, kind, runAt, err := resolveScheduleTiming(body.Kind, body.Spec, body.Days, body.Time, body.RunAt)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		sc, err := s.sched.UpsertFull(target, body.Task, spec, kind, runAt, body.Enabled)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
