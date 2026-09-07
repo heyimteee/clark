@@ -936,23 +936,25 @@
 
   /* ---------------- todos ---------------- */
 
-  // todoDueLabel renders a due date as a relative pill: {text, cls} with cls
-  // "", "soon", "today", or "overdue". Null when there is no due date.
+  // todoDueLabel renders a due date as a relative pill: {text, cls, full}
+  // with cls "", "soon", "today", or "overdue" and full the tooltip date.
+  // Null when there is no due date.
   function todoDueLabel(dueAt) {
     if (!dueAt) return null;
     const d = new Date(dueAt);
     if (isNaN(d.getTime())) return null;
+    const full = d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
     const now = new Date();
     const day = function (dt) { return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime(); };
     const diff = Math.round((day(d) - day(now)) / 86400000);
     if (diff < 0) {
       const n = -diff;
-      return { text: n === 1 ? "overdue 1d" : "overdue " + n + "d", cls: "overdue" };
+      return { text: n === 1 ? "overdue 1d" : "overdue " + n + "d", cls: "overdue", full: full };
     }
-    if (diff === 0) return { text: "today", cls: "today" };
-    if (diff === 1) return { text: "tomorrow", cls: "soon" };
-    if (diff <= 7) return { text: "in " + diff + "d", cls: "soon" };
-    return { text: d.toLocaleDateString([], { month: "short", day: "numeric" }), cls: "" };
+    if (diff === 0) return { text: "today", cls: "today", full: full };
+    if (diff === 1) return { text: "tomorrow", cls: "soon", full: full };
+    if (diff <= 7) return { text: "in " + diff + "d", cls: "soon", full: full };
+    return { text: d.toLocaleDateString([], { month: "short", day: "numeric" }), cls: "", full: full };
   }
 
   async function refreshTodos() {
@@ -968,8 +970,13 @@
   function renderTodos(todos) {
     const list = $("#todo-list");
     const count = $("#todo-count");
-    const open = todos.filter(function (t) { return t.status === "open"; }).length;
-    count.textContent = open + " open";
+    const openTodos = todos.filter(function (t) { return t.status !== "closed" && t.status !== "done"; });
+    const overdue = openTodos.filter(function (t) {
+      const due = todoDueLabel(t.due_at);
+      return due && due.cls === "overdue";
+    }).length;
+    count.innerHTML = esc(openTodos.length + " open") +
+      (overdue ? ' <span class="overdue-n">· ' + overdue + " overdue</span>" : "");
     const pagerEl = $("#todo-pager");
     if (!todos.length) {
       list.innerHTML = '<div class="todo-empty">No todos yet — add one above</div>';
@@ -993,7 +1000,7 @@
         '<div class="todo-main"><span class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</span>" + desc + "</div>" +
         '<span class="todo-meta">' +
           (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
-          (due ? '<span class="due-pill ' + due.cls + '">' + esc(due.text) + "</span>" : "") +
+          (due ? '<span class="due-pill ' + due.cls + '" title="due ' + esc(due.full) + '">' + esc(due.text) + "</span>" : "") +
         "</span>" +
         '<button class="todo-del" data-id="' + t.id + '" aria-label="delete">×</button>' +
         "</div>";
@@ -1074,19 +1081,20 @@
   }
 
   function kanbanCard(t) {
-    const prio = t.priority || 0;
-    const due = t.due_at ? new Date(t.due_at).toLocaleDateString() : "";
+    const prio = Math.min(t.priority || 0, 3);
+    const prioNames = ["", "low", "normal", "high"];
     const closed = t.status === "closed";
     const doing = t.status === "in_progress";
+    const due = closed ? null : todoDueLabel(t.due_at);
     const desc = t.description ? '<div class="todo-desc kanban-desc">' + esc(t.description) + '</div>' : "";
     const statusLabel = closed ? "closed" : doing ? "in progress" : "open";
     return '<div class="kanban-card' + (closed ? " closed" : doing ? " doing" : "") + '" draggable="true" tabindex="0" data-id="' + t.id + '" aria-label="' + esc(t.text) + ", status " + statusLabel + ". Press left or right arrow to move." + '">' +
       '<div class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</div>" + desc +
       '<div class="todo-meta">' +
-        '<span class="todo-prio p' + Math.min(prio, 3) + '"></span>' +
-        (due ? "<span>" + esc(due) + "</span>" : "") +
+        (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
+        (due ? '<span class="due-pill ' + due.cls + '" title="due ' + esc(due.full) + '">' + esc(due.text) + "</span>" : "") +
         '<span class="spacer"></span>' +
-        '<button class="todo-del" data-id="' + t.id + '">×</button>' +
+        '<button class="todo-del" data-id="' + t.id + '" aria-label="delete">×</button>' +
       "</div>" +
       "</div>";
   }
