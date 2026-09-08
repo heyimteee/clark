@@ -748,7 +748,7 @@ label.field .lbl {
 
 .tile-todos .todo-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   padding: 10px 12px;
   background: var(--surface-2);
@@ -763,7 +763,7 @@ label.field .lbl {
 .tile-todos .todo-check {
   width: 18px;
   height: 18px;
-  margin-top: 1px;
+  margin-top: 0;
   border-radius: 50%;
   border: 2px solid var(--line-strong);
   flex: none;
@@ -805,7 +805,7 @@ label.field .lbl {
 }
 
 #kanban .todo-div {
-  margin: 10px 0;
+  margin: 10px 0 0;
 }
 
 .todo-text.done {
@@ -821,7 +821,7 @@ label.field .lbl {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 2px;
+  margin-top: 0;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-faint);
@@ -830,10 +830,6 @@ label.field .lbl {
 
 #kanban .todo-meta {
   margin-top: 10px;
-}
-
-#kanban .todo-del {
-  margin-top: 0;
 }
 
 /* Every .spacer in the markup lives in a flex row where it pushes siblings
@@ -888,7 +884,7 @@ label.field .lbl {
   font-size: 14px;
   line-height: 1;
   padding: 2px 6px;
-  margin-top: -1px;
+  margin-top: 0;
   border-radius: 6px;
 }
 
