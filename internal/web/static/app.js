@@ -1098,8 +1098,8 @@
     const desc = t.description ? '<div class="todo-desc kanban-desc">' + esc(t.description) + '</div>' : "";
     const statusLabel = closed ? "closed" : doing ? "in progress" : "open";
     return '<div class="kanban-card' + (closed ? " closed" : doing ? " doing" : "") + '" draggable="true" tabindex="0" data-id="' + t.id + '" aria-label="' + esc(t.text) + ", status " + statusLabel + ". Press left or right arrow to move." + '">' +
-      '<div class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</div>" +
-      (desc ? '<div class="todo-div"></div>' + desc : desc) +
+      '<div class="todo-text' + (closed ? " done" : "") + '">' + esc(t.text) + "</div>" + desc +
+      (desc ? '<div class="todo-div"></div>' : "") +
       '<div class="todo-meta">' +
         (prio > 0 ? '<span class="todo-prio p' + prio + '" title="priority ' + prioNames[prio] + '"></span>' : "") +
         (due ? '<span class="due-pill ' + due.cls + '" title="due ' + esc(due.full) + '">' + esc(due.text) + "</span>" : "") +
