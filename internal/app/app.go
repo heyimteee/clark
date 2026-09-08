@@ -541,7 +541,7 @@ func registerScheduleTools(ast *assistant.Service, sched *scheduler.Scheduler) {
 	)
 	ast.Tools().RegisterFunc(
 		"create_schedule",
-		"Create or update a scheduled task. Recurring: pass spec as 5-field cron ('0 6 * * *' = every day 06:00 local). One-time: pass run_at as 'YYYY-MM-DD HH:MM' local instead of spec — it fires once then auto-disables. Omitted task/spec keep existing values on update — pause by passing enabled=false. Confirm the schedule and its next run to the Master after creating. Only the Master may use this.",
+		"Create or update a scheduled task. Recurring: pass spec as 5-field cron ('0 6 * * *' = every day 06:00 local). One-time: pass run_at as 'YYYY-MM-DD HH:MM' local instead of spec — it fires once then deletes itself. Omitted task/spec keep existing values on update — pause by passing enabled=false. Confirm the schedule and its next run to the Master after creating. Only the Master may use this.",
 		map[string]any{
 			"type":     "object",
 			"required": []string{"name"},

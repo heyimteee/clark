@@ -131,6 +131,12 @@ func New(opts Options) *Server {
 		})
 	}
 
+	if s.sched != nil {
+		// Fired one-time schedules delete themselves; push the change so
+		// open consoles drop the row without a manual refresh.
+		s.sched.SetOnChange(func() { s.broadcastChanged("schedules_changed") })
+	}
+
 	s.mux.HandleFunc("POST /web/api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /web/api/logout", s.requireAuth(s.handleLogout))
 

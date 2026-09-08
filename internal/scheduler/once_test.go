@@ -1,8 +1,11 @@
 package scheduler
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/heyimteee/clark/internal/store"
 )
 
 func TestSchedulerOnceValidation(t *testing.T) {
@@ -24,8 +27,11 @@ func TestSchedulerOnceValidation(t *testing.T) {
 	}
 }
 
-func TestSchedulerOnceFireAutoDisables(t *testing.T) {
+func TestSchedulerOnceFireDeletes(t *testing.T) {
 	s, st, fired := newTestScheduler(t)
+
+	changed := 0
+	s.SetOnChange(func() { changed++ })
 
 	future := time.Now().Add(50 * time.Millisecond)
 	created, err := s.UpsertFull("once-job", "do once", "", "once", &future, nil)
@@ -48,21 +54,42 @@ func TestSchedulerOnceFireAutoDisables(t *testing.T) {
 	if len(*fired) != 1 || (*fired)[0].name != "once-job" {
 		t.Fatalf("fired wrong: %+v", *fired)
 	}
-	persisted, err := st.GetSchedule("once-job")
-	if err != nil {
-		t.Fatalf("GetSchedule: %v", err)
-	}
-	if persisted.Enabled {
-		t.Fatal("one-time schedule should auto-disable after firing")
-	}
-	if persisted.LastRunAt == nil {
-		t.Fatal("LastRunAt should be set after fire")
+	if _, err := st.GetSchedule("once-job"); err == nil {
+		t.Fatal("fired one-time schedule should be deleted")
 	}
 	s.mu.Lock()
 	timers = len(s.timers)
 	s.mu.Unlock()
 	if timers != 0 {
 		t.Fatalf("timers = %d after fire, want 0", timers)
+	}
+	if changed != 1 {
+		t.Fatalf("onChange called %d times, want 1", changed)
+	}
+}
+
+func TestSchedulerOncePastDueStartupDisables(t *testing.T) {
+	s, st, _ := newTestScheduler(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// A missed run the server never fired: inserted directly since UpsertFull
+	// rejects past times for new schedules.
+	past := time.Now().Add(-time.Hour)
+	sc, err := st.UpsertSchedule(store.Schedule{Name: "missed", Task: "task", Kind: "once", RunAt: &past, Enabled: true})
+	if err != nil {
+		t.Fatalf("UpsertSchedule: %v", err)
+	}
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Missed runs stay visible (disabled), never silently deleted.
+	persisted, err := st.GetScheduleByID(sc.ID)
+	if err != nil {
+		t.Fatalf("past-due one-time schedule should be kept, got: %v", err)
+	}
+	if persisted.Enabled {
+		t.Fatal("past-due one-time schedule should be disabled")
 	}
 }
 
