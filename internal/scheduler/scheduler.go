@@ -27,8 +27,8 @@ const maxRunDuration = 10 * time.Minute
 // Scheduler keeps the live cron instance in sync with the schedules table.
 // All mutations (Upsert/SetEnabled/Delete) persist AND resync immediately,
 // so chat tools and web REST share one mutation path. Recurring schedules
-// run on cron; one-time schedules run on a single timer and auto-disable
-// after firing.
+// run on cron; one-time schedules run on a single timer and delete
+// themselves after firing.
 type Scheduler struct {
 	st  store.ScheduleStore
 	run RunFunc
@@ -37,7 +37,10 @@ type Scheduler struct {
 	mu      sync.Mutex
 	entries map[int64]cron.EntryID
 	timers  map[int64]*time.Timer
-	started bool
+	// onChange, when non-nil, runs after a mutation the scheduler performs
+	// itself (one-time auto-delete). Set before Start; guarded by mu.
+	onChange func()
+	started  bool
 }
 
 // New builds a scheduler over the given store. The run function is invoked
@@ -54,6 +57,14 @@ func New(st store.ScheduleStore, run RunFunc) *Scheduler {
 		entries: map[int64]cron.EntryID{},
 		timers:  map[int64]*time.Timer{},
 	}
+}
+
+// SetOnChange registers a callback invoked after the scheduler deletes a
+// fired one-time schedule, so consoles can refresh the list live.
+func (s *Scheduler) SetOnChange(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
 }
 
 // Start loads every enabled schedule and runs the cron loop until ctx is
@@ -361,22 +372,25 @@ func (s *Scheduler) fire(id int64, name, task string) func() {
 	}
 }
 
-// fireOnce wraps one one-time execution: bounded context, run callback, run
-// timestamp, then auto-disable so it never fires twice.
+// fireOnce wraps one one-time execution: bounded context, run callback, then
+// deletion so a fired job never lingers. The FIRE log line is the audit
+// trail. Past-due jobs found disabled at startup are NOT deleted here — they
+// stay visible so missed runs are noticed.
 func (s *Scheduler) fireOnce(id int64, name, task string) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), maxRunDuration)
 		defer cancel()
 		logging.Log("SCHED", logging.SevInfo, "FIRE", "One-time schedule firing", "name", name)
 		s.run(ctx, name, task)
-		if err := s.st.MarkScheduleRun(id); err != nil {
-			logging.Log("SCHED", logging.SevWarn, "FIRE", "Could not mark run", "name", name, "error", err)
-		}
-		if err := s.st.SetScheduleEnabled(id, false); err != nil {
-			logging.Log("SCHED", logging.SevWarn, "FIRE", "Could not auto-disable one-time schedule", "name", name, "error", err)
+		if err := s.st.DeleteSchedule(id); err != nil {
+			logging.Log("SCHED", logging.SevWarn, "FIRE", "Could not delete fired one-time schedule", "name", name, "error", err)
 		}
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		delete(s.timers, id)
+		onChange := s.onChange
+		s.mu.Unlock()
+		if onChange != nil {
+			onChange()
+		}
 	}
 }
