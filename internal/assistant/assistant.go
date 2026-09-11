@@ -181,7 +181,7 @@ func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 		vip:         NewVIP(st),
 		tools:       tools.NewRegistry(),
 		llm:         llm,
-		model:       cfg.OllamaModel,
+		model:       cfg.ActiveModel(),
 		visionModel: cfg.OllamaVisionModel,
 		pending:     make(map[string]*pendingIter),
 
@@ -535,7 +535,7 @@ func (s *Service) Name() string {
 	return s.name
 }
 
-// Model returns the configured Ollama model.
+// Model returns the active chat model serving replies.
 func (s *Service) Model() string {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
@@ -1014,7 +1014,7 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 		messages = append(messages, ollama.Message{Role: "system", Content: "Tool hints for this turn (use them if relevant, ignore otherwise): " + strings.Join(hints, ", ")})
 	}
 
-	logging.Log("OLLAMA", logging.SevInfo, "REQUEST", "Generating response", "model", s.model)
+	logging.Log("MODEL", logging.SevInfo, "REQUEST", "Generating response", "model", s.model)
 	start := time.Now()
 
 	reply, thinking, pending, err := s.runToolLoop(ctx, messages, userMsg, available, isSelf)
@@ -1025,7 +1025,7 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
 	}
 
-	logging.Log("OLLAMA", logging.SevInfo, "RESPONSE", "Generation completed",
+	logging.Log("MODEL", logging.SevInfo, "RESPONSE", "Generation completed",
 		"model", s.model,
 		"duration", time.Since(start).Round(time.Millisecond))
 
@@ -1121,7 +1121,7 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 		messages = append(messages, ollama.Message{Role: "system", Content: "Tool hints for this turn (use them if relevant, ignore otherwise): " + strings.Join(hints, ", ")})
 	}
 
-	logging.Log("OLLAMA", logging.SevInfo, "REQUEST", "Generating response (streaming)", "model", s.model)
+	logging.Log("MODEL", logging.SevInfo, "REQUEST", "Generating response (streaming)", "model", s.model)
 	start := time.Now()
 
 	reply, thinking, pending, err := s.runToolLoopStream(ctx, messages, userMsg, available, isSelf, onToken)
@@ -1132,7 +1132,7 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 		reply = "_" + strings.TrimSpace(disclosurePrefix) + "_\n\n" + strings.TrimSpace(reply)
 	}
 
-	logging.Log("OLLAMA", logging.SevInfo, "RESPONSE", "Generation completed (streaming)",
+	logging.Log("MODEL", logging.SevInfo, "RESPONSE", "Generation completed (streaming)",
 		"model", s.model,
 		"duration", time.Since(start).Round(time.Millisecond))
 
@@ -1239,6 +1239,7 @@ func (s *Service) saveReply(senderJID, reply string) (string, error) {
 type promptData struct {
 	ButlerName        string
 	MasterName        string
+	Model             string
 	Context           string
 	MasterStatus      string
 	ButlerStatus      string
@@ -1259,9 +1260,9 @@ type promptData struct {
 func (s *Service) handleModelError(err error) error {
 	if errors.Is(err, ollama.ErrRateLimited) {
 		if serr := s.SetStatus(false); serr != nil {
-			logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Failed to switch clark off after rate limit", "error", serr)
+			logging.Log("MODEL", logging.SevErr, "RATELIMIT", "Failed to switch clark off after rate limit", "error", serr)
 		}
-		logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Model rate limited; clark switched off", "error", err)
+		logging.Log("MODEL", logging.SevErr, "RATELIMIT", "Model rate limited; clark switched off", "error", err)
 		return fmt.Errorf("%w: %s", ollama.ErrRateLimited, err.Error())
 	}
 	return err
@@ -1275,6 +1276,7 @@ func (s *Service) renderPrompt(name, masterStatus, butlerStatus, visitor, toolsL
 	data := promptData{
 		ButlerName:        name,
 		MasterName:        s.masterName,
+		Model:             s.model,
 		Context:           masterStatus,
 		MasterStatus:      masterStatus,
 		ButlerStatus:      butlerStatus,

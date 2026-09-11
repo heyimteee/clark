@@ -74,6 +74,16 @@ type Person struct {
 // llmBackendGo selects the hosted Responses-API brain (OpenCode Go).
 const llmBackendGo = "opencode-go"
 
+// ActiveModel returns the chat model actually serving: the Go model when
+// that backend is selected, else the Ollama model. Labels, logs, and the
+// prompt identity line must use this — never OllamaModel directly.
+func (c *Config) ActiveModel() string {
+	if strings.ToLower(strings.TrimSpace(c.LLMBackend)) == llmBackendGo {
+		return c.LLMModel
+	}
+	return c.OllamaModel
+}
+
 // Load reads .env (if present) and validates the configuration.
 func Load() (*Config, error) {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {

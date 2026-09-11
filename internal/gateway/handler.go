@@ -180,7 +180,7 @@ func (h *Handler) Handle(msg Message) {
 
 	// Fast path: deterministic commands answered with hardcoded messages.
 	if reply, handled, err := h.butler.Prehandle(msg.Sender, msg.Text, msg.IsSelf); err != nil {
-		logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "Prehandle failed while reading the command; sending apology",
+		logging.Log("MODEL", logging.SevErr, "RESPONSE", "Prehandle failed while reading the command; sending apology",
 			"chat", msg.Chat, "from", msg.Sender, "preview", logging.Brief(msg.Text, 80), "error", err,
 			"next", "sender should repeat the command; check assistant store health")
 		if serr := h.msgr.Send(ctx, msg.Chat, apologyFor("reading your command")); serr != nil {
@@ -491,7 +491,7 @@ func (d *dispatcher) process(in inbound) {
 	reply, err := d.butler.Reply(d.ctx, in.senderJID, userMsg, in.isSelf)
 	if err != nil {
 		if errors.Is(err, ollama.ErrRateLimited) {
-			logging.Log("OLLAMA", logging.SevErr, "RATELIMIT", "Model rate limited; master alerted and clark switched off",
+			logging.Log("MODEL", logging.SevErr, "RATELIMIT", "Model rate limited; master alerted and clark switched off",
 				"id", in.id, "chat", in.chat, "sender", in.senderJID,
 				"preview", logging.Brief(userMsg, 80), "error", err,
 				"next", "master says wake up buddy when ready; check model quota")
@@ -500,7 +500,7 @@ func (d *dispatcher) process(in inbound) {
 					"sender", in.senderJID, "error", serr, "cause", err)
 			}
 		} else {
-			logging.Log("OLLAMA", logging.SevErr, "RESPONSE", "Model reply failed; sending staged apology",
+			logging.Log("MODEL", logging.SevErr, "RESPONSE", "Model reply failed; sending staged apology",
 				"id", in.id, "chat", in.chat, "sender", in.senderJID,
 				"preview", logging.Brief(userMsg, 80), "error", err,
 				"next", "sender should repeat the message; check model health")
