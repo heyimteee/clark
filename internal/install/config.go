@@ -14,18 +14,20 @@ import (
 func Config(args []string) error {
 	fs := flag.NewFlagSet("config", flag.ContinueOnError)
 	var edit string
+	var noSync bool
 	fs.StringVar(&edit, "edit", "", "feature to reconfigure (core, llm, persona, imessage, voice, live)")
 	fs.StringVar(&edit, "e", "", "feature to reconfigure (shorthand)")
+	fs.BoolVar(&noSync, "no-sync", false, "skip the push-to-server offer after reconfiguring")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if edit != "" {
-		return reconfigureFeature(strings.ToLower(edit))
+		return reconfigureFeature(strings.ToLower(edit), huhPrompter{}, noSync)
 	}
-	return interactiveConfig()
+	return interactiveConfig(noSync)
 }
 
-func interactiveConfig() error {
+func interactiveConfig(noSync bool) error {
 	envPath := ".env"
 	existing, _ := godotenv.Read(envPath)
 	if existing == nil {
@@ -50,7 +52,7 @@ func interactiveConfig() error {
 			fmt.Println("Done.")
 			return nil
 		}
-		if err := reconfigureFeature(selected); err != nil {
+		if err := reconfigureFeature(selected, huhPrompter{}, noSync); err != nil {
 			fmt.Printf("Failed to reconfigure %s: %v\n", selected, err)
 		}
 		// Reload .env for next loop
@@ -90,7 +92,11 @@ func buildChecklist(env map[string]string) []string {
 }
 
 // reconfigureFeature re-enters the wizard for a single feature group.
-func reconfigureFeature(feature string) error {
+func reconfigureFeature(feature string, p Prompter, noSync bool) error {
+	// Checklist exit entries read "exit — done"; --edit exit arrives bare.
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(feature)), "exit") {
+		return nil
+	}
 	// Normalize feature key from checklist display or --edit flag
 	key := strings.ToLower(feature)
 	// Extract feature key from display string (first word)
@@ -116,25 +122,66 @@ func reconfigureFeature(feature string) error {
 		existing = map[string]string{}
 	}
 
-	p := huhPrompter{}
 	ex := osExecutor{}
 
+	var err error
 	switch key {
 	case "core":
-		return reconfigureCore(p, envPath, existing, ex)
+		err = reconfigureCore(p, envPath, existing, ex)
 	case "persona":
-		return reconfigurePersona(p, envPath, existing, ex)
+		err = reconfigurePersona(p, envPath, existing, ex)
 	case "imessage":
-		return reconfigureIMessage(p, envPath, existing, ex)
+		err = reconfigureIMessage(p, envPath, existing, ex)
 	case "web":
-		return reconfigureWeb(p, envPath, existing, ex)
+		err = reconfigureWeb(p, envPath, existing, ex)
 	case "voice":
-		return reconfigureVoice(p, envPath, existing, ex)
+		err = reconfigureVoice(p, envPath, existing, ex)
 	case "live":
-		return reconfigureLive(p, envPath, existing, ex)
+		err = reconfigureLive(p, envPath, existing, ex)
 	default:
 		return fmt.Errorf("unknown feature %q (try: core, llm, persona, imessage, web, voice, live)", feature)
 	}
+	if err != nil {
+		return err
+	}
+	if key == "live" {
+		return nil // store-only pointers; nothing written, nothing to sync
+	}
+	return maybeSyncServer(p, envPath, ex, noSync)
+}
+
+// maybeSyncServer offers to push the rewritten .env to the known SSH host
+// and rebuild there, so a Mac-side reconfigure reaches the server. The host
+// comes from the just-written file; with --no-sync or no host it only
+// prints the manual steps.
+func maybeSyncServer(p Prompter, envPath string, ex Executor, noSync bool) error {
+	if noSync {
+		return nil
+	}
+	var host string
+	if fresh, _ := godotenv.Read(envPath); fresh != nil {
+		host = strings.TrimSpace(fresh["SSH_HOST"])
+	}
+	if host == "" {
+		fmt.Println("No SSH_HOST set — copy .env to your server manually and restart Clark there.")
+		return nil
+	}
+	ok, err := p.Confirm(fmt.Sprintf("Push %s to %s and rebuild remotely?", envPath, host), true)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		fmt.Printf("Skipped. Sync manually: scp %s %s:~/clark/.env && ssh %s 'cd ~/clark && docker compose up -d --build'\n", envPath, host, host)
+		return nil
+	}
+	if err := ex.Run("scp", envPath, host+":~/clark/.env"); err != nil {
+		return fmt.Errorf("scp .env: %w", err)
+	}
+	if err := ex.Run("ssh", host, "cd ~/clark && docker compose up -d --build"); err != nil {
+		return fmt.Errorf("remote rebuild: %w", err)
+	}
+	fmt.Println("Pushed and rebuilding. Verify on the server: docker compose logs clark | tail -5")
+	return nil
 }
 
 func reconfigureCore(p Prompter, envPath string, existing map[string]string, ex Executor) error {
@@ -298,6 +345,13 @@ func writeAndApplyWithRestart(envPath string, env map[string]string, ans Answers
 		fmt.Println("Restarting Clark to apply .env changes...")
 		// Prefer docker compose restart if compose file exists
 		if _, err := os.Stat("docker-compose.yml"); err == nil {
+			// Probe quietly first: a missing daemon (e.g. stock Mac
+			// terminal) otherwise dumps client errors for nothing.
+			if derr := ex.RunQuiet("docker", "info"); derr != nil {
+				fmt.Println("Docker daemon not reachable here — skipping local restart.")
+				fmt.Println("If Clark runs elsewhere, copy .env over and restart it there.")
+				return nil
+			}
 			_ = ex.Run("docker", "compose", "restart")
 			// Also try up --build in case new env needs rebuild
 			_ = ex.Run("docker", "compose", "up", "-d")

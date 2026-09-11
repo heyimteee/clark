@@ -79,6 +79,8 @@ func (h huhPrompter) Select(title string, def string, opts []string) (string, er
 // Executor abstracts os/exec for testing.
 type Executor interface {
 	Run(name string, args ...string) error
+	// RunQuiet is Run without wiring stdio: for probes whose output is noise.
+	RunQuiet(name string, args ...string) error
 	LookPath(file string) (string, error)
 }
 
@@ -89,6 +91,11 @@ func (o osExecutor) Run(name string, args ...string) error {
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	c.Stdin = os.Stdin
+	return c.Run()
+}
+
+func (o osExecutor) RunQuiet(name string, args ...string) error {
+	c := exec.Command(name, args...)
 	return c.Run()
 }
 func (o osExecutor) LookPath(file string) (string, error) { return exec.LookPath(file) }

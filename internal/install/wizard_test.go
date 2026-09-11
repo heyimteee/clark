@@ -2,6 +2,7 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -417,7 +418,9 @@ func TestBuildEnvLLMBackend(t *testing.T) {
 }
 
 type stubExecutor struct {
-	runs [][]string
+	runs      [][]string
+	quietRuns [][]string
+	quietErr  error
 }
 
 func (s *stubExecutor) Run(name string, args ...string) error {
@@ -494,5 +497,107 @@ func TestChecklistCoreShowsBackend(t *testing.T) {
 	opts = buildChecklist(map[string]string{"OLLAMA_MODEL": "llama3.2"})
 	if !strings.Contains(opts[0], "ollama") || !strings.Contains(opts[0], "llama3.2") {
 		t.Fatalf("core line = %q", opts[0])
+	}
+}
+
+func (s *stubExecutor) RunQuiet(name string, args ...string) error {
+	s.quietRuns = append(s.quietRuns, append([]string{name}, args...))
+	return s.quietErr
+}
+
+func TestReconfigureExit(t *testing.T) {
+	p := &scriptPrompter{t: t}
+	if err := reconfigureFeature("exit — done", p, false); err != nil {
+		t.Fatalf("exit display string: %v", err)
+	}
+	if err := reconfigureFeature("exit", p, false); err != nil {
+		t.Fatalf("exit key: %v", err)
+	}
+	if err := reconfigureFeature("bogus", p, false); err == nil {
+		t.Fatal("want error for unknown feature")
+	}
+}
+
+func writeTempEnv(t *testing.T, content string) string {
+	t.Helper()
+	path := t.TempDir() + "/.env"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("write temp env: %v", err)
+	}
+	return path
+}
+
+func TestMaybeSyncServerPush(t *testing.T) {
+	envPath := writeTempEnv(t, "SSH_HOST=example\n")
+	p := &scriptPrompter{t: t, confirms: []bool{true}}
+	ex := &stubExecutor{}
+	if err := maybeSyncServer(p, envPath, ex, false); err != nil {
+		t.Fatalf("maybeSyncServer: %v", err)
+	}
+	if len(ex.runs) != 2 {
+		t.Fatalf("runs = %v, want scp + ssh", ex.runs)
+	}
+	if ex.runs[0][0] != "scp" || ex.runs[1][0] != "ssh" {
+		t.Fatalf("runs = %v", ex.runs)
+	}
+}
+
+func TestMaybeSyncServerDeclined(t *testing.T) {
+	envPath := writeTempEnv(t, "SSH_HOST=example\n")
+	p := &scriptPrompter{t: t, confirms: []bool{false}}
+	ex := &stubExecutor{}
+	if err := maybeSyncServer(p, envPath, ex, false); err != nil {
+		t.Fatalf("maybeSyncServer: %v", err)
+	}
+	if len(ex.runs) != 0 {
+		t.Fatalf("runs = %v, want none", ex.runs)
+	}
+}
+
+func TestMaybeSyncServerNoHost(t *testing.T) {
+	envPath := writeTempEnv(t, "OLLAMA_MODEL=x\n")
+	p := &scriptPrompter{t: t}
+	ex := &stubExecutor{}
+	if err := maybeSyncServer(p, envPath, ex, false); err != nil {
+		t.Fatalf("maybeSyncServer: %v", err)
+	}
+	if len(ex.runs) != 0 || len(p.confirms) != 0 {
+		t.Fatal("no host means no prompt and no runs")
+	}
+}
+
+func TestMaybeSyncServerNoSyncFlag(t *testing.T) {
+	envPath := writeTempEnv(t, "SSH_HOST=example\n")
+	p := &scriptPrompter{t: t}
+	ex := &stubExecutor{}
+	if err := maybeSyncServer(p, envPath, ex, true); err != nil {
+		t.Fatalf("maybeSyncServer: %v", err)
+	}
+	if len(ex.runs) != 0 {
+		t.Fatalf("runs = %v, want none", ex.runs)
+	}
+}
+
+func TestWriteAndApplySkipsUnreachableDaemon(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	// A compose file present (as in a real checkout) but no daemon.
+	if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0644); err != nil {
+		t.Fatalf("write compose: %v", err)
+	}
+	envPath := dir + "/.env"
+	ex := &stubExecutor{quietErr: errors.New("no daemon")}
+	env := map[string]string{"A": "1"}
+	if err := writeAndApplyWithRestart(envPath, env, Answers{}, ex, true); err != nil {
+		t.Fatalf("writeAndApplyWithRestart: %v", err)
+	}
+	if len(ex.quietRuns) != 1 || ex.quietRuns[0][0] != "docker" {
+		t.Fatalf("quietRuns = %v, want docker probe", ex.quietRuns)
+	}
+	if len(ex.runs) != 0 {
+		t.Fatalf("runs = %v, want no local docker calls", ex.runs)
+	}
+	if _, err := os.Stat(envPath); err != nil {
+		t.Fatalf("env file should still be written: %v", err)
 	}
 }
