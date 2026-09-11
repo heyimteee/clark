@@ -104,6 +104,8 @@ func nudgeFor(hint string) string {
 		return "You have not actually performed the requested action. Words alone do nothing: you MUST invoke the " + hint + " tool now, with the correct arguments. Respond with ONLY the tool call."
 	case "add_vip or delete_vip":
 		return "You have not actually performed the requested action. Words alone do nothing: you MUST invoke the add_vip or delete_vip tool now, with the correct arguments. Respond with ONLY the tool call."
+	case "list_protocols", "load_protocol":
+		return "You claimed a protocol is missing. Never trust memory for this: you MUST invoke the list_protocols tool now to check the store. Respond with ONLY the tool call."
 	}
 	return nudgeMessage
 }
@@ -120,6 +122,22 @@ type pendingIter struct {
 	senderJID string
 	isSelf    bool
 	messages  []ollama.Message
+}
+
+// loadedProtocolTTL bounds how long a loaded body stays eligible for
+// re-injection. Loads are conversation working memory, not facts: recent
+// enough to still be what "go" refers to, short enough to never haunt
+// unrelated turns.
+const loadedProtocolTTL = 15 * time.Minute
+
+// loadedProtocol is one successful load_protocol result, kept per sender so
+// a load-then-confirm flow ("loaded, shall I execute?" → "go") still has
+// the body: tool outputs are not persisted to history, so without this the
+// follow-through turn starts with no steps at all (2026-09-11 night).
+type loadedProtocol struct {
+	slug string
+	body string
+	at   time.Time
 }
 
 // Service is the assistant's orchestration layer. It satisfies whatsapp.Butler.
@@ -157,6 +175,9 @@ type Service struct {
 	pendingMu sync.Mutex
 	pending   map[string]*pendingIter
 
+	loadedMu sync.Mutex
+	loaded   map[string]loadedProtocol
+
 	// cacheMu guards the in-memory scalar settings (name, context, status,
 	// think, alertMode, historyLimit). Reload (SIGHUP) and the setters write
 	// under Lock; getters read under RLock, so an out-of-process reload can't
@@ -184,6 +205,7 @@ func New(cfg *config.Config, st *store.Store, llm LLM) (*Service, error) {
 		model:       cfg.ActiveModel(),
 		visionModel: cfg.OllamaVisionModel,
 		pending:     make(map[string]*pendingIter),
+		loaded:      make(map[string]loadedProtocol),
 
 		masterName:        orDefault(cfg.MasterName, "the Master"),
 		protocolName:      orDefault(cfg.ProtocolName, "Butler"),
@@ -1013,6 +1035,12 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	if hints := s.guessTools(userMsg, available); len(hints) > 0 {
 		messages = append(messages, ollama.Message{Role: "system", Content: "Tool hints for this turn (use them if relevant, ignore otherwise): " + strings.Join(hints, ", ")})
 	}
+	// Re-anchor a recently loaded protocol on follow-through turns: tool
+	// outputs are not persisted to history, so without this a load-then-go
+	// flow starts with no steps at all.
+	if anchor, ok := s.loadedAnchor(senderJID, userMsg); ok {
+		messages = append(messages, anchor)
+	}
 
 	logging.Log("MODEL", logging.SevInfo, "REQUEST", "Generating response", "model", s.model)
 	start := time.Now()
@@ -1120,6 +1148,12 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	if hints := s.guessTools(userMsg, available); len(hints) > 0 {
 		messages = append(messages, ollama.Message{Role: "system", Content: "Tool hints for this turn (use them if relevant, ignore otherwise): " + strings.Join(hints, ", ")})
 	}
+	// Re-anchor a recently loaded protocol on follow-through turns: tool
+	// outputs are not persisted to history, so without this a load-then-go
+	// flow starts with no steps at all.
+	if anchor, ok := s.loadedAnchor(senderJID, userMsg); ok {
+		messages = append(messages, anchor)
+	}
 
 	logging.Log("MODEL", logging.SevInfo, "REQUEST", "Generating response (streaming)", "model", s.model)
 	start := time.Now()
@@ -1220,6 +1254,12 @@ func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Messa
 			ranTools[tc.Function.Name] = true
 			ranResults = append(ranResults, tc.Function.Name+": "+logging.Brief(out, 120))
 			messages = append(messages, ollama.Message{Role: "tool", Content: out})
+			if tc.Function.Name == "load_protocol" && err == nil {
+				s.rememberLoaded(tools.Sender(ctx), out)
+				if anchor, ok := anchorLoadedProtocol(out); ok {
+					messages = append(messages, anchor)
+				}
+			}
 		}
 	}
 	return "", lastThinking, messages, nil
@@ -1397,6 +1437,12 @@ func (s *Service) runToolLoop(ctx context.Context, messages []ollama.Message, us
 			ranTools[tc.Function.Name] = true
 			ranResults = append(ranResults, tc.Function.Name+": "+logging.Brief(out, 120))
 			messages = append(messages, ollama.Message{Role: "tool", Content: out})
+			if tc.Function.Name == "load_protocol" && err == nil {
+				s.rememberLoaded(tools.Sender(ctx), out)
+				if anchor, ok := anchorLoadedProtocol(out); ok {
+					messages = append(messages, anchor)
+				}
+			}
 		}
 	}
 
@@ -1425,7 +1471,12 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 
 	// If the model is asking the user a question (seeking clarification),
 	// never force a tool call — the model is legitimately requesting info.
+	// Exception: false absence claims about protocols, which must be
+	// verified against the store even when phrased as a question.
 	replyLow := strings.ToLower(reply)
+	if hasTool("list_protocols", "load_protocol") && protocolAbsenceClaim(userMsg, replyLow) {
+		return true, "list_protocols"
+	}
 	if isQuestion(replyLow) {
 		return false, ""
 	}
@@ -1578,6 +1629,12 @@ func (s *Service) guessTools(userMsg string, available []tools.Tool) []string {
 	if hasTool("view_history", "view_all_history") && hasAny(m, "what did", "show.*history", "past messages", "what has been said") {
 		hints = append(hints, "view_history")
 	}
+	// Protocol turns: bias toward discovery + loading whenever protocols are
+	// mentioned. Both hints are non-enforcing; enforcement for false
+	// absence claims lives in needsAction.
+	if hasTool("list_protocols", "load_protocol") && hasAny(m, "protocol", "protocols") {
+		hints = append(hints, "list_protocols", "load_protocol")
+	}
 	return hints
 }
 
@@ -1593,6 +1650,8 @@ func hintSatisfied(hint string, ran map[string]bool) bool {
 	switch hint {
 	case "send_message":
 		return ran["send_message"] || ran["send_imessage"] || ran["relay_to_master"]
+	case "list_protocols", "load_protocol":
+		return ran["list_protocols"] || ran["load_protocol"]
 	case "relay_to_master":
 		return ran["relay_to_master"] || ran["send_message"] || ran["send_imessage"]
 	case "web_search":
@@ -1620,6 +1679,21 @@ func isRefusal(s string) bool {
 // rather than claiming to have performed an action. When the model is seeking
 // clarification (missing tool arguments, etc.), the nudge system must not
 // override the response.
+// protocolAbsenceClaim reports whether the turn demanded a protocol and the
+// reply claims it is missing. replyLow must already be lowercased. Evidence:
+// a 2026-09-11 scheduled turn narrated "cannot find a Moon Protocol" with
+// zero tool calls while the protocol existed.
+func protocolAbsenceClaim(userMsg, replyLow string) bool {
+	if !hasAny(userMsg, "protocol") {
+		return false
+	}
+	return hasAny(replyLow,
+		"cannot find", "can't find", "could not find", "couldn't find",
+		"don't have", "do not have", "no record", "not found",
+		"does not exist", "doesn't exist", "missing from", "unable to locate",
+		"no such", "isn't in", "is not in")
+}
+
 func isQuestion(reply string) bool {
 	return hasAny(reply,
 		"please provide", "kindly provide", "could you provide",
@@ -1888,6 +1962,83 @@ func (s *Service) clearPending(senderJID string) {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
 	delete(s.pending, senderJID)
+}
+
+// splitLoadedProtocol parses the load_protocol result shape
+// `Protocol "slug" (vN, used M×):\n\n<body>`.
+func splitLoadedProtocol(out string) (slug, body string) {
+	rest, ok := strings.CutPrefix(out, `Protocol "`)
+	if !ok {
+		return "", ""
+	}
+	slug, rest, ok = strings.Cut(rest, `"`)
+	if !ok || slug == "" {
+		return "", ""
+	}
+	_, body, ok = strings.Cut(rest, "\n\n")
+	if !ok || strings.TrimSpace(body) == "" {
+		return "", ""
+	}
+	return slug, body
+}
+
+// rememberLoaded records a successful protocol load for the sender, pruning
+// expired entries. Silent on unparseable output: never break a turn.
+func (s *Service) rememberLoaded(senderJID, toolOut string) {
+	if senderJID == "" {
+		return
+	}
+	slug, body := splitLoadedProtocol(toolOut)
+	if slug == "" {
+		return
+	}
+	now := time.Now()
+	s.loadedMu.Lock()
+	defer s.loadedMu.Unlock()
+	for k, v := range s.loaded {
+		if now.Sub(v.at) > loadedProtocolTTL {
+			delete(s.loaded, k)
+		}
+	}
+	s.loaded[senderJID] = loadedProtocol{slug: slug, body: body, at: now}
+}
+
+// anchorLoadedProtocol builds the same-turn system anchor for a successful
+// load, so following rounds execute the loaded steps instead of freelancing.
+func anchorLoadedProtocol(toolOut string) (ollama.Message, bool) {
+	slug, body := splitLoadedProtocol(toolOut)
+	if slug == "" {
+		return ollama.Message{}, false
+	}
+	return ollama.Message{Role: "system", Content: "Authoritative protocol " + slug + " loaded above. Follow exactly these steps — do not substitute your own plan. When reporting its contents, quote it verbatim:\n\n" + body}, true
+}
+
+// isExecutionConfirmation reports short follow-through replies to an offered
+// action ("Shall I execute it?" → "go"). Deliberately narrow: combined with
+// the fresh-load requirement, a misfire only re-anchors relevant context.
+func isExecutionConfirmation(userMsg string) bool {
+	switch strings.TrimSpace(strings.ToLower(userMsg)) {
+	case "go", "yes", "yeah", "yep", "do it", "run it", "execute", "execute it",
+		"proceed", "please do", "go ahead", "carry on", "run them", "do them":
+		return true
+	}
+	return false
+}
+
+// loadedAnchor re-injects a recently loaded protocol body when the turn looks
+// like a follow-through: an explicit confirmation, or a message about
+// protocols/execution. The anchor is system-role and authoritative.
+func (s *Service) loadedAnchor(senderJID, userMsg string) (ollama.Message, bool) {
+	s.loadedMu.Lock()
+	defer s.loadedMu.Unlock()
+	lp, ok := s.loaded[senderJID]
+	if !ok || time.Since(lp.at) > loadedProtocolTTL {
+		return ollama.Message{}, false
+	}
+	if !isExecutionConfirmation(userMsg) && !hasAny(userMsg, "protocol", "execut", "run it", "do it", "follow", "steps") {
+		return ollama.Message{}, false
+	}
+	return ollama.Message{Role: "system", Content: "Authoritative protocol " + lp.slug + " loaded earlier this conversation. Follow exactly these steps — do not substitute your own plan. When reporting its contents, quote it verbatim:\n\n" + lp.body}, true
 }
 
 // isContinueMsg reports whether a message asks to resume a paused iteration.
