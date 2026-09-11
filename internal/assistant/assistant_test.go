@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/ollama"
@@ -2016,5 +2017,143 @@ func TestServiceModelFollowsBackend(t *testing.T) {
 	}
 	if !strings.Contains(out, "test-model") {
 		t.Fatal("rendered prompt should name the active model")
+	}
+}
+
+func TestGuessToolsProtocolHints(t *testing.T) {
+	s, _, _ := newService(t)
+	// Protocol tools live in the app registry in production; the service
+	// registry under test does not include them, so append equivalents.
+	available := append(s.toolsForSender("master@master", true),
+		tools.Tool{Definition: tools.Definition{Name: "list_protocols"}},
+		tools.Tool{Definition: tools.Definition{Name: "load_protocol"}})
+	has := func(hints []string, want string) bool {
+		for _, h := range hints {
+			if h == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, msg := range []string{
+		"Run the Moon Protocol.",
+		"can you read the contents of Moon Protocol?",
+		"list me all protocols in good format",
+	} {
+		hints := s.guessTools(msg, available)
+		if !has(hints, "list_protocols") || !has(hints, "load_protocol") {
+			t.Errorf("guessTools(%q) = %v, want protocol hints", msg, hints)
+		}
+	}
+	if hints := s.guessTools("thanks, see you later", available); has(hints, "list_protocols") || has(hints, "load_protocol") {
+		t.Errorf("guessTools(small talk) = %v, want no protocol hints", hints)
+	}
+}
+
+func TestNeedsActionProtocolAbsence(t *testing.T) {
+	s, _, _ := newService(t)
+	available := append(s.toolsForSender("master@master", true),
+		tools.Tool{Definition: tools.Definition{Name: "list_protocols"}},
+		tools.Tool{Definition: tools.Definition{Name: "load_protocol"}})
+	// The 2026-09-11 nightly miss, verbatim shape: absence claim ending in
+	// a question must still enforce a store check.
+	ok, hint := s.needsAction("Run the Moon Protocol.",
+		"I am afraid I cannot find a Moon Protocol in my current records, Sir. Would you be so kind as to describe the procedure, or shall I list the available protocols for your review?",
+		available)
+	if !ok || hint != "list_protocols" {
+		t.Fatalf("needsAction(miss) = (%v, %q), want (true, list_protocols)", ok, hint)
+	}
+	for name, tc := range map[string]struct {
+		user, reply string
+	}{
+		"legit execute question":   {"moon protocol", "Sir, the moon-protocol (v7) is loaded. Shall I execute it for you at once?"},
+		"absence without protocol": {"where are my keys", "I cannot find them anywhere, Sir."},
+		"plain narration":          {"Run the Moon Protocol.", "The moon rises beautifully tonight, Sir."},
+	} {
+		if ok, _ := s.needsAction(tc.user, tc.reply, available); ok {
+			t.Errorf("needsAction(%s) = true, want false", name)
+		}
+	}
+}
+
+func TestHintSatisfiedProtocol(t *testing.T) {
+	if !hintSatisfied("list_protocols", map[string]bool{"load_protocol": true}) {
+		t.Error("load should satisfy a list hint (discovery family)")
+	}
+	if hintSatisfied("load_protocol", map[string]bool{"web_search": true}) {
+		t.Error("web_search must not satisfy a protocol hint")
+	}
+	if got := nudgeFor("list_protocols"); !strings.Contains(got, "list_protocols") || !strings.Contains(got, "ONLY the tool call") {
+		t.Errorf("nudgeFor(list_protocols) = %q", got)
+	}
+}
+
+func TestSplitAndAnchorLoadedProtocol(t *testing.T) {
+	out := "Protocol \"moon-protocol\" (v7, used 14×):\n\n1. Sleep.\n2. Report."
+	slug, body := splitLoadedProtocol(out)
+	if slug != "moon-protocol" || body != "1. Sleep.\n2. Report." {
+		t.Fatalf("split = %q %q", slug, body)
+	}
+	for _, bad := range []string{"", "garbage", "Protocol \"x\" (v1):\n\n", "Protocol \"\" (v1):\n\nbody"} {
+		if s, b := splitLoadedProtocol(bad); s != "" || b != "" {
+			t.Errorf("split(%q) = %q %q, want empty", bad, s, b)
+		}
+	}
+	msg, ok := anchorLoadedProtocol(out)
+	if !ok || msg.Role != "system" || !strings.Contains(msg.Content, "1. Sleep.") || !strings.Contains(msg.Content, "verbatim") {
+		t.Fatalf("anchor = %+v %v", msg, ok)
+	}
+	if _, ok := anchorLoadedProtocol("Error: nope"); ok {
+		t.Error("error output must not anchor")
+	}
+}
+
+func TestIsExecutionConfirmation(t *testing.T) {
+	for _, m := range []string{"go", "Yes", "  DO IT ", "execute it", "go ahead", "please do"} {
+		if !isExecutionConfirmation(m) {
+			t.Errorf("isExecutionConfirmation(%q) = false", m)
+		}
+	}
+	for _, m := range []string{"", "go away", "yesterday", "what did we do", "show me everything"} {
+		if isExecutionConfirmation(m) {
+			t.Errorf("isExecutionConfirmation(%q) = true", m)
+		}
+	}
+}
+
+func TestLoadedAnchorRecall(t *testing.T) {
+	s, _, _ := newService(t)
+	jid := "master@master"
+	out := "Protocol \"moon-protocol\" (v7, used 14×):\n\n1. Sleep."
+	s.rememberLoaded(jid, out)
+	msg, ok := s.loadedAnchor(jid, "go")
+	if !ok || !strings.Contains(msg.Content, "1. Sleep.") || !strings.Contains(msg.Content, "moon-protocol") {
+		t.Fatalf("recall(go) = %+v %v", msg, ok)
+	}
+	if _, ok := s.loadedAnchor(jid, "what is the weather like today"); ok {
+		t.Error("unrelated message must not recall")
+	}
+	if _, ok := s.loadedAnchor("stranger@x", "go"); ok {
+		t.Error("unknown sender must not recall")
+	}
+	s.loadedMu.Lock()
+	lp := s.loaded[jid]
+	lp.at = lp.at.Add(-loadedProtocolTTL - time.Minute)
+	s.loaded[jid] = lp
+	s.loadedMu.Unlock()
+	if _, ok := s.loadedAnchor(jid, "go"); ok {
+		t.Error("stale load must not recall")
+	}
+	s.rememberLoaded("", out) // must not panic or store
+}
+
+func TestPromptProtocolVerbatim(t *testing.T) {
+	for _, want := range []string{
+		"quote the loaded body verbatim",
+		"do not substitute your own plan",
+	} {
+		if !strings.Contains(promptTemplate, want) {
+			t.Errorf("prompt missing fidelity directive %q", want)
+		}
 	}
 }
