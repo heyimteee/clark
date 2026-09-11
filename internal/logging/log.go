@@ -133,7 +133,7 @@ func componentColor(component string) string {
 		return ansiCyan
 	case "WHATSAPP":
 		return ansiGreen
-	case "OLLAMA":
+	case "MODEL":
 		return ansiYellow
 	case "MEMORY":
 		return ansiMagenta

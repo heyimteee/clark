@@ -40,3 +40,6 @@ data/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Wizard backups of local secrets
+.env.bak

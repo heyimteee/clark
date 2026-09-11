@@ -1993,3 +1993,28 @@ func TestNudgeExhaustionListsResults(t *testing.T) {
 		t.Fatalf("Reply = %q, want a results summary", got)
 	}
 }
+
+func TestPromptModelIdentity(t *testing.T) {
+	for _, want := range []string{
+		"Your Engine",
+		"never adopt an identity",
+	} {
+		if !strings.Contains(promptTemplate, want) {
+			t.Errorf("prompt missing model identity directive %q", want)
+		}
+	}
+}
+
+func TestServiceModelFollowsBackend(t *testing.T) {
+	s, _, _ := newService(t)
+	if s.Model() != "test-model" {
+		t.Fatalf("Model = %q, want test-model", s.Model())
+	}
+	out, err := s.renderPrompt("Clark", "ctx", "on", "", "", "")
+	if err != nil {
+		t.Fatalf("renderPrompt: %v", err)
+	}
+	if !strings.Contains(out, "test-model") {
+		t.Fatal("rendered prompt should name the active model")
+	}
+}

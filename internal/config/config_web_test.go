@@ -285,3 +285,23 @@ func TestLoadZenBackendHappy(t *testing.T) {
 		t.Fatalf("zen backend should not require OLLAMA_MODEL, got %q", cfg.OllamaModel)
 	}
 }
+
+func TestActiveModel(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{"ollama", Config{OllamaModel: "g", LLMBackend: "ollama"}, "g"},
+		{"default backend", Config{OllamaModel: "g"}, "g"},
+		{"zen", Config{OllamaModel: "g", LLMBackend: "opencode-go", LLMModel: "m"}, "m"},
+		{"zen case-insensitive", Config{OllamaModel: "g", LLMBackend: " OpenCode-Go ", LLMModel: "m"}, "m"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.ActiveModel(); got != tc.want {
+				t.Fatalf("ActiveModel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
