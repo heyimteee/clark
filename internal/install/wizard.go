@@ -478,6 +478,31 @@ func probeSSH(host string, ex Executor) error {
 	return ex.Run("ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host, "true")
 }
 
+// applyLLMEnv writes the backend selection into env, shared by the install
+// wizard and `clark config core` so credential rules cannot diverge: Go
+// stores its endpoint/model/key, Ollama drops stale Go credentials.
+func applyLLMEnv(env map[string]string, backend, llmURL, llmModel, llmKey, ollamaURL, ollamaModel string) {
+	if backend == "" {
+		backend = llmBackendOllama
+	}
+	env["LLM_BACKEND"] = backend
+	if backend == llmBackendGo {
+		env["LLM_URL"] = llmURL
+		env["LLM_MODEL"] = llmModel
+		if llmKey != "" {
+			env["LLM_API_KEY"] = llmKey
+		} else {
+			delete(env, "LLM_API_KEY")
+		}
+		return
+	}
+	env["OLLAMA_URL"] = ollamaURL
+	env["OLLAMA_MODEL"] = ollamaModel
+	delete(env, "LLM_URL")
+	delete(env, "LLM_API_KEY")
+	delete(env, "LLM_MODEL")
+}
+
 func buildEnv(ans Answers, existing map[string]string) map[string]string {
 	env := map[string]string{}
 	// copy existing to preserve unknown keys, then overlay wizard answers
@@ -486,26 +511,7 @@ func buildEnv(ans Answers, existing map[string]string) map[string]string {
 	}
 	env["OLLAMA_URL"] = ans.OllamaURL
 	env["OLLAMA_MODEL"] = ans.OllamaModel
-	backend := ans.LLMBackend
-	if backend == "" {
-		backend = llmBackendOllama
-	}
-	env["LLM_BACKEND"] = backend
-	if backend == llmBackendGo {
-		env["LLM_URL"] = ans.LLMURL
-		env["LLM_MODEL"] = ans.LLMModel
-		if ans.LLMAPIKey != "" {
-			env["LLM_API_KEY"] = ans.LLMAPIKey
-		} else {
-			delete(env, "LLM_API_KEY")
-		}
-	} else {
-		// Clean switch back to Ollama: drop Go credentials so no stale
-		// secret lingers; URL/model refill from defaults on next Go setup.
-		delete(env, "LLM_URL")
-		delete(env, "LLM_API_KEY")
-		delete(env, "LLM_MODEL")
-	}
+	applyLLMEnv(env, ans.LLMBackend, ans.LLMURL, ans.LLMModel, ans.LLMAPIKey, ans.OllamaURL, ans.OllamaModel)
 	env["WEB_ENABLED"] = "1"
 	env["WEB_TOKEN"] = ans.WebToken
 	env["ALERT_TOKEN"] = ans.AlertToken

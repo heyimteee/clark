@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/joho/godotenv"
 )
 
 func TestGenerateToken(t *testing.T) {
@@ -411,5 +413,86 @@ func TestBuildEnvLLMBackend(t *testing.T) {
 		if _, ok := back[k]; ok {
 			t.Fatalf("switching to ollama should drop %s", k)
 		}
+	}
+}
+
+type stubExecutor struct {
+	runs [][]string
+}
+
+func (s *stubExecutor) Run(name string, args ...string) error {
+	s.runs = append(s.runs, append([]string{name}, args...))
+	return nil
+}
+
+func (s *stubExecutor) LookPath(file string) (string, error) { return file, nil }
+
+func TestReconfigureCoreOllama(t *testing.T) {
+	dir := t.TempDir()
+	envPath := dir + "/.env"
+	p := &scriptPrompter{
+		t:       t,
+		selects: []string{"Local Ollama"},
+		inputs:  []string{"http://ollama:11434", "llama3.2"},
+	}
+	ex := &stubExecutor{}
+	existing := map[string]string{
+		"LLM_BACKEND": "opencode-go", "LLM_URL": "https://x", "LLM_API_KEY": "stale", "LLM_MODEL": "m",
+		"OLLAMA_MODEL": "old", "WEB_TOKEN": "tok",
+	}
+	if err := reconfigureCore(p, envPath, existing, ex); err != nil {
+		t.Fatalf("reconfigureCore: %v", err)
+	}
+	saved, err := godotenv.Read(envPath)
+	if err != nil {
+		t.Fatalf("read .env: %v", err)
+	}
+	if saved["LLM_BACKEND"] != "ollama" || saved["OLLAMA_MODEL"] != "llama3.2" {
+		t.Fatalf("env wrong: %v", saved)
+	}
+	for _, k := range []string{"LLM_URL", "LLM_API_KEY", "LLM_MODEL"} {
+		if _, ok := saved[k]; ok {
+			t.Fatalf("switch to ollama should drop %s", k)
+		}
+	}
+	if saved["WEB_TOKEN"] != "tok" {
+		t.Fatalf("unrelated keys must survive: %v", saved)
+	}
+}
+
+func TestReconfigureCoreGo(t *testing.T) {
+	srv := goStub(t, "muse-spark-1.3-contributor")
+	dir := t.TempDir()
+	envPath := dir + "/.env"
+	p := &scriptPrompter{
+		t:       t,
+		selects: []string{"OpenCode Go (hosted)"},
+		inputs:  []string{srv.URL + "/v1/responses", "muse-spark-1.3-contributor", "k"},
+	}
+	ex := &stubExecutor{}
+	existing := map[string]string{"OLLAMA_MODEL": "llama3.2", "OLLAMA_URL": "http://localhost:11434"}
+	if err := reconfigureCore(p, envPath, existing, ex); err != nil {
+		t.Fatalf("reconfigureCore: %v", err)
+	}
+	saved, err := godotenv.Read(envPath)
+	if err != nil {
+		t.Fatalf("read .env: %v", err)
+	}
+	if saved["LLM_BACKEND"] != "opencode-go" || saved["LLM_MODEL"] != "muse-spark-1.3-contributor" || saved["LLM_API_KEY"] != "k" {
+		t.Fatalf("env wrong: %v", saved)
+	}
+	if saved["OLLAMA_MODEL"] != "llama3.2" {
+		t.Fatalf("ollama settings should be preserved: %v", saved)
+	}
+}
+
+func TestChecklistCoreShowsBackend(t *testing.T) {
+	opts := buildChecklist(map[string]string{"LLM_BACKEND": "opencode-go", "LLM_MODEL": "m"})
+	if !strings.Contains(opts[0], "opencode-go") || !strings.Contains(opts[0], "m") {
+		t.Fatalf("core line = %q", opts[0])
+	}
+	opts = buildChecklist(map[string]string{"OLLAMA_MODEL": "llama3.2"})
+	if !strings.Contains(opts[0], "ollama") || !strings.Contains(opts[0], "llama3.2") {
+		t.Fatalf("core line = %q", opts[0])
 	}
 }
