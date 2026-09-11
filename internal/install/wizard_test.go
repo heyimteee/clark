@@ -1,6 +1,9 @@
 package install
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -244,4 +247,169 @@ func marshalEnv(m map[string]string) (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+type scriptPrompter struct {
+	t          *testing.T
+	selects    []string
+	inputs     []string
+	confirms   []bool
+	si, ii, ci int
+}
+
+func (s *scriptPrompter) Select(title, def string, opts []string) (string, error) {
+	if s.si >= len(s.selects) {
+		s.t.Fatalf("unexpected Select(%q)", title)
+	}
+	v := s.selects[s.si]
+	s.si++
+	return v, nil
+}
+
+func (s *scriptPrompter) Input(title, def string, validate func(string) error) (string, error) {
+	if s.ii >= len(s.inputs) {
+		s.t.Fatalf("unexpected Input(%q)", title)
+	}
+	v := s.inputs[s.ii]
+	s.ii++
+	return v, nil
+}
+
+func (s *scriptPrompter) Confirm(title string, def bool) (bool, error) {
+	if s.ci >= len(s.confirms) {
+		s.t.Fatalf("unexpected Confirm(%q)", title)
+	}
+	v := s.confirms[s.ci]
+	s.ci++
+	return v, nil
+}
+
+func goStub(t *testing.T, models ...string) *httptest.Server {
+	t.Helper()
+	type model struct {
+		ID string `json:"id"`
+	}
+	data := []model{}
+	for _, m := range models {
+		data = append(data, model{ID: m})
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer k" {
+			t.Errorf("auth = %q", r.Header.Get("Authorization"))
+		}
+		if strings.Contains(r.Header.Get("User-Agent"), "Go-http-client") {
+			t.Errorf("user-agent = %q, want product token", r.Header.Get("User-Agent"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAskLLMBackendOllama(t *testing.T) {
+	p := &scriptPrompter{t: t, selects: []string{"Local Ollama"}}
+	backend, url, model, key, err := askLLMBackend(p, map[string]string{})
+	if err != nil {
+		t.Fatalf("askLLMBackend: %v", err)
+	}
+	if backend != "ollama" || url != "" || model != "" || key != "" {
+		t.Fatalf("got %q %q %q %q", backend, url, model, key)
+	}
+}
+
+func TestAskLLMBackendGoHappy(t *testing.T) {
+	srv := goStub(t, "muse-spark-1.3-contributor")
+	p := &scriptPrompter{
+		t:       t,
+		selects: []string{"OpenCode Go (hosted)"},
+		inputs:  []string{srv.URL + "/v1/responses", "muse-spark-1.3-contributor", "k"},
+	}
+	backend, url, model, key, err := askLLMBackend(p, map[string]string{})
+	if err != nil {
+		t.Fatalf("askLLMBackend: %v", err)
+	}
+	if backend != "opencode-go" || model != "muse-spark-1.3-contributor" || key != "k" {
+		t.Fatalf("got %q %q %q", backend, model, key)
+	}
+	if !strings.HasSuffix(url, "/v1/responses") {
+		t.Fatalf("url = %q", url)
+	}
+}
+
+func TestAskLLMBackendGoKeepsExistingKey(t *testing.T) {
+	srv := goStub(t, "m")
+	p := &scriptPrompter{
+		t:       t,
+		selects: []string{"OpenCode Go (hosted)"},
+		// No key input queued: an existing key must be reused silently.
+		inputs: []string{srv.URL + "/v1/responses", "m"},
+	}
+	_, _, model, key, err := askLLMBackend(p, map[string]string{"LLM_API_KEY": "k"})
+	if err != nil {
+		t.Fatalf("askLLMBackend: %v", err)
+	}
+	if key != "k" || model != "m" {
+		t.Fatalf("got %q %q", key, model)
+	}
+	if p.ii != 2 {
+		t.Fatalf("inputs consumed = %d, want 2 (key must not be prompted)", p.ii)
+	}
+}
+
+func TestAskLLMBackendGoRetry(t *testing.T) {
+	srv := goStub(t, "other-model")
+	p := &scriptPrompter{
+		t:        t,
+		selects:  []string{"OpenCode Go (hosted)"},
+		inputs:   []string{srv.URL + "/v1/responses", "m", "k", srv.URL + "/v1/responses", "other-model", "k"},
+		confirms: []bool{true},
+	}
+	_, _, model, _, err := askLLMBackend(p, map[string]string{})
+	if err != nil {
+		t.Fatalf("askLLMBackend: %v", err)
+	}
+	if model != "other-model" {
+		t.Fatalf("model = %q", model)
+	}
+}
+
+func TestValidateGoModelAuth(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	if err := validateGoModel(srv.URL+"/v1/responses", "bad", "m"); err == nil {
+		t.Fatal("want error for 401")
+	}
+}
+
+func TestValidateGoModelUnreachable(t *testing.T) {
+	if err := validateGoModel("http://127.0.0.1:1/v1/responses", "k", "m"); err == nil {
+		t.Fatal("want error for unreachable host")
+	}
+}
+
+func TestBuildEnvLLMBackend(t *testing.T) {
+	goEnv := BuildEnv(Answers{
+		OllamaURL: "http://localhost:11434", OllamaModel: "llama3.2",
+		LLMBackend: "opencode-go", LLMURL: "https://x/v1/responses", LLMAPIKey: "k", LLMModel: "m",
+	}, map[string]string{})
+	if goEnv["LLM_BACKEND"] != "opencode-go" || goEnv["LLM_URL"] == "" || goEnv["LLM_API_KEY"] != "k" || goEnv["LLM_MODEL"] != "m" {
+		t.Fatalf("go env wrong: %v", goEnv)
+	}
+	back := BuildEnv(Answers{
+		OllamaURL: "http://localhost:11434", OllamaModel: "llama3.2", LLMBackend: "ollama",
+	}, map[string]string{"LLM_API_KEY": "stale", "LLM_URL": "https://x", "LLM_MODEL": "m"})
+	if back["LLM_BACKEND"] != "ollama" {
+		t.Fatalf("backend = %q", back["LLM_BACKEND"])
+	}
+	for _, k := range []string{"LLM_URL", "LLM_API_KEY", "LLM_MODEL"} {
+		if _, ok := back[k]; ok {
+			t.Fatalf("switching to ollama should drop %s", k)
+		}
+	}
 }
