@@ -14,7 +14,7 @@ import (
 func Config(args []string) error {
 	fs := flag.NewFlagSet("config", flag.ContinueOnError)
 	var edit string
-	fs.StringVar(&edit, "edit", "", "feature to reconfigure (core, persona, imessage, voice, live)")
+	fs.StringVar(&edit, "edit", "", "feature to reconfigure (core, llm, persona, imessage, voice, live)")
 	fs.StringVar(&edit, "e", "", "feature to reconfigure (shorthand)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -70,8 +70,13 @@ func buildChecklist(env map[string]string) []string {
 		}
 		return "✗"
 	}
+	backend := firstNonEmpty(env["LLM_BACKEND"], "ollama")
+	coreDetail := "ollama " + firstNonEmpty(env["OLLAMA_MODEL"], "not set") + ", " + firstNonEmpty(env["OLLAMA_URL"], "http://localhost:11434")
+	if backend == "opencode-go" {
+		coreDetail = "opencode-go " + firstNonEmpty(env["LLM_MODEL"], "not set")
+	}
 	opts := []string{
-		fmt.Sprintf("%s Core (OLLAMA_MODEL, OLLAMA_URL) — %s model, %s url", check(has("OLLAMA_MODEL")), firstNonEmpty(env["OLLAMA_MODEL"], "not set"), firstNonEmpty(env["OLLAMA_URL"], "http://localhost:11434")),
+		fmt.Sprintf("%s Core (LLM backend) — %s", check(backend == "ollama" || has("LLM_MODEL")), coreDetail),
 		fmt.Sprintf("%s Persona (MASTER_NAME, PROTOCOL_NAME, PALACE_NAME, BYPASS_PHRASE, INNER_CIRCLE)", check(has("MASTER_NAME") || has("PROTOCOL_NAME") || has("PALACE_NAME") || has("INNER_CIRCLE"))),
 		fmt.Sprintf("%s iMessage (IMESSAGE_ENABLED, bridge token, handle) — %s", check(env["IMESSAGE_ENABLED"] == "1"), map[bool]string{true: "enabled", false: "disabled"}[env["IMESSAGE_ENABLED"] == "1"]),
 		fmt.Sprintf("%s Web console (WEB_TOKEN, ALERT_TOKEN) — %s", check(has("WEB_TOKEN")), map[bool]string{true: "enabled", false: "disabled"}[has("WEB_TOKEN")]),
@@ -90,6 +95,8 @@ func reconfigureFeature(feature string) error {
 	key := strings.ToLower(feature)
 	// Extract feature key from display string (first word)
 	if strings.Contains(key, "core") {
+		key = "core"
+	} else if strings.Contains(key, "llm") {
 		key = "core"
 	} else if strings.Contains(key, "persona") {
 		key = "persona"
@@ -126,22 +133,31 @@ func reconfigureFeature(feature string) error {
 	case "live":
 		return reconfigureLive(p, envPath, existing, ex)
 	default:
-		return fmt.Errorf("unknown feature %q (try: core, persona, imessage, web, voice, live)", feature)
+		return fmt.Errorf("unknown feature %q (try: core, llm, persona, imessage, web, voice, live)", feature)
 	}
 }
 
 func reconfigureCore(p Prompter, envPath string, existing map[string]string, ex Executor) error {
-	ollamaURL, err := p.Input("Ollama URL", firstNonEmpty(existing["OLLAMA_URL"], "http://localhost:11434"), validateURL)
-	if err != nil {
-		return err
-	}
-	ollamaModel, err := p.Input("Ollama model", existing["OLLAMA_MODEL"], required("OLLAMA_MODEL"))
+	backend, llmURL, llmModel, llmKey, err := askLLMBackend(p, existing)
 	if err != nil {
 		return err
 	}
 	env := copyEnv(existing)
-	env["OLLAMA_URL"] = ollamaURL
-	env["OLLAMA_MODEL"] = ollamaModel
+	var ollamaURL, ollamaModel string
+	if backend == llmBackendOllama {
+		ollamaURL, err = p.Input("Ollama URL", firstNonEmpty(existing["OLLAMA_URL"], "http://localhost:11434"), validateURL)
+		if err != nil {
+			return err
+		}
+		ollamaModel, err = p.Input("Ollama model", existing["OLLAMA_MODEL"], required("OLLAMA_MODEL"))
+		if err != nil {
+			return err
+		}
+	} else {
+		ollamaURL = existing["OLLAMA_URL"]
+		ollamaModel = existing["OLLAMA_MODEL"]
+	}
+	applyLLMEnv(env, backend, llmURL, llmModel, llmKey, strings.TrimSpace(ollamaURL), strings.TrimSpace(ollamaModel))
 	return writeAndApplyWithRestart(envPath, env, Answers{OllamaURL: ollamaURL, OllamaModel: ollamaModel}, ex, true)
 }
 
