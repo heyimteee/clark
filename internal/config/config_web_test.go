@@ -12,6 +12,10 @@ func loadFromEnv(t *testing.T, env map[string]string) (*Config, error) {
 	t.Setenv("ENV_FILE_GUARD", "1")
 	_ = os.Unsetenv("OLLAMA_MODEL")
 	_ = os.Unsetenv("OLLAMA_URL")
+	_ = os.Unsetenv("LLM_BACKEND")
+	_ = os.Unsetenv("LLM_URL")
+	_ = os.Unsetenv("LLM_API_KEY")
+	_ = os.Unsetenv("LLM_MODEL")
 	_ = os.Unsetenv("WEB_ENABLED")
 	_ = os.Unsetenv("WEB_TOKEN")
 	_ = os.Unsetenv("ALERT_TOKEN")
@@ -231,5 +235,53 @@ func TestLoadListenAddrOverrides(t *testing.T) {
 	}
 	if cfg.IMessageListenAddr != "127.0.0.1:9001" {
 		t.Errorf("IMessageListenAddr = %q, want 127.0.0.1:9001", cfg.IMessageListenAddr)
+	}
+}
+
+func TestLoadLLMBackendDefaultsOllama(t *testing.T) {
+	cfg, err := loadFromEnv(t, map[string]string{"OLLAMA_MODEL": "gemma4:cloud"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LLMBackend != "ollama" {
+		t.Errorf("LLMBackend = %q, want ollama", cfg.LLMBackend)
+	}
+}
+
+func TestLoadLLMBackendUnknown(t *testing.T) {
+	_, err := loadFromEnv(t, map[string]string{"OLLAMA_MODEL": "x", "LLM_BACKEND": "skynet"})
+	if err == nil {
+		t.Fatal("want error for unknown LLM_BACKEND")
+	}
+}
+
+func TestLoadZenBackendRequiresCreds(t *testing.T) {
+	for _, env := range []map[string]string{
+		{"LLM_BACKEND": "opencode-go"},
+		{"LLM_BACKEND": "opencode-go", "LLM_URL": "https://x/v1/responses", "LLM_MODEL": "m"},
+		{"LLM_BACKEND": "opencode-go", "LLM_URL": "https://x/v1/responses", "LLM_API_KEY": "k"},
+		{"LLM_BACKEND": "opencode-go", "LLM_API_KEY": "k", "LLM_MODEL": "m"},
+	} {
+		if _, err := loadFromEnv(t, env); err == nil {
+			t.Fatalf("want error for incomplete zen config %v", env)
+		}
+	}
+}
+
+func TestLoadZenBackendHappy(t *testing.T) {
+	cfg, err := loadFromEnv(t, map[string]string{
+		"LLM_BACKEND": "opencode-go",
+		"LLM_URL":     "https://opencode.ai/zen/go/v1/responses",
+		"LLM_API_KEY": "k",
+		"LLM_MODEL":   "m",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LLMBackend != "opencode-go" || cfg.LLMURL == "" || cfg.LLMAPIKey != "k" || cfg.LLMModel != "m" {
+		t.Fatalf("zen config wrong: %+v", cfg)
+	}
+	if cfg.OllamaModel != "" {
+		t.Fatalf("zen backend should not require OLLAMA_MODEL, got %q", cfg.OllamaModel)
 	}
 }

@@ -3,13 +3,16 @@ package install
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/joho/godotenv"
@@ -25,6 +28,10 @@ type Answers struct {
 	NoDocker            bool
 	OllamaURL           string
 	OllamaModel         string
+	LLMBackend          string
+	LLMURL              string
+	LLMAPIKey           string
+	LLMModel            string
 	WebToken            string
 	AlertToken          string
 	TavilyAPIKey        string
@@ -112,6 +119,137 @@ func validateURL(s string) error {
 	return nil
 }
 
+// llmBackendOllama and llmBackendGo are the LLM_BACKEND values the wizard writes.
+const (
+	llmBackendOllama = "ollama"
+	llmBackendGo     = "opencode-go"
+
+	defaultGoURL   = "https://opencode.ai/zen/go/v1/responses"
+	defaultGoModel = "muse-spark-1.3-contributor"
+)
+
+var llmBackendLabels = map[string]string{
+	llmBackendOllama: "Local Ollama",
+	llmBackendGo:     "OpenCode Go (hosted)",
+}
+
+// goModelsURL derives the sibling models endpoint from a Responses URL.
+func goModelsURL(responsesURL string) string {
+	u := strings.TrimRight(strings.TrimSpace(responsesURL), "/")
+	if strings.HasSuffix(u, "/responses") {
+		return strings.TrimSuffix(u, "/responses") + "/models"
+	}
+	return u + "/models"
+}
+
+// validateGoModel checks key + model against the live gateway: it must
+// answer with a model list containing the requested id. Pure HTTP so tests
+// can point it at httptest servers.
+func validateGoModel(responsesURL, apiKey, model string) error {
+	if strings.TrimSpace(responsesURL) == "" || strings.TrimSpace(apiKey) == "" || strings.TrimSpace(model) == "" {
+		return fmt.Errorf("URL, API key, and model are all required")
+	}
+	req, err := http.NewRequest(http.MethodGet, goModelsURL(responsesURL), nil)
+	if err != nil {
+		return fmt.Errorf("bad URL: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("User-Agent", "clark-install/1.0")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("cannot reach gateway: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("gateway rejected the key (401) — check LLM_API_KEY")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("gateway returned %s", resp.Status)
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return fmt.Errorf("cannot read model list: %w", err)
+	}
+	for _, m := range list.Data {
+		if m.ID == model {
+			return nil
+		}
+	}
+	return fmt.Errorf("model %q is not served by this gateway", model)
+}
+
+// askLLMBackend collects the brain configuration: backend select, branch
+// prompts, and a live validation loop for Go. Existing keys are prefilled;
+// an existing Go key is kept silently (never displayed) unless it fails
+// validation, in which case it is re-prompted.
+func askLLMBackend(p Prompter, existing map[string]string) (backend, url, model, key string, err error) {
+	backendDef := firstNonEmpty(existing["LLM_BACKEND"], llmBackendOllama)
+	backendLabel := llmBackendLabels[backendDef]
+	if backendLabel == "" {
+		backendLabel = llmBackendLabels[llmBackendOllama]
+	}
+	choice, err := p.Select("LLM backend (Clark's brain)", backendLabel,
+		[]string{llmBackendLabels[llmBackendOllama], llmBackendLabels[llmBackendGo]})
+	if err != nil {
+		return "", "", "", "", err
+	}
+	backend = llmBackendOllama
+	if choice == llmBackendLabels[llmBackendGo] {
+		backend = llmBackendGo
+	}
+	if backend == llmBackendOllama {
+		return backend, "", "", "", nil
+	}
+	needURL := func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("URL is required")
+		}
+		return validateURL(s)
+	}
+	key = existing["LLM_API_KEY"]
+	urlDef := firstNonEmpty(existing["LLM_URL"], defaultGoURL)
+	modelDef := firstNonEmpty(existing["LLM_MODEL"], defaultGoModel)
+	for {
+		url, err = p.Input("Go Responses endpoint", urlDef, needURL)
+		if err != nil {
+			return "", "", "", "", err
+		}
+		model, err = p.Input("Go model id", modelDef, required("model"))
+		if err != nil {
+			return "", "", "", "", err
+		}
+		if strings.TrimSpace(key) == "" {
+			key, err = p.Input("Go API key", "", required("API key"))
+			if err != nil {
+				return "", "", "", "", err
+			}
+			key = strings.TrimSpace(key)
+		}
+		url = strings.TrimSpace(url)
+		model = strings.TrimSpace(model)
+		if err := validateGoModel(url, key, model); err != nil {
+			fmt.Printf("Connection check failed: %v\n", err)
+			retry, rerr := p.Confirm("Edit connection details?", true)
+			if rerr != nil {
+				return "", "", "", "", rerr
+			}
+			if !retry {
+				return backend, url, model, key, nil
+			}
+			// Reprompt everything next round (a kept key may be the problem).
+			urlDef, modelDef, key = url, model, ""
+			continue
+		}
+		fmt.Printf("Connected: gateway serves %s\n", model)
+		return backend, url, model, key, nil
+	}
+}
+
 // Run is the entry point for `clark install`.
 func Run(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
@@ -125,6 +263,11 @@ func Run(args []string) error {
 	var ollamaModel, ollamaURL string
 	fs.StringVar(&ollamaModel, "ollama-model", "", "Ollama model tag (non-interactive)")
 	fs.StringVar(&ollamaURL, "ollama-url", "", "Ollama URL (non-interactive)")
+	var llmBackend, llmURL, llmKey, llmModel string
+	fs.StringVar(&llmBackend, "llm-backend", "", "LLM backend: ollama or opencode-go (non-interactive)")
+	fs.StringVar(&llmURL, "llm-url", "", "Responses endpoint URL (non-interactive, go only)")
+	fs.StringVar(&llmKey, "llm-key", "", "Go API key (non-interactive, go only)")
+	fs.StringVar(&llmModel, "llm-model", "", "Go model id (non-interactive, go only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -144,6 +287,10 @@ func Run(args []string) error {
 			NoDocker:    noDocker,
 			OllamaModel: ollamaModel,
 			OllamaURL:   ollamaURL,
+			LLMBackend:  llmBackend,
+			LLMURL:      llmURL,
+			LLMAPIKey:   llmKey,
+			LLMModel:    llmModel,
 		}, envPath, existing, ex)
 	}
 	return runInteractive(p, sshHost, noDocker, envPath, existing, ex)
@@ -153,8 +300,19 @@ func runNonInteractive(a Answers, envPath string, existing map[string]string, ex
 	if a.OllamaModel == "" {
 		a.OllamaModel = firstNonEmpty(existing["OLLAMA_MODEL"], os.Getenv("OLLAMA_MODEL"))
 	}
-	if a.OllamaModel == "" {
-		return fmt.Errorf("OLLAMA_MODEL is required (use --ollama-model or set in env)")
+	backend := strings.ToLower(strings.TrimSpace(firstNonEmpty(a.LLMBackend, existing["LLM_BACKEND"], os.Getenv("LLM_BACKEND"), llmBackendOllama)))
+	if backend != llmBackendOllama && backend != llmBackendGo {
+		return fmt.Errorf("unknown --llm-backend %q: want ollama or %s", a.LLMBackend, llmBackendGo)
+	}
+	llmURL := firstNonEmpty(a.LLMURL, existing["LLM_URL"], os.Getenv("LLM_URL"))
+	llmKey := firstNonEmpty(a.LLMAPIKey, existing["LLM_API_KEY"], os.Getenv("LLM_API_KEY"))
+	llmModel := firstNonEmpty(a.LLMModel, existing["LLM_MODEL"], os.Getenv("LLM_MODEL"))
+	if backend == llmBackendOllama {
+		if a.OllamaModel == "" {
+			return fmt.Errorf("OLLAMA_MODEL is required (use --ollama-model or set in env)")
+		}
+	} else if llmURL == "" || llmKey == "" || llmModel == "" {
+		return fmt.Errorf("LLM_URL, LLM_API_KEY, and LLM_MODEL are required for the %s backend (flags or env)", llmBackendGo)
 	}
 	if a.OllamaURL == "" {
 		a.OllamaURL = firstNonEmpty(existing["OLLAMA_URL"], os.Getenv("OLLAMA_URL"), "http://localhost:11434")
@@ -166,6 +324,10 @@ func runNonInteractive(a Answers, envPath string, existing map[string]string, ex
 		SeparateServer:      a.SSHHost != "",
 		OllamaURL:           a.OllamaURL,
 		OllamaModel:         a.OllamaModel,
+		LLMBackend:          backend,
+		LLMURL:              llmURL,
+		LLMAPIKey:           llmKey,
+		LLMModel:            llmModel,
 		WebToken:            firstNonEmpty(existing["WEB_TOKEN"], generateToken()),
 		AlertToken:          firstNonEmpty(existing["ALERT_TOKEN"], generateToken()),
 		IMessageEnabled:     existing["IMESSAGE_ENABLED"] == "1",
@@ -249,14 +411,27 @@ func runInteractive(p Prompter, sshFlag string, noDockerFlag bool, envPath strin
 			ollamaURLDef = "http://host.docker.internal:11434"
 		}
 	}
-	ollamaURL, err := p.Input("Ollama URL", ollamaURLDef, validateURL)
+	backend, goURL, goModel, goKey, err := askLLMBackend(p, existing)
 	if err != nil {
 		return err
 	}
-	ollamaModelDef := existing["OLLAMA_MODEL"]
-	ollamaModel, err := p.Input("Ollama model (as shown by `ollama list`)", ollamaModelDef, required("OLLAMA_MODEL"))
-	if err != nil {
-		return err
+	var ollamaURL, ollamaModel string
+	if backend == llmBackendOllama {
+		ollamaURL, err = p.Input("Ollama URL", ollamaURLDef, validateURL)
+		if err != nil {
+			return err
+		}
+		ollamaModelDef := existing["OLLAMA_MODEL"]
+		ollamaModel, err = p.Input("Ollama model (as shown by `ollama list`)", ollamaModelDef, required("OLLAMA_MODEL"))
+		if err != nil {
+			return err
+		}
+		ollamaURL = strings.TrimSpace(ollamaURL)
+		ollamaModel = strings.TrimSpace(ollamaModel)
+	} else {
+		// Keep existing Ollama settings so switching back is frictionless.
+		ollamaURL = existing["OLLAMA_URL"]
+		ollamaModel = existing["OLLAMA_MODEL"]
 	}
 
 	// Persona (optional, collapsed)
@@ -276,6 +451,10 @@ func runInteractive(p Prompter, sshFlag string, noDockerFlag bool, envPath strin
 		NoDocker:            noDocker,
 		OllamaURL:           strings.TrimSpace(ollamaURL),
 		OllamaModel:         strings.TrimSpace(ollamaModel),
+		LLMBackend:          backend,
+		LLMURL:              goURL,
+		LLMModel:            goModel,
+		LLMAPIKey:           goKey,
 		MasterName:          strings.TrimSpace(masterName),
 		ProtocolName:        strings.TrimSpace(protocolName),
 		PalaceName:          strings.TrimSpace(palaceName),
@@ -307,6 +486,26 @@ func buildEnv(ans Answers, existing map[string]string) map[string]string {
 	}
 	env["OLLAMA_URL"] = ans.OllamaURL
 	env["OLLAMA_MODEL"] = ans.OllamaModel
+	backend := ans.LLMBackend
+	if backend == "" {
+		backend = llmBackendOllama
+	}
+	env["LLM_BACKEND"] = backend
+	if backend == llmBackendGo {
+		env["LLM_URL"] = ans.LLMURL
+		env["LLM_MODEL"] = ans.LLMModel
+		if ans.LLMAPIKey != "" {
+			env["LLM_API_KEY"] = ans.LLMAPIKey
+		} else {
+			delete(env, "LLM_API_KEY")
+		}
+	} else {
+		// Clean switch back to Ollama: drop Go credentials so no stale
+		// secret lingers; URL/model refill from defaults on next Go setup.
+		delete(env, "LLM_URL")
+		delete(env, "LLM_API_KEY")
+		delete(env, "LLM_MODEL")
+	}
 	env["WEB_ENABLED"] = "1"
 	env["WEB_TOKEN"] = ans.WebToken
 	env["ALERT_TOKEN"] = ans.AlertToken

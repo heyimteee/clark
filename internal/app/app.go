@@ -22,6 +22,7 @@ import (
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/imessage"
+	"github.com/heyimteee/clark/internal/llmcompat"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/notify"
 	"github.com/heyimteee/clark/internal/ollama"
@@ -57,7 +58,15 @@ func New(version string) (*App, error) {
 		return nil, err
 	}
 
-	llm := ollama.New(cfg.OllamaURL, cfg.OllamaModel)
+	// Local Ollama stays fully supported; LLM_BACKEND selects the chat brain
+	// (validated in config.Load, so the switch is exhaustive by construction).
+	var llm assistant.LLM
+	if cfg.LLMBackend == llmcompat.BackendName {
+		logging.Log("APP", logging.SevInfo, "LLM", "Using OpenCode Go backend", "model", cfg.LLMModel)
+		llm = llmcompat.New(cfg.LLMURL, cfg.LLMAPIKey, cfg.LLMModel)
+	} else {
+		llm = ollama.New(cfg.OllamaURL, cfg.OllamaModel)
+	}
 	ast, err := assistant.New(cfg, st, llm)
 	if err != nil {
 		st.Close()

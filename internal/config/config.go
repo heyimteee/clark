@@ -14,8 +14,15 @@ type Config struct {
 	OllamaURL         string
 	OllamaModel       string
 	OllamaVisionModel string
-	DBPath            string
-	TavilyAPIKey      string
+	// LLMBackend selects the chat brain: "ollama" (default, local) or
+	// "opencode-go" (hosted Responses API). Ollama stays fully supported;
+	// go needs LLMURL/LLMAPIKey/LLMModel.
+	LLMBackend   string // LLM_BACKEND
+	LLMURL       string // LLM_URL       Responses endpoint, e.g. https://opencode.ai/zen/go/v1/responses
+	LLMAPIKey    string // LLM_API_KEY   Go API key (go backend only)
+	LLMModel     string // LLM_MODEL     e.g. muse-spark-1.3-contributor (go backend only)
+	DBPath       string
+	TavilyAPIKey string
 
 	// Persona shapes the butler's identity. Every field is optional and can be
 	// overridden in .env or via the environment so users can run clark without
@@ -64,6 +71,9 @@ type Person struct {
 	Relation string
 }
 
+// llmBackendGo selects the hosted Responses-API brain (OpenCode Go).
+const llmBackendGo = "opencode-go"
+
 // Load reads .env (if present) and validates the configuration.
 func Load() (*Config, error) {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
@@ -76,8 +86,23 @@ func Load() (*Config, error) {
 	}
 
 	model := os.Getenv("OLLAMA_MODEL")
-	if model == "" {
+	backend := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_BACKEND")))
+	if backend == "" {
+		backend = "ollama"
+	}
+	if backend != "ollama" && backend != llmBackendGo {
+		return nil, fmt.Errorf("unknown LLM_BACKEND %q: want ollama or %s", os.Getenv("LLM_BACKEND"), llmBackendGo)
+	}
+	if backend == "ollama" && model == "" {
 		return nil, fmt.Errorf("no OLLAMA_MODEL set. Add OLLAMA_MODEL to your .env, e.g. OLLAMA_MODEL=llama3.2:latest")
+	}
+	llmURL := strings.TrimSpace(os.Getenv("LLM_URL"))
+	llmKey := strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+	llmModel := strings.TrimSpace(os.Getenv("LLM_MODEL"))
+	if backend == llmBackendGo {
+		if llmURL == "" || llmKey == "" || llmModel == "" {
+			return nil, fmt.Errorf("LLM_BACKEND=%s requires LLM_URL, LLM_API_KEY, and LLM_MODEL in your .env (run `clark install` for the guided setup)", llmBackendGo)
+		}
 	}
 
 	dbPath := os.Getenv("CLARK_DB")
@@ -169,6 +194,10 @@ func Load() (*Config, error) {
 		OllamaURL:         ollamaURL,
 		OllamaModel:       model,
 		OllamaVisionModel: os.Getenv("OLLAMA_VISION_MODEL"),
+		LLMBackend:        backend,
+		LLMURL:            llmURL,
+		LLMAPIKey:         llmKey,
+		LLMModel:          llmModel,
 		DBPath:            dbPath,
 		TavilyAPIKey:      os.Getenv("TAVILY_API_KEY"),
 
