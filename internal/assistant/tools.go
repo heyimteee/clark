@@ -31,17 +31,17 @@ func (s *Service) registerManagementTools() {
 					return "", err
 				}
 				if on {
-					return "Understood, Master. " + recipient + " is now personally woken.", nil
+					return "Understood, Master. " + recipient + " is now personally woken. Global status is unchanged.", nil
 				}
-				return "Understood, Master. " + recipient + " is now personally silenced.", nil
+				return "Understood, Master. " + recipient + " is now personally silenced. Global status is unchanged.", nil
 			}
 			if err := s.SetStatus(on); err != nil {
 				return "", err
 			}
 			if on {
-				return "I am awake and at your service, Master.", nil
+				return "Status is now ON for everyone, Master. I am awake and at your service.", nil
 			}
-			return "I have fallen quiet as ordered, Master. I shall still answer you here.", nil
+			return "Status is now OFF for everyone, Master. I have fallen quiet as ordered; I shall still answer you here.", nil
 		},
 	)
 
@@ -83,7 +83,7 @@ func (s *Service) registerManagementTools() {
 			if err := s.SetContext(text); err != nil {
 				return "", err
 			}
-			return "Noted, Master. Your context has been updated.", nil
+			return "Noted, Master. Your context is now: " + text, nil
 		},
 	)
 

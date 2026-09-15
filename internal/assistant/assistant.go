@@ -1522,6 +1522,15 @@ func (s *Service) needsAction(userMsg, reply string, available []tools.Tool) (bo
 		}
 	}
 
+	// Bare confirmations ("done", "offline") on state-change demands. The
+	// demand scoping is essential: without a status-flavoured user message,
+	// everyday replies like "well done" would force spurious tool calls.
+	if hasTool("set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state") &&
+		hasAny(userMsg, "status", "silence", "wake", "offline", "deactivate", "activate", "go online", "go offline") &&
+		hasAny(reply, "done", "consider it done", "offline", "all set", "taken care of", "will do", "silenced", "disabled", "enabled", "deactivated", "activated") {
+		return true, manageHint(userMsg)
+	}
+
 	// The sender explicitly demanded a management action.
 	if hasTool("set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state") &&
 		hasAny(userMsg,

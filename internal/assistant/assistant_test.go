@@ -2223,3 +2223,72 @@ func TestRelayToolViaParam(t *testing.T) {
 		t.Fatal("want error for empty message")
 	}
 }
+
+func TestSetStatusEchoesResultingState(t *testing.T) {
+	s, _, _ := newService(t)
+	mctx := tools.WithMaster(context.Background())
+	out, err := s.Tools().Execute(mctx, "set_status", []byte(`{"on":false}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "OFF") || !strings.Contains(out, "everyone") {
+		t.Fatalf("out = %q, want explicit global OFF state", out)
+	}
+	if s.Enabled() {
+		t.Fatal("status should be off after set_status false")
+	}
+	out, err = s.Tools().Execute(mctx, "set_status", []byte(`{"on":true}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "ON") {
+		t.Fatalf("out = %q, want explicit global ON state", out)
+	}
+}
+
+func TestSetContextEchoesValue(t *testing.T) {
+	s, _, _ := newService(t)
+	out, err := s.Tools().Execute(tools.WithMaster(context.Background()), "set_context", []byte(`{"text":"In a meeting"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "In a meeting") {
+		t.Fatalf("out = %q, want echoed value", out)
+	}
+}
+
+func TestNeedsActionBareConfirmationOnStateDemand(t *testing.T) {
+	s, _, _ := newService(t)
+	available := s.toolsForSender("master@master", true)
+	for _, tc := range []struct{ user, reply string }{
+		{"turn status off", "Done, Sir."},
+		{"silence yourself", "Consider it done."},
+		{"go offline", "You are offline."},
+		{"deactivate", "All set."},
+	} {
+		ok, hint := s.needsAction(tc.user, tc.reply, available)
+		if !ok || hint != "set_status" {
+			t.Errorf("needsAction(%q, %q) = (%v, %q), want (true, set_status)", tc.user, tc.reply, ok, hint)
+		}
+	}
+	for name, tc := range map[string]struct{ user, reply string }{
+		"praise without demand": {"thanks", "Well done, Sir!"},
+		"unrelated done":        {"what is the time", "Done calculating: noon."},
+		"turn off unspecified":  {"turn it off", "Done."},
+	} {
+		if ok, _ := s.needsAction(tc.user, tc.reply, available); ok {
+			t.Errorf("needsAction(%s) = true, want false", name)
+		}
+	}
+}
+
+func TestPromptStateChangeReporting(t *testing.T) {
+	for _, want := range []string{
+		"report the outcome from the tool result",
+		"no tool call means nothing happened",
+	} {
+		if !strings.Contains(promptTemplate, want) {
+			t.Errorf("prompt missing state-reporting rule %q", want)
+		}
+	}
+}
