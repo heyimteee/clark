@@ -2,10 +2,13 @@ package alert
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+var errTestBoom = errors.New("boom")
 
 type stubButler struct {
 	reply string
@@ -164,5 +167,67 @@ func TestFillAlwaysIncludesTime(t *testing.T) {
 	got := fill("{body}", "", "boom")
 	if !strings.Contains(got, time.Now().Format("15:04")) {
 		t.Errorf("no time in %q", got)
+	}
+}
+
+func TestRelayViaSelective(t *testing.T) {
+	cases := []struct {
+		name     string
+		via      string
+		wantSent []string
+	}{
+		{"whatsapp only", ViaWhatsApp, []string{ViaWhatsApp}},
+		{"imessage only", ViaIMessage, []string{ViaIMessage}},
+		{"both", ViaBoth, []string{ViaWhatsApp, ViaIMessage}},
+		{"default empty means both", "", []string{ViaWhatsApp, ViaIMessage}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{}
+			s, r := r.svc(&stubButler{})
+			sent, err := s.RelayVia(context.Background(), "hello", tc.via)
+			if err != nil {
+				t.Fatalf("RelayVia: %v", err)
+			}
+			if strings.Join(sent, ",") != strings.Join(tc.wantSent, ",") {
+				t.Fatalf("sent = %v, want %v", sent, tc.wantSent)
+			}
+			if r.desktopN != 1 || len(r.webTexts) != 1 {
+				t.Fatalf("desktop/web must always fire: %+v", r)
+			}
+		})
+	}
+}
+
+func TestRelayViaInvalid(t *testing.T) {
+	r := &recorder{}
+	s, r := r.svc(&stubButler{})
+	if _, err := s.RelayVia(context.Background(), "hello", "signal"); err == nil {
+		t.Fatal("want error for unknown channel")
+	}
+	if len(r.waTexts)+len(r.imTexts) != 0 {
+		t.Fatal("nothing should send on invalid via")
+	}
+}
+
+func TestRelayViaPartialFailure(t *testing.T) {
+	r := &recorder{}
+	s, _ := r.svc(&stubButler{})
+	s.SetWASender(func(_ context.Context, _ string) error { return errTestBoom })
+	sent, err := s.RelayVia(context.Background(), "hello", ViaBoth)
+	if err == nil || !strings.Contains(err.Error(), "whatsapp") {
+		t.Fatalf("err = %v, want whatsapp failure", err)
+	}
+	if len(sent) != 1 || sent[0] != ViaIMessage {
+		t.Fatalf("sent = %v, want [imessage]", sent)
+	}
+}
+
+func TestRelayStillSendsBoth(t *testing.T) {
+	r := &recorder{}
+	s, r := r.svc(&stubButler{})
+	s.Relay(context.Background(), "hello")
+	if len(r.waTexts) != 1 || len(r.imTexts) != 1 {
+		t.Fatalf("legacy Relay must fan out both: %+v", r)
 	}
 }

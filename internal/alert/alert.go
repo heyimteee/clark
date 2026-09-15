@@ -8,6 +8,7 @@ package alert
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -93,23 +94,57 @@ func (s *Service) Alert(ctx context.Context, kind, title, body string) {
 // channel (WhatsApp, iMessage, web console, desktop). Unlike Deliver it does
 // not render a template — the caller supplies the final text.
 func (s *Service) Relay(ctx context.Context, text string) {
+	s.RelayVia(ctx, text, ViaBoth)
+}
+
+// Channel selectors for RelayVia.
+const (
+	ViaWhatsApp = "whatsapp"
+	ViaIMessage = "imessage"
+	ViaBoth     = "both"
+)
+
+// RelayVia is Relay restricted to the requested transports. Desktop and web
+// broadcast always fire; only WhatsApp/iMessage follow via. It returns the
+// channels actually sent ("whatsapp" and/or "imessage", in that order) and
+// joins per-channel failures instead of only logging them, so tool callers
+// can report partial delivery.
+func (s *Service) RelayVia(ctx context.Context, text, via string) (sent []string, err error) {
+	switch via {
+	case "", ViaBoth:
+		via = ViaBoth
+	case ViaWhatsApp, ViaIMessage:
+	default:
+		return nil, fmt.Errorf("unknown channel %q: want whatsapp, imessage, or both", via)
+	}
 	if s.desktop != nil {
 		_ = s.desktop("Message relayed", text)
 	}
-	if s.sendWA != nil {
-		if err := s.sendWA(ctx, text); err != nil {
-			logf("ALERT", "relay whatsapp failed: %v", err)
+	var errs []string
+	if (via == ViaBoth || via == ViaWhatsApp) && s.sendWA != nil {
+		if werr := s.sendWA(ctx, text); werr != nil {
+			logf("ALERT", "relay whatsapp failed: %v", werr)
+			errs = append(errs, "whatsapp: "+werr.Error())
+		} else {
+			sent = append(sent, ViaWhatsApp)
 		}
 	}
-	if s.sendIM != nil {
-		if err := s.sendIM(ctx, text); err != nil {
-			logf("ALERT", "relay imessage failed: %v", err)
+	if (via == ViaBoth || via == ViaIMessage) && s.sendIM != nil {
+		if werr := s.sendIM(ctx, text); werr != nil {
+			logf("ALERT", "relay imessage failed: %v", werr)
+			errs = append(errs, "imessage: "+werr.Error())
+		} else {
+			sent = append(sent, ViaIMessage)
 		}
 	}
 	if s.broadcast != nil {
 		s.broadcast(text, false)
 	}
-	logf("ALERT", "relay delivered", "text", text)
+	logf("ALERT", "relay delivered", "text", text, "via", via)
+	if len(errs) > 0 {
+		return sent, fmt.Errorf("relay partial failure: %s", strings.Join(errs, "; "))
+	}
+	return sent, nil
 }
 
 // Deliver renders the message for kind and pushes it to every wired channel.

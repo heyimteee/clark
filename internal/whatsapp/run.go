@@ -98,7 +98,7 @@ func Run(ctx context.Context, opts Options) error {
 func registerSendMessageTool(reg *tools.Registry, msgr *WAMessenger, nameToJID func(string) (string, bool)) {
 	reg.RegisterFunc(
 		"send_message",
-		"Send a WhatsApp message to a VIP on the Master's behalf. Only the Master may use this.",
+		"Send a WhatsApp message to a VIP other than the Master himself, on the Master's behalf. Never for 'me', 'myself', or the Master — use relay_to_master for those. Only the Master may use this.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
