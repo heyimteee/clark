@@ -754,14 +754,20 @@ func (a *App) Run() error {
 
 	// VIP → Master relay and away digests both use the same dual-channel
 	// fan-out (WA + iMessage + web) as alerts, but with custom Clark text.
-	a.ast.SetRelayFunc(func(ctx context.Context, fromJID, text string) error {
+	a.ast.SetRelayFunc(func(ctx context.Context, fromJID, text, via string) (string, error) {
 		relation, _ := a.ast.Relation(fromJID)
 		prefix := ""
 		if relation != "" {
 			prefix = relation + ": "
 		}
-		alerts.Relay(ctx, prefix+text)
-		return nil
+		sent, err := alerts.RelayVia(ctx, prefix+text, via)
+		if err != nil {
+			return "", err
+		}
+		if len(sent) == 0 {
+			return "Relayed to the Master.", nil
+		}
+		return "Sent via " + strings.Join(sent, " and ") + ".", nil
 	})
 	a.ast.SetAwaySender(func(ctx context.Context, text string) error {
 		alerts.Relay(ctx, text)

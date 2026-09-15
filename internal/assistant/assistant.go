@@ -153,7 +153,7 @@ type Service struct {
 	stt       interface {
 		Transcribe(ctx context.Context, audioWAV []byte) (string, error)
 	}
-	relayFn     func(ctx context.Context, fromJID, text string) error
+	relayFn     func(ctx context.Context, fromJID, text, via string) (string, error)
 	awaySender  func(ctx context.Context, text string) error
 	model       string
 	visionModel string
@@ -372,16 +372,18 @@ func (s *Service) DigestDocument(ctx context.Context, name, text string) (string
 	return merged, nil
 }
 
-// SetRelayFunc wires the dual-channel relay (VIP → Master) used by the
-// relay_to_master tool. It registers the tool so VIP grants can gate it.
-func (s *Service) SetRelayFunc(fn func(ctx context.Context, fromJID, text string) error) {
+// SetRelayFunc wires the Master relay used by the relay_to_master tool. It
+// registers the tool so VIP grants can gate it. via selects transports
+// (whatsapp, imessage, both); the implementation reports what was sent.
+func (s *Service) SetRelayFunc(fn func(ctx context.Context, fromJID, text, via string) (string, error)) {
 	s.relayFn = fn
 	s.tools.RegisterFunc("relay_to_master",
-		"Relay a message from you (a VIP) to the Master through Clark. Use when the VIP says 'tell him …', 'let him know …', 'pass a message to him', 'tell the master …', etc. Also use for implicit personal asks meant for the Master (a pickup, favor, gift, meeting, or personal news for him) once the VIP confirms the relay offer. The message will be delivered to the Master via both WhatsApp and iMessage as a custom Clark relay. Only VIPs may use this.",
+		"Send a message to the Master — the man you serve. 'Me', 'myself', and 'him' (in a VIP's mouth) all mean him, including the Master's own 'send a message to me/myself [through WhatsApp/iMessage]'. Also use for a VIP's 'tell him …', 'let him know …', 'pass a message to him', and implicit personal asks for him once confirmed. Set via to 'whatsapp' or 'imessage' when a transport is named, 'both' otherwise (default). The message reaches his own chats; desktop and web console always fire too. VIPs may relay to him; only the Master may send to himself.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"message": map[string]any{"type": "string", "description": "The message to relay to the Master, as the VIP phrased it (or a concise paraphrase preserving intent)"},
+				"message": map[string]any{"type": "string", "description": "The message text to deliver"},
+				"via":     map[string]any{"type": "string", "description": "Transport: whatsapp, imessage, or both (default both)", "enum": []string{"whatsapp", "imessage", "both"}},
 			},
 			"required": []string{"message"},
 		},
@@ -395,10 +397,7 @@ func (s *Service) SetRelayFunc(fn func(ctx context.Context, fromJID, text string
 				return "", errors.New("message is required")
 			}
 			fromJID := tools.Sender(ctx)
-			if err := s.relayFn(ctx, fromJID, msg); err != nil {
-				return "", err
-			}
-			return "Relayed to the Master.", nil
+			return s.relayFn(ctx, fromJID, msg, tools.StringArg(args, "via"))
 		},
 	)
 }
@@ -1614,6 +1613,12 @@ func (s *Service) guessTools(userMsg string, available []tools.Tool) []string {
 	// is non-enforcing — the model still decides — so a stray "yes" elsewhere
 	// costs nothing.
 	if hasTool("relay_to_master") && isRelayConfirmation(m) {
+		hints = append(hints, "relay_to_master")
+	}
+	// Self-send: "send a message to me/myself" means the Master, who is not a
+	// VIP — route to the relay, never to VIP lookup. Transport words ride
+	// along in the message for the via param; the hint itself is unqualified.
+	if hasTool("relay_to_master") && hasAny(m, "to me", "to myself", "message me", "text me", "send me ", "send me?", "send me,", "myself") {
 		hints = append(hints, "relay_to_master")
 	}
 	if h := manageHint(userMsg); h != "the appropriate management tool" && hasTool("set_status", "set_context", "add_vip", "delete_vip", "set_access", "get_state") {

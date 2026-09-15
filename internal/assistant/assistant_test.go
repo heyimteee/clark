@@ -262,7 +262,9 @@ func newService(t *testing.T) (*Service, *store.Store, *fakeLLM) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	s.SetRelayFunc(func(ctx context.Context, fromJID, text string) error { return nil })
+	s.SetRelayFunc(func(ctx context.Context, fromJID, text, via string) (string, error) {
+		return "Sent via " + via + ".", nil
+	})
 	return s, st, fake
 }
 
@@ -2155,5 +2157,69 @@ func TestPromptProtocolVerbatim(t *testing.T) {
 		if !strings.Contains(promptTemplate, want) {
 			t.Errorf("prompt missing fidelity directive %q", want)
 		}
+	}
+}
+
+func TestGuessToolsSelfSend(t *testing.T) {
+	s, _, _ := newService(t)
+	available := s.toolsForSender("master@master", true)
+	hasRelay := func(hints []string) bool {
+		for _, h := range hints {
+			if h == "relay_to_master" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, msg := range []string{
+		"send a message to me",
+		"send message to me through whatsapp",
+		"message me the report",
+		"text me when done",
+		"send it to myself through imessage",
+	} {
+		if hints := s.guessTools(msg, available); !hasRelay(hints) {
+			t.Errorf("guessTools(%q) = %v, want relay_to_master hint", msg, hints)
+		}
+	}
+	for _, msg := range []string{
+		"send messages to Tiara",
+		"send message to Tiara",
+		"thanks, see you later",
+	} {
+		if hints := s.guessTools(msg, available); hasRelay(hints) {
+			t.Errorf("guessTools(%q) = %v, want no relay hint", msg, hints)
+		}
+	}
+}
+
+func TestRelayToolViaParam(t *testing.T) {
+	s, _, _ := newService(t)
+	var gotVia string
+	s.SetRelayFunc(func(_ context.Context, _, _ string, via string) (string, error) {
+		gotVia = via
+		if via == "" {
+			via = "both"
+		}
+		return "Sent via " + via + ".", nil
+	})
+	out, err := s.Tools().Execute(context.Background(), "relay_to_master", []byte(`{"message":"hi","via":"whatsapp"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if gotVia != "whatsapp" {
+		t.Fatalf("via = %q, want whatsapp", gotVia)
+	}
+	if out != "Sent via whatsapp." {
+		t.Fatalf("out = %q", out)
+	}
+	if _, err := s.Tools().Execute(context.Background(), "relay_to_master", []byte(`{"message":"hi"}`)); err != nil {
+		t.Fatalf("Execute without via: %v", err)
+	}
+	if gotVia != "" {
+		t.Fatalf("via default = %q, want empty (both)", gotVia)
+	}
+	if _, err := s.Tools().Execute(context.Background(), "relay_to_master", []byte(`{"message":""}`)); err == nil {
+		t.Fatal("want error for empty message")
 	}
 }
