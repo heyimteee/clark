@@ -43,7 +43,7 @@ func (m *WAMessenger) Send(ctx context.Context, chat, text string) error {
 		logging.Log("WHATSAPP", logging.SevErr, "SEND", "Failed to parse JID", "to", chat, "error", err)
 		return err
 	}
-	text = gateway.PrefixMessage(text)
+	text = gateway.SanitizeWhatsAppRichText(gateway.PrefixMessage(text))
 	resp, err := m.client.SendMessage(ctx, to, &waE2E.Message{
 		Conversation: proto.String(text),
 	})
@@ -58,7 +58,7 @@ func (m *WAMessenger) Send(ctx context.Context, chat, text string) error {
 
 // SendSelf delivers a message to clark's own chat.
 func (m *WAMessenger) SendSelf(ctx context.Context, text string) error {
-	text = gateway.PrefixMessage(text)
+	text = gateway.SanitizeWhatsAppRichText(gateway.PrefixMessage(text))
 	resp, err := m.client.SendMessage(ctx, m.SelfJID(), &waE2E.Message{
 		Conversation: proto.String(text),
 	})
