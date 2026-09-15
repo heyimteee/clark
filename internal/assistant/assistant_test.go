@@ -454,6 +454,9 @@ func TestServiceVIPToolGrant(t *testing.T) {
 	s.Tools().RegisterFunc("secret_tool", "master only", map[string]any{"type": "object"}, func(_ context.Context, _ map[string]any) (string, error) {
 		return "secret", nil
 	})
+	// Carry the excuse so the disclosure verifier does not repair (which
+	// would overwrite the recorded request this test inspects).
+	fake.always = &ollama.ChatResult{Content: "Sir, testing context applies. Indubitably."}
 
 	if _, err := s.Reply(context.Background(), jid, "hi", false); err != nil {
 		t.Fatalf("Reply: %v", err)
@@ -1254,7 +1257,7 @@ func TestServiceReplyInjectsLimitedHistory(t *testing.T) {
 			t.Fatalf("SaveMessage: %v", err)
 		}
 	}
-	fake.always = &ollama.ChatResult{Content: "Noted."}
+	fake.always = &ollama.ChatResult{Content: "Sir, testing context noted."}
 	if _, err := s.Reply(context.Background(), jid, "hello", false); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}
@@ -1677,7 +1680,7 @@ func TestPromptCarriesPersonaConfig(t *testing.T) {
 	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
 		t.Fatalf("AddVIP: %v", err)
 	}
-	fake.always = &ollama.ChatResult{Content: "Welcome."}
+	fake.always = &ollama.ChatResult{Content: "Welcome, Sir. Testing context applies."}
 
 	if _, err := s.Reply(context.Background(), jid, "hello", false); err != nil {
 		t.Fatalf("Reply: %v", err)
@@ -1730,7 +1733,7 @@ func TestPromptPersonaConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	fake.always = &ollama.ChatResult{Content: "Welcome."}
+	fake.always = &ollama.ChatResult{Content: "Welcome, Sir. Testing context applies."}
 	_ = s.SetStatus(false)
 
 	jid := "6281234567890@s.whatsapp.net"
@@ -1809,7 +1812,7 @@ func TestGuessToolsRelayConfirmation(t *testing.T) {
 
 func TestServiceVIPTurnCarriesProxyInstruction(t *testing.T) {
 	s, _, fake := newService(t)
-	fake.always = &ollama.ChatResult{Content: "Noted."}
+	fake.always = &ollama.ChatResult{Content: "Sir, testing context applies. Noted."}
 	jid := "6281234567890@s.whatsapp.net"
 	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
 		t.Fatalf("AddVIP: %v", err)
@@ -1849,7 +1852,7 @@ func systemPromptOf(fake *fakeLLM) string {
 
 func TestServiceFirstTurnGreetsVisitor(t *testing.T) {
 	s, _, fake := newService(t)
-	fake.always = &ollama.ChatResult{Content: "Welcome."}
+	fake.always = &ollama.ChatResult{Content: "Welcome, Sir. Testing context applies."}
 	_ = s.SetStatus(false)
 	jid := "6281234567890@s.whatsapp.net"
 	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
@@ -2290,5 +2293,118 @@ func TestPromptStateChangeReporting(t *testing.T) {
 		if !strings.Contains(promptTemplate, want) {
 			t.Errorf("prompt missing state-reporting rule %q", want)
 		}
+	}
+}
+
+func TestDisclosureSatisfied(t *testing.T) {
+	ctx := "In a meeting until noon"
+	for _, reply := range []string{
+		"Sir, I am in a meeting until noon — how can I help?",
+		"The Master is in a meeting until noon. Noted.",
+		"Sir, in a meeting.",
+	} {
+		if !disclosureSatisfied(reply, ctx) {
+			t.Errorf("disclosureSatisfied(%q) = false", reply)
+		}
+	}
+	for name, tc := range map[string]struct{ reply, ctx string }{
+		"no address":          {"I am in a meeting until noon.", ctx},
+		"no content":          {"Yes Sir, right away.", ctx},
+		"empty reply":         {"", ctx},
+		"below half tokens":   {"Sir, meeting.", "In a meeting tomorrow morning"},
+		"only address tokens": {"Sir Master Sir.", "In a meeting until noon"},
+	} {
+		if disclosureSatisfied(tc.reply, tc.ctx) {
+			t.Errorf("disclosureSatisfied(%s) = true", name)
+		}
+	}
+	if !disclosureSatisfied("Anything at all.", "") {
+		t.Error("empty context requires nothing")
+	}
+}
+
+func vipService(t *testing.T) (*Service, string) {
+	t.Helper()
+	s, _, fake := newService(t)
+	jid := "6281234567890@s.whatsapp.net"
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	_ = fake
+	return s, jid
+}
+
+func TestDisclosureRepairPath(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "6281234567890@s.whatsapp.net"
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	fake.results = []*ollama.ChatResult{
+		{Content: "The Master is testing context, Sir"},
+		{Content: "Hello! How can I help?"},
+		{Content: "Sir, testing context noted — how can I help?"},
+	}
+	reply, err := s.Reply(context.Background(), jid, "hi there", false)
+	if err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if reply != "Sir, testing context noted — how can I help?" {
+		t.Fatalf("reply = %q, want repaired text", reply)
+	}
+	if len(fake.gotTools) != 0 {
+		t.Fatalf("repair call must carry no tools, got %d", len(fake.gotTools))
+	}
+}
+
+func TestDisclosureFallbackPath(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "6281234567890@s.whatsapp.net"
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	fake.results = []*ollama.ChatResult{
+		{Content: "The Master is testing context, Sir"},
+		{Content: "Hello!"},
+		{Content: "Still nothing useful."},
+	}
+	reply, err := s.Reply(context.Background(), jid, "hi there", false)
+	if err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	// Fallback joins the deterministic bank opening to the original reply.
+	if !strings.Contains(reply, "testing context") || !strings.Contains(reply, "Hello!") || !strings.Contains(reply, "—") {
+		t.Fatalf("reply = %q, want bank join", reply)
+	}
+}
+
+func TestDisclosureSatisfiedPassthrough(t *testing.T) {
+	s, _, fake := newService(t)
+	jid := "6281234567890@s.whatsapp.net"
+	if err := s.AddVIP("6281234567890, Tiara, Girlfriend"); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	good := "Sir, the testing context applies — how can I help?"
+	fake.results = []*ollama.ChatResult{
+		{Content: "The Master is testing context, Sir"},
+		{Content: good},
+	}
+	reply, err := s.Reply(context.Background(), jid, "hi there", false)
+	if err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	if reply != good {
+		t.Fatalf("reply = %q, want byte-identical passthrough", reply)
+	}
+}
+
+func TestDisclosureBankFallbackShape(t *testing.T) {
+	out := disclosureBankFallback("In a meeting", "a@b", "How can I help?")
+	if !strings.Contains(out, "In a meeting") || !strings.Contains(out, "How can I help?") || !strings.Contains(out, "—") {
+		t.Fatalf("fallback = %q", out)
+	}
+	a := disclosureBankFallback("ctx", "same@x", "hi")
+	if b := disclosureBankFallback("ctx", "same@x", "hi"); a != b {
+		t.Fatal("same sender+day must pick deterministically")
 	}
 }

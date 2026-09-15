@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strconv"
 	"strings"
@@ -993,11 +994,11 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	// debris. OFF remains silent via gateway gate.
 	task := followUpTask
 	needsDisclosure := false
-	var disclosurePrefix string
+	var disclosurePrefix, ctxStr string
 	if !isSelf && s.needsContextDisclosure(senderJID) {
 		needsDisclosure = true
 		s.cacheMu.RLock()
-		ctxStr := s.context
+		ctxStr = s.context
 		s.cacheMu.RUnlock()
 		disclosurePrefix = s.disclosurePrefix(ctx, ctxStr)
 		// disclosurePrefix is kept for the content turn; task stays followUp
@@ -1045,11 +1046,11 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 	start := time.Now()
 
 	reply, thinking, pending, err := s.runToolLoop(ctx, messages, userMsg, available, isSelf)
-	if needsDisclosure && disclosurePrefix != "" {
-		reply = "_" + strings.TrimSpace(disclosurePrefix) + "_\n\n" + strings.TrimSpace(reply)
-	}
 	if err != nil {
 		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
+	}
+	if needsDisclosure {
+		reply = s.ensureDisclosure(reply, ctxStr, senderJID)
 	}
 
 	logging.Log("MODEL", logging.SevInfo, "RESPONSE", "Generation completed",
@@ -1112,11 +1113,11 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	relation, _ := s.vip.Check(senderJID)
 	task := followUpTask
 	needsDisclosure := false
-	var disclosurePrefix string
+	var disclosurePrefix, ctxStr string
 	if !isSelf && s.needsContextDisclosure(senderJID) {
 		needsDisclosure = true
 		s.cacheMu.RLock()
-		ctxStr := s.context
+		ctxStr = s.context
 		s.cacheMu.RUnlock()
 		disclosurePrefix = s.disclosurePrefix(ctx, ctxStr)
 	}
@@ -1161,8 +1162,8 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 	if err != nil {
 		return "", thinking, fmt.Errorf("failed to execute model: %w", s.handleModelError(err))
 	}
-	if needsDisclosure && disclosurePrefix != "" {
-		reply = "_" + strings.TrimSpace(disclosurePrefix) + "_\n\n" + strings.TrimSpace(reply)
+	if needsDisclosure {
+		reply = s.ensureDisclosure(reply, ctxStr, senderJID)
 	}
 
 	logging.Log("MODEL", logging.SevInfo, "RESPONSE", "Generation completed (streaming)",
@@ -1824,6 +1825,118 @@ func (s *Service) disclosurePrefix(ctx context.Context, masterCtx string) string
 	}
 	// Ensure it feels like an excuse (contains away/unavailable/sleeping/meeting/until)
 	return prefix
+}
+
+// disclosureStopwords are dropped when extracting the content tokens a
+// reply must carry to prove it conveys the excuse.
+var disclosureStopwords = map[string]bool{
+	"the": true, "and": true, "for": true, "with": true, "from": true,
+	"that": true, "this": true, "have": true, "has": true, "are": true,
+	"was": true, "were": true, "will": true, "would": true, "should": true,
+	"could": true, "your": true, "you": true, "his": true, "her": true,
+	"our": true, "their": true, "who": true, "what": true, "when": true,
+	"until": true, "sir": true, "master": true, "back": true, "about": true,
+	"into": true, "over": true, "after": true, "before": true, "very": true,
+	"much": true, "more": true, "most": true, "than": true, "then": true,
+	"there": true, "here": true, "where": true, "which": true, "while": true,
+	"also": true, "just": true, "only": true, "even": true, "still": true,
+}
+
+// disclosureContentTokens extracts the significant words a reply must echo
+// to prove it conveys the context.
+func disclosureContentTokens(ctxStr string) []string {
+	var toks []string
+	for _, w := range strings.Fields(strings.ToLower(ctxStr)) {
+		w = strings.Trim(w, ".,;:!?()\"'")
+		if len(w) <= 3 || disclosureStopwords[w] {
+			continue
+		}
+		toks = append(toks, w)
+	}
+	return toks
+}
+
+// disclosureSatisfied reports whether the reply carries the required excuse:
+// a Master/Sir address plus at least half (minimum one) of the context's
+// significant tokens.
+func disclosureSatisfied(reply, ctxStr string) bool {
+	if len(disclosureContentTokens(ctxStr)) == 0 {
+		return true
+	}
+	low := strings.ToLower(reply)
+	if !strings.Contains(low, "master") && !strings.Contains(low, "sir") {
+		return false
+	}
+	toks := disclosureContentTokens(ctxStr)
+	need := (len(toks) + 1) / 2
+	hit := 0
+	for _, t := range toks {
+		if strings.Contains(low, t) {
+			hit++
+		}
+	}
+	return hit >= need
+}
+
+// disclosureBank holds hand-written excuse openers: the deterministic
+// fallback when generation and repair both fail to produce a carrying
+// reply. {context} is the live master context; rotation spreads picks
+// across days and senders.
+var disclosureBank = []string{
+	"The Master is {context}, Sir —",
+	"Sir, the Master is {context} —",
+	"Begging your pardon, Sir — the Master is {context} —",
+	"The Master is {context}, and begs to be excused —",
+	"Sir — the Master is {context} —",
+	"Please forgive the Master, Sir — {context} —",
+	"The Master sends his regards, Sir, though {context} —",
+	"Sir, though the Master is {context} —",
+}
+
+// disclosureBankFallback joins a deterministic excuse opening to the reply.
+// Last resort only: presence is structural, so the excuse cannot go missing.
+func disclosureBankFallback(ctxStr, senderJID, reply string) string {
+	h := fnv.New32a()
+	h.Write([]byte(senderJID))
+	day, _, _ := time.Now().Date()
+	pick := disclosureBank[int(h.Sum32()+uint32(day))%len(disclosureBank)]
+	opening := strings.Replace(pick, "{context}", strings.TrimSpace(ctxStr), 1)
+	return opening + " " + strings.TrimSpace(reply)
+}
+
+// repairDisclosure asks the model once, without tools, to rewrite the reply
+// so it opens with the required excuse. Tool-less by design: a repair must
+// never re-fire side effects.
+func (s *Service) repairDisclosure(ctxStr, badReply string) (string, bool) {
+	rctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := s.llm.Chat(rctx, []ollama.Message{
+		{Role: "system", Content: "You are Clark, the butler. Rewrite the reply below so it OPENS by naturally conveying this context in flowing words as part of the message (one flowing message, no separate quoted line): " + strings.TrimSpace(ctxStr) + ". Keep the rest of the reply's meaning. Return only the rewritten message."},
+		{Role: "user", Content: badReply},
+	}, nil)
+	if err != nil || strings.TrimSpace(res.Content) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(res.Content), true
+}
+
+// ensureDisclosure verifies the assembled reply actually conveys the
+// required excuse; repairs once via a tool-less rewrite; falls back to a
+// deterministic template join. Satisfied replies pass through untouched.
+func (s *Service) ensureDisclosure(reply, ctxStr, senderJID string) string {
+	ctxStr = strings.TrimSpace(ctxStr)
+	if ctxStr == "" {
+		return reply
+	}
+	if disclosureSatisfied(reply, ctxStr) {
+		return reply
+	}
+	if fixed, ok := s.repairDisclosure(ctxStr, reply); ok && disclosureSatisfied(fixed, ctxStr) {
+		logging.Log("CLARK", logging.SevWarn, "DISCLOSURE", "Repaired VIP excuse opening")
+		return fixed
+	}
+	logging.Log("CLARK", logging.SevWarn, "DISCLOSURE", "Disclosure repair failed; using template fallback", "sender", senderJID)
+	return disclosureBankFallback(ctxStr, senderJID, reply)
 }
 
 type viewKind int
