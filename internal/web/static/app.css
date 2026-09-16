@@ -313,6 +313,7 @@ label.field .lbl {
 .tile-config { grid-column: span 4; }
 .tile-voice { grid-column: span 4; }
 .tile-access { grid-column: span 4; }
+.tile-health { grid-column: span 12; }
 .tile-vips { grid-column: span 12; }
 .tile-history { grid-column: span 12; }
 .tile-todos { grid-column: span 12; }
@@ -526,6 +527,12 @@ label.field .lbl {
 }
 
 .chip.on { background: var(--ok-bg); color: var(--ok-ink); border-color: transparent; }
+
+.chip.bad { background: var(--err-bg); color: var(--err-ink); border-color: transparent; }
+
+.health-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.health-hint { color: var(--ink-soft); font-size: 12px; margin-top: 8px; overflow-wrap: anywhere; }
 
 .btn.state-on {
   background: var(--ok-bg);

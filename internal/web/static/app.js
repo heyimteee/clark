@@ -114,16 +114,25 @@
   function renderHealth() {
     const box = $("#health-list");
     if (!box) return;
+    const hintBox = $("#health-hints");
     const items = (state && state.health) || [];
     if (!items.length) {
-      box.innerHTML = '<div class="row"><span class="k">probes</span><span class="v">no monitor</span></div>';
+      box.innerHTML = '<span class="chip">no monitor</span>';
+      if (hintBox) hintBox.innerHTML = "";
       return;
     }
     box.innerHTML = items.map(function (h) {
-      const dot = h.state === "healthy" ? "●" : (h.state === "unhealthy" ? "▲" : "○");
-      const v = dot + " " + h.name + (h.state === "unhealthy" && h.hint ? " — " + h.hint : "");
-      return '<div class="row"><span class="k">' + esc(h.state) + '</span><span class="v">' + esc(v) + "</span></div>";
+      const cls = h.state === "healthy" ? "chip on" : (h.state === "unhealthy" ? "chip bad" : "chip");
+      const dot = h.state === "healthy" ? "● " : (h.state === "unhealthy" ? "▲ " : "○ ");
+      return '<span class="' + cls + '">' + esc(dot + h.name) + "</span>";
     }).join("");
+    if (hintBox) {
+      hintBox.innerHTML = items.filter(function (h) {
+        return h.state === "unhealthy" && h.hint;
+      }).map(function (h) {
+        return '<div class="health-hint">' + esc(h.name + ": " + h.hint) + "</div>";
+      }).join("");
+    }
   }
 
   /* ---------------- toast ---------------- */
@@ -259,9 +268,6 @@
                 '<div class="ctx-save-row"><button class="btn" type="submit">save context</button></div>' +
               "</form>" +
             "</div>" +
-            '<div class="card tile-health"><h2>Health</h2><p class="sub">tool probes</p>' +
-              '<div class="voice-meta" id="health-list"></div>' +
-            "</div>" +
             '<div class="card tile-voice"><h2>Voice</h2><p class="sub">speech seam</p>' +
               '<div class="voice-meta">' +
                 '<div class="row"><span class="k">stt</span><span class="v" id="voice-stt"></span></div>' +
@@ -282,6 +288,10 @@
               '<input id="tool-search" class="input" placeholder="search tools…" aria-label="search tools">' +
               '<div id="access-list"></div>' +
               '<div id="access-pager"></div>' +
+            "</div>" +
+            '<div class="card tile-health"><h2>Health</h2><p class="sub">tool probes</p>' +
+              '<div class="health-chips" id="health-list"></div>' +
+              '<div id="health-hints"></div>' +
             "</div>" +
             '<div class="card tile-vips"><h2>VIPs</h2><p class="sub">people who reach clark</p>' +
               '<div class="vip-head-row">' +
