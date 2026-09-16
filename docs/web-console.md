@@ -29,9 +29,18 @@ Affirmations are served from `/opt/affirmations` (host volume) seeded from the b
 
 ## API surface
 
-All endpoints except `POST /web/api/login` and `POST /web/api/notify` require `Authorization: Bearer <session>`. Login returns a 12-hour sliding session.
+All endpoints except `POST /web/api/login`, `POST /web/api/tailnet`, and `POST /web/api/notify` require `Authorization: Bearer <session>`. Login returns a 12-hour sliding session.
 
 * `POST /web/api/login` with `{"key":"<WEB_TOKEN>"}`
+* `POST /web/api/tailnet` — passwordless login for tailnet clients: mints the
+  same 12-hour sliding session when the verified client address is inside
+  `TAILNET_ALLOW_CIDR` (default `100.64.0.0/10`). The address is `X-Real-IP`
+  when the TCP peer is NPM (`NPM_PEER_CIDR`), else the direct `RemoteAddr`;
+  `X-Forwarded-For` is never trusted here. Disabled unless
+  `WEB_TAILNET_ENABLED=1`. Setup: (1) set the three `*TAILNET*`/`NPM_PEER*`
+  vars, (2) in NPM add `proxy_set_header X-Real-IP $remote_addr;` to the
+  `clark.studio.lab` proxy host (Advanced tab), (3) redeploy. Wrong side of
+  the tailnet (or feature off) → `401`, password form as before.
 * `GET /web/api/state` — bento snapshot; every mutation (`status`, `thinking`, `history-limit`, `context`, `vip/*`, `access`, `history/clear`, `send`) returns a fresh snapshot. Mutations also broadcast `{type:"state", state:…}` over the chat WebSocket.
 * `GET /web/api/history?scope=global|vip|web&jid=&limit=` — chronological turns.
 * `POST /web/api/stt` — base64 WAV to text; `POST /web/api/tts` and `POST /web/api/speech` — base64 / raw WAV; `GET /web/api/voice` — engine status.

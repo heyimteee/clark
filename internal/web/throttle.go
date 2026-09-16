@@ -100,11 +100,35 @@ func clientIP(r *http.Request) string {
 			return first
 		}
 	}
+	return remoteHost(r)
+}
+
+// remoteHost strips the port from r.RemoteAddr, tolerating values without one.
+func remoteHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// trustedClientIP resolves the client address for authentication decisions.
+// Behind the console's reverse proxy, NPM sets X-Real-IP to the TCP peer it
+// saw ($remote_addr). That header is honored only when the direct peer is the
+// proxy itself (npmPeer); from anywhere else it is client-controlled and
+// ignored. X-Forwarded-For is never used here: the proxy appends the real
+// address to the right, so the first entry is forgeable by any client.
+func trustedClientIP(r *http.Request, npmPeer *net.IPNet) string {
+	if npmPeer != nil {
+		if ip := net.ParseIP(remoteHost(r)); ip != nil && npmPeer.Contains(ip) {
+			if real := strings.TrimSpace(r.Header.Get("X-Real-IP")); real != "" {
+				if ip := net.ParseIP(real); ip != nil {
+					return ip.String()
+				}
+			}
+		}
+	}
+	return remoteHost(r)
 }
 
 // logAuthFailure emits a WARN line with the source so repeated guessing is

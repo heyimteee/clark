@@ -38,6 +38,9 @@ func loadFromEnv(t *testing.T, env map[string]string) (*Config, error) {
 	_ = os.Unsetenv("IMESSAGE_LISTEN_ADDR")
 	_ = os.Unsetenv("IMESSAGE_BRIDGE_TOKEN")
 	_ = os.Unsetenv("IMESSAGE_SELF_HANDLE")
+	_ = os.Unsetenv("WEB_TAILNET_ENABLED")
+	_ = os.Unsetenv("TAILNET_ALLOW_CIDR")
+	_ = os.Unsetenv("NPM_PEER_CIDR")
 	for k, v := range env {
 		t.Setenv(k, v)
 	}
@@ -303,5 +306,72 @@ func TestActiveModel(t *testing.T) {
 				t.Fatalf("ActiveModel = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestLoadTailnetDefaults(t *testing.T) {
+	cfg, err := loadFromEnv(t, map[string]string{"OLLAMA_MODEL": "gemma4:cloud"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.WebTailnetEnabled {
+		t.Error("WebTailnetEnabled = true, want false by default")
+	}
+	if cfg.TailnetAllowCIDR != "100.64.0.0/10" {
+		t.Errorf("TailnetAllowCIDR = %q, want 100.64.0.0/10", cfg.TailnetAllowCIDR)
+	}
+	if cfg.NPMpeerCIDR != "" {
+		t.Errorf("NPMpeerCIDR = %q, want empty by default", cfg.NPMpeerCIDR)
+	}
+}
+
+func TestLoadTailnetEnabled(t *testing.T) {
+	cfg, err := loadFromEnv(t, map[string]string{
+		"OLLAMA_MODEL":        "gemma4:cloud",
+		"WEB_TAILNET_ENABLED": "1",
+		"TAILNET_ALLOW_CIDR":  "100.64.0.0/10",
+		"NPM_PEER_CIDR":       "172.19.0.0/16",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.WebTailnetEnabled {
+		t.Error("WebTailnetEnabled = false, want true")
+	}
+	if cfg.TailnetAllowCIDR != "100.64.0.0/10" {
+		t.Errorf("TailnetAllowCIDR = %q, want 100.64.0.0/10", cfg.TailnetAllowCIDR)
+	}
+	if cfg.NPMpeerCIDR != "172.19.0.0/16" {
+		t.Errorf("NPMpeerCIDR = %q, want 172.19.0.0/16", cfg.NPMpeerCIDR)
+	}
+}
+
+func TestLoadTailnetBadCIDRFails(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"allow": {
+			"OLLAMA_MODEL": "gemma4:cloud", "WEB_TAILNET_ENABLED": "1",
+			"TAILNET_ALLOW_CIDR": "not-a-cidr",
+		},
+		"peer": {
+			"OLLAMA_MODEL": "gemma4:cloud", "WEB_TAILNET_ENABLED": "1",
+			"NPM_PEER_CIDR": "999.1.1.0/24",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := loadFromEnv(t, env); err == nil {
+				t.Fatal("Load succeeded with invalid CIDR; want an error")
+			}
+		})
+	}
+}
+
+func TestLoadTailnetBadCIDRIgnoredWhenDisabled(t *testing.T) {
+	// Validation only bites when the feature is on, so a stale value in a
+	// shared .env can never break startup.
+	if _, err := loadFromEnv(t, map[string]string{
+		"OLLAMA_MODEL":       "gemma4:cloud",
+		"TAILNET_ALLOW_CIDR": "not-a-cidr",
+	}); err != nil {
+		t.Fatalf("Load with feature off: %v", err)
 	}
 }

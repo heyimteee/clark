@@ -903,20 +903,23 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *vo
 		}
 		go func() {
 			errCh <- web.Run(ctx, web.Options{
-				ListenAddr:     a.cfg.WebListenAddr,
-				WebToken:       a.cfg.WebToken,
-				AlertToken:     a.cfg.AlertToken,
-				Butler:         a.ast,
-				Store:          a.st,
-				Voice:          engine,
-				STTModel:       a.cfg.STTModel,
-				TTSEngine:      a.cfg.TTSEngine,
-				AffirmationDir: a.cfg.AffirmationDir,
-				Alerts:         alerts,
-				Scheduler:      a.sched,
-				Calendar:       calClient,
-				Version:        a.version,
-				Health:         healthFn,
+				ListenAddr:       a.cfg.WebListenAddr,
+				WebToken:         a.cfg.WebToken,
+				AlertToken:       a.cfg.AlertToken,
+				TailnetEnabled:   a.cfg.WebTailnetEnabled,
+				TailnetAllowCIDR: a.cfg.TailnetAllowCIDR,
+				NPMpeerCIDR:      a.cfg.NPMpeerCIDR,
+				Butler:           a.ast,
+				Store:            a.st,
+				Voice:            engine,
+				STTModel:         a.cfg.STTModel,
+				TTSEngine:        a.cfg.TTSEngine,
+				AffirmationDir:   a.cfg.AffirmationDir,
+				Alerts:           alerts,
+				Scheduler:        a.sched,
+				Calendar:         calClient,
+				Version:          a.version,
+				Health:           healthFn,
 			})
 		}()
 	}

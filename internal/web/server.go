@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -37,21 +38,28 @@ const (
 
 // Options wires the web console to the services it drives.
 type Options struct {
-	ListenAddr     string
-	WebToken       string
-	AlertToken     string
-	Butler         *assistant.Service
-	Store          *store.Store
-	Voice          *voice.Engine
-	STTModel       string
-	TTSEngine      string
-	AffirmationDir string
-	SessionTTL     time.Duration
-	SessionMaxLife time.Duration
-	Alerts         *alert.Service
-	Scheduler      *scheduler.Scheduler
-	Calendar       calendar.Client
-	Version        string
+	ListenAddr string
+	WebToken   string
+	AlertToken string
+	// TailnetEnabled allows passwordless sessions for clients arriving from
+	// the tailnet (POST /web/api/tailnet). TailnetAllowCIDR is the client
+	// range (e.g. 100.64.0.0/10); NPMpeerCIDR is the reverse-proxy peer
+	// range whose X-Real-IP header is trusted (empty = direct connections).
+	TailnetEnabled   bool
+	TailnetAllowCIDR string
+	NPMpeerCIDR      string
+	Butler           *assistant.Service
+	Store            *store.Store
+	Voice            *voice.Engine
+	STTModel         string
+	TTSEngine        string
+	AffirmationDir   string
+	SessionTTL       time.Duration
+	SessionMaxLife   time.Duration
+	Alerts           *alert.Service
+	Scheduler        *scheduler.Scheduler
+	Calendar         calendar.Client
+	Version          string
 	// Health reports structured tool-health conditions for the console tile;
 	// nil hides the tile.
 	Health func() []health.Result
@@ -79,6 +87,13 @@ type Server struct {
 	logins   *loginThrottle
 	hub      *chatHub
 
+	// tailnet auto-login state. tailnetLogins is a separate throttle so
+	// rejected tailnet probes can never burn password-login attempts.
+	tailnetEnabled bool
+	tailnetAllow   *net.IPNet
+	npmPeer        *net.IPNet
+	tailnetLogins  *loginThrottle
+
 	// notifyLimiter bounds alert-webhook bursts; sttSlots caps concurrent
 	// whisper transcriptions so CPU-bound STT cannot starve the box (#60).
 	notifyLimiter *tokenBucket
@@ -99,26 +114,30 @@ func New(opts Options) *Server {
 		maxLife = defaultSessionMaxLife
 	}
 	s := &Server{
-		mux:           http.NewServeMux(),
-		webToken:      opts.WebToken,
-		alertToken:    opts.AlertToken,
-		butler:        opts.Butler,
-		store:         opts.Store,
-		voice:         opts.Voice,
-		sttModel:      opts.STTModel,
-		ttsEngine:     opts.TTSEngine,
-		affirmations:  opts.AffirmationDir,
-		listen:        opts.ListenAddr,
-		alerts:        opts.Alerts,
-		sched:         opts.Scheduler,
-		cal:           opts.Calendar,
-		version:       opts.Version,
-		health:        opts.Health,
-		sessions:      newSessionManager(ttl, maxLife),
-		logins:        newLoginThrottle(),
-		hub:           newChatHub(),
-		notifyLimiter: newTokenBucket(notifyPerMinute, notifyBurst),
-		sttSlots:      make(chan struct{}, sttMaxConcurrency),
+		mux:            http.NewServeMux(),
+		webToken:       opts.WebToken,
+		alertToken:     opts.AlertToken,
+		butler:         opts.Butler,
+		store:          opts.Store,
+		voice:          opts.Voice,
+		sttModel:       opts.STTModel,
+		ttsEngine:      opts.TTSEngine,
+		affirmations:   opts.AffirmationDir,
+		listen:         opts.ListenAddr,
+		alerts:         opts.Alerts,
+		sched:          opts.Scheduler,
+		cal:            opts.Calendar,
+		version:        opts.Version,
+		health:         opts.Health,
+		sessions:       newSessionManager(ttl, maxLife),
+		logins:         newLoginThrottle(),
+		hub:            newChatHub(),
+		tailnetEnabled: opts.TailnetEnabled,
+		tailnetAllow:   parseIPNet(opts.TailnetAllowCIDR),
+		npmPeer:        parseIPNet(opts.NPMpeerCIDR),
+		tailnetLogins:  newLoginThrottle(),
+		notifyLimiter:  newTokenBucket(notifyPerMinute, notifyBurst),
+		sttSlots:       make(chan struct{}, sttMaxConcurrency),
 	}
 	if s.alerts != nil {
 		// Wire the console chat broadcast into the shared alert service so any
@@ -145,6 +164,7 @@ func New(opts Options) *Server {
 
 	s.mux.HandleFunc("POST /web/api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /web/api/logout", s.requireAuth(s.handleLogout))
+	s.mux.HandleFunc("POST /web/api/tailnet", s.handleTailnetLogin)
 
 	s.mux.HandleFunc("GET /web/api/state", s.requireAuth(s.handleState))
 	s.mux.HandleFunc("GET /web/api/history", s.requireAuth(s.handleHistory))
@@ -320,6 +340,20 @@ func Run(ctx context.Context, opts Options) error {
 	}
 }
 
+// parseIPNet parses a CIDR, returning nil for empty or invalid input so the
+// tailnet feature fails closed when misconfigured (config.Load rejects bad
+// values at startup; this guards direct Options construction in tests).
+func parseIPNet(s string) *net.IPNet {
+	if s == "" {
+		return nil
+	}
+	_, ipNet, err := net.ParseCIDR(s)
+	if err != nil {
+		return nil
+	}
+	return ipNet
+}
+
 // sessionPruneThreshold is the map size that triggers an eager purge of
 // expired sessions on the next issue().
 const sessionPruneThreshold = 4096
@@ -445,6 +479,38 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.sessions.revoke(tok)
 	logging.Log("WEB", logging.SevInfo, "LOGOUT", "Web session closed")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleTailnetLogin mints a session without the WEB_TOKEN when the verified
+// client address belongs to the tailnet (#198). The address comes from
+// trustedClientIP — never X-Forwarded-For — so a client cannot claim tailnet
+// membership by forging headers. There is no secret to guess here, but
+// rejections still feed a dedicated throttle (separate from the password
+// throttle) so a non-tailnet source cannot spam session issuance or logs.
+func (s *Server) handleTailnetLogin(w http.ResponseWriter, r *http.Request) {
+	src := trustedClientIP(r, s.npmPeer)
+	if !s.tailnetEnabled || s.tailnetAllow == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "tailnet login disabled"})
+		return
+	}
+	if !s.tailnetLogins.allow(src) {
+		logAuthFailure(src, "tailnet login locked out after repeated failures")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts; try again later"})
+		return
+	}
+	if ip := net.ParseIP(src); ip == nil || !s.tailnetAllow.Contains(ip) {
+		logAuthFailure(src, "tailnet login from non-tailnet source")
+		s.tailnetLogins.fail(src)
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
+	s.tailnetLogins.reset(src)
+	tok := s.sessions.issue()
+	logging.Log("WEB", logging.SevInfo, "LOGIN", "Web session opened via tailnet", "source", src)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":      tok,
+		"expires_in": int(s.sessions.ttl / time.Second),
+	})
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
