@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -43,26 +44,33 @@ type Config struct {
 	IMessageSelfHandle  string // IMESSAGE_SELF_HANDLE   Master's own "+6281111111111"
 
 	// Web console transport. Serves the bento dashboard + chat on :8090.
-	WebEnabled       bool   // WEB_ENABLED      "1"/"true"/"on" to serve the console
-	WebListenAddr    string // WEB_LISTEN_ADDR  default ":8090"
-	WebToken         string // WEB_TOKEN        required when WEB_ENABLED
-	AlertToken       string // ALERT_TOKEN   shared secret for monitoring alert webhooks
-	STTEngine        string // STT_ENGINE    "faster-whisper" (default) or "ollama"
-	STTModel         string // STT_MODEL     Ollama model for transcription (default whisper-turbo; STT_ENGINE=ollama only)
-	WhisperScript    string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
-	WhisperModelDir  string // WHISPER_MODEL_DIR faster-whisper model dir (default /opt/whisper/model)
-	TTSEngine        string // TTS_ENGINE      "kokoro-remote" (default) or "piper"
-	TTSVoice         string // TTS_VOICE       Piper voice id (default en_US-ryan-high, male)
-	TTSRemoteURL     string // TTS_REMOTE_URL  remote Kokoro server (Mac), e.g. http://100.x.x.x:8790
-	TTSRemoteToken   string // TTS_REMOTE_TOKEN shared secret for the remote Kokoro server
-	PiperDaemon      string // PIPER_DAEMON    long-lived piper runner (default /opt/piper/daemon.py)
-	PiperVoice       string // PIPER_VOICE     piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
-	KokoroVoice      string // KOKORO_VOICE    remote Kokoro voice id (default am_michael)
-	AffirmationDir   string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
-	MacActionURL     string // MAC_ACTION_URL  macOS bridge action endpoint (e.g. http://100.94.240.11:8791)
-	MacActionToken   string // MAC_ACTION_TOKEN shared secret for the macOS bridge action endpoint
-	StartStatus      bool   // CLARK_START_STATUS force status on startup (default false = OFF)
-	SchedulerEnabled bool   // SCHEDULER_ENABLED run the recurring-task scheduler (default on; "0"/"false"/"off" disables)
+	WebEnabled    bool   // WEB_ENABLED      "1"/"true"/"on" to serve the console
+	WebListenAddr string // WEB_LISTEN_ADDR  default ":8090"
+	WebToken      string // WEB_TOKEN        required when WEB_ENABLED
+	// Tailnet passwordless login. When enabled, clients whose verified
+	// address falls in TailnetAllowCIDR get sessions without WEB_TOKEN
+	// (POST /web/api/tailnet). NPMpeerCIDR is the reverse-proxy peer range
+	// whose X-Real-IP header is trusted; empty means direct connections.
+	WebTailnetEnabled bool   // WEB_TAILNET_ENABLED  "1"/"true"/"on" for tailnet auto-login
+	TailnetAllowCIDR  string // TAILNET_ALLOW_CIDR   default "100.64.0.0/10"
+	NPMpeerCIDR       string // NPM_PEER_CIDR        proxy peer range, e.g. "172.19.0.0/16"
+	AlertToken        string // ALERT_TOKEN   shared secret for monitoring alert webhooks
+	STTEngine         string // STT_ENGINE    "faster-whisper" (default) or "ollama"
+	STTModel          string // STT_MODEL     Ollama model for transcription (default whisper-turbo; STT_ENGINE=ollama only)
+	WhisperScript     string // WHISPER_SCRIPT    faster-whisper runner (default /opt/whisper/run.py)
+	WhisperModelDir   string // WHISPER_MODEL_DIR faster-whisper model dir (default /opt/whisper/model)
+	TTSEngine         string // TTS_ENGINE      "kokoro-remote" (default) or "piper"
+	TTSVoice          string // TTS_VOICE       Piper voice id (default en_US-ryan-high, male)
+	TTSRemoteURL      string // TTS_REMOTE_URL  remote Kokoro server (Mac), e.g. http://100.x.x.x:8790
+	TTSRemoteToken    string // TTS_REMOTE_TOKEN shared secret for the remote Kokoro server
+	PiperDaemon       string // PIPER_DAEMON    long-lived piper runner (default /opt/piper/daemon.py)
+	PiperVoice        string // PIPER_VOICE     piper voice .onnx (default /opt/piper/voices/<TTS_VOICE>.onnx)
+	KokoroVoice       string // KOKORO_VOICE    remote Kokoro voice id (default am_michael)
+	AffirmationDir    string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
+	MacActionURL      string // MAC_ACTION_URL  macOS bridge action endpoint (e.g. http://100.94.240.11:8791)
+	MacActionToken    string // MAC_ACTION_TOKEN shared secret for the macOS bridge action endpoint
+	StartStatus       bool   // CLARK_START_STATUS force status on startup (default false = OFF)
+	SchedulerEnabled  bool   // SCHEDULER_ENABLED run the recurring-task scheduler (default on; "0"/"false"/"off" disables)
 }
 
 // Person is a named person with an optional relation to the Master.
@@ -137,6 +145,23 @@ func Load() (*Config, error) {
 	webToken := os.Getenv("WEB_TOKEN")
 	if webEnabled && webToken == "" {
 		return nil, fmt.Errorf("WEB_ENABLED=1 requires WEB_TOKEN set in your .env. Generate one with: openssl rand -hex 32")
+	}
+
+	tailnetEnabled := envOn(os.Getenv("WEB_TAILNET_ENABLED"))
+	tailnetCIDR := strings.TrimSpace(os.Getenv("TAILNET_ALLOW_CIDR"))
+	if tailnetCIDR == "" {
+		tailnetCIDR = "100.64.0.0/10"
+	}
+	npmPeerCIDR := strings.TrimSpace(os.Getenv("NPM_PEER_CIDR"))
+	if tailnetEnabled {
+		if _, _, err := net.ParseCIDR(tailnetCIDR); err != nil {
+			return nil, fmt.Errorf("invalid TAILNET_ALLOW_CIDR %q: %v", tailnetCIDR, err)
+		}
+		if npmPeerCIDR != "" {
+			if _, _, err := net.ParseCIDR(npmPeerCIDR); err != nil {
+				return nil, fmt.Errorf("invalid NPM_PEER_CIDR %q: %v", npmPeerCIDR, err)
+			}
+		}
 	}
 
 	imessageEnabled := envOn(os.Getenv("IMESSAGE_ENABLED"))
@@ -223,25 +248,28 @@ func Load() (*Config, error) {
 		IMessageBridgeToken: imessageBridgeToken,
 		IMessageSelfHandle:  os.Getenv("IMESSAGE_SELF_HANDLE"),
 
-		WebEnabled:      webEnabled,
-		WebListenAddr:   webListenAddr,
-		WebToken:        webToken,
-		AlertToken:      os.Getenv("ALERT_TOKEN"),
-		STTEngine:       sttEngine,
-		STTModel:        sttModel,
-		WhisperScript:   whisperScript,
-		WhisperModelDir: whisperModelDir,
-		TTSEngine:       ttsEngine,
-		TTSVoice:        ttsVoice,
-		TTSRemoteURL:    ttsRemoteURL,
-		TTSRemoteToken:  ttsRemoteToken,
-		PiperDaemon:     piperDaemon,
-		PiperVoice:      piperVoice,
-		KokoroVoice:     kokoroVoice,
-		AffirmationDir:  affirmationDir,
-		MacActionURL:    os.Getenv("MAC_ACTION_URL"),
-		MacActionToken:  os.Getenv("MAC_ACTION_TOKEN"),
-		StartStatus:     envOn(os.Getenv("CLARK_START_STATUS")),
+		WebEnabled:        webEnabled,
+		WebListenAddr:     webListenAddr,
+		WebToken:          webToken,
+		AlertToken:        os.Getenv("ALERT_TOKEN"),
+		WebTailnetEnabled: tailnetEnabled,
+		TailnetAllowCIDR:  tailnetCIDR,
+		NPMpeerCIDR:       npmPeerCIDR,
+		STTEngine:         sttEngine,
+		STTModel:          sttModel,
+		WhisperScript:     whisperScript,
+		WhisperModelDir:   whisperModelDir,
+		TTSEngine:         ttsEngine,
+		TTSVoice:          ttsVoice,
+		TTSRemoteURL:      ttsRemoteURL,
+		TTSRemoteToken:    ttsRemoteToken,
+		PiperDaemon:       piperDaemon,
+		PiperVoice:        piperVoice,
+		KokoroVoice:       kokoroVoice,
+		AffirmationDir:    affirmationDir,
+		MacActionURL:      os.Getenv("MAC_ACTION_URL"),
+		MacActionToken:    os.Getenv("MAC_ACTION_TOKEN"),
+		StartStatus:       envOn(os.Getenv("CLARK_START_STATUS")),
 	}
 	cfg.SchedulerEnabled = !envOff(os.Getenv("SCHEDULER_ENABLED"))
 	return cfg, nil

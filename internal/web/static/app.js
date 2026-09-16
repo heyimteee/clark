@@ -4,7 +4,7 @@
   const SESSION_KEY = "clark.session";
   const TOAST_MS = 2400;
 
-  let token = sessionStorage.getItem(SESSION_KEY) || null;
+  let token = localStorage.getItem(SESSION_KEY) || null;
   let state = null;
   let mode = "bento";
   let chatWs = null;
@@ -182,7 +182,7 @@
           throw new Error(data.error || "wrong key");
         }
         token = data.token;
-        sessionStorage.setItem(SESSION_KEY, token);
+        localStorage.setItem(SESSION_KEY, token);
         boot();
       } catch (e) {
         err.textContent = e.message;
@@ -203,10 +203,27 @@
         .catch(function () { /* best effort */ });
     }
     token = null;
-    sessionStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(SESSION_KEY);
     if (chatWs) { chatWs.close(); chatWs = null; }
     if (logsWs) { logsWs.close(); logsWs = null; }
     showLogin();
+  }
+
+  // Tailnet fast path: when the server recognizes this client as a tailnet
+  // member it mints a session without the access key, so trusted devices
+  // skip the password form entirely. Any failure falls through to login.
+  async function tryTailnetLogin() {
+    try {
+      const r = await fetch("/web/api/tailnet", { method: "POST" });
+      if (!r.ok) return false;
+      const data = await r.json().catch(function () { return {}; });
+      if (!data.token) return false;
+      token = data.token;
+      localStorage.setItem(SESSION_KEY, token);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   /* ---------------- boot ---------------- */
@@ -2955,9 +2972,13 @@
     if (logsWs) logsWs.close();
   });
 
-  if (token) {
-    boot();
-  } else {
-    showLogin();
-  }
+  (async function init() {
+    if (token) {
+      boot();
+    } else if (await tryTailnetLogin()) {
+      boot();
+    } else {
+      showLogin();
+    }
+  })();
 })();
