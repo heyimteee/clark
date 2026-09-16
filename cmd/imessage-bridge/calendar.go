@@ -140,6 +140,102 @@ function run() {
 }
 `
 
+// calendarAccessSentinel prefixes every JXA-side access failure so Go can
+// tell "macOS refused consent" apart from query errors.
+const calendarAccessSentinel = "CALENDAR_ACCESS_"
+
+// withCalendarAuth inserts the consent-ensure block after the EventKit store
+// creation. needRead selects the access bar: listing needs Full Access while
+// create/delete also accept Write-Only (macOS 14+ status 4).
+func withCalendarAuth(script string, needRead bool) string {
+	need := "false"
+	if needRead {
+		need = "true"
+	}
+	snippet := strings.Replace(calendarAuthJS, "__NEED_READ__", need, 1)
+	return strings.Replace(script, "const store = $.EKEventStore.alloc.init",
+		"const store = $.EKEventStore.alloc.init\n"+snippet, 1)
+}
+
+const calendarAuthJS = `
+  var __calSt = Number($.EKEventStore.authorizationStatusForEntityType(0));
+  var __calAuth = (function() {
+    if (__calSt === 3) return 'ok';
+    if (__calSt === 4) return __NEED_READ__ ? 'write-only' : 'ok';
+    if (__calSt !== 0) return 'denied';
+    var done = false, granted = false;
+    try {
+      var cb = function(g, e) { granted = !!g; done = true; };
+      try { store.requestFullAccessToEventsWithCompletion(cb); }
+      catch (x) { store.requestAccessToEntityTypeCompletion(0, cb); }
+    } catch (y) { return 'denied'; }
+    var loop = $.NSRunLoop.currentRunLoop;
+    var end = Date.now() + 30000;
+    while (!done && Date.now() < end) { loop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.2)); }
+    if (!done) return 'timeout';
+    return granted ? 'ok' : 'denied';
+  })();
+  if (__calAuth !== 'ok') return JSON.stringify({error: 'CALENDAR_ACCESS_' + __calAuth});
+`
+
+// mapCalendarAccessError translates a JXA access sentinel into a human
+// remediation message. ok is false for ordinary query errors.
+func mapCalendarAccessError(payloadErr string) (msg string, ok bool) {
+	code, found := strings.CutPrefix(payloadErr, calendarAccessSentinel)
+	if !found {
+		return "", false
+	}
+	switch code {
+	case "write-only":
+		return "Calendar access is Write-Only: listing events needs Full Access — change imessage-bridge to Full Access in System Settings → Privacy & Security → Calendars", true
+	case "timeout":
+		return "calendar consent timed out after 30s: approve the access prompt on the Mac, then ask again", true
+	default:
+		return "calendar access denied for imessage-bridge: choose Allow in System Settings → Privacy & Security → Calendars", true
+	}
+}
+
+// calendarAuthStatus reports the current EventKit authorization for /status:
+// authorized, write_only, not_determined, restricted, denied, or unknown when
+// the probe itself fails.
+func calendarAuthStatus() string {
+	out, err := runJXA(map[string]any{}, `ObjC.import('EventKit')
+function run() { return JSON.stringify({status: Number($.EKEventStore.authorizationStatusForEntityType(0))}); }`)
+	if err != nil {
+		return "unknown"
+	}
+	var payload struct {
+		Status int `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &payload); err != nil {
+		return "unknown"
+	}
+	switch payload.Status {
+	case 3:
+		return "authorized"
+	case 4:
+		return "write_only"
+	case 0:
+		return "not_determined"
+	case 1:
+		return "restricted"
+	case 2:
+		return "denied"
+	default:
+		return "unknown"
+	}
+}
+
+// noteCalendarDenied opens the Calendars Settings pane once per episode when
+// the user must act there (denied or write-only; not on timeout where the
+// system prompt may still be on screen).
+func noteCalendarDenied(code string) {
+	if code == "timeout" {
+		return
+	}
+	maybeOpenSettingsPane(stateDirForMarkers(), settingsPaneCalendar)
+}
+
 // runJXA embeds params as JSON into the script (injection-safe), writes it to
 // a temp file and executes osascript. It returns stdout, with stderr folded
 // into the error for diagnostics.
@@ -183,7 +279,7 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 		to = from.Add(7 * 24 * time.Hour)
 	}
 
-	out, err := runJXA(map[string]int64{"from": from.Unix(), "to": to.Unix()}, calendarListJXA)
+	out, err := runJXA(map[string]int64{"from": from.Unix(), "to": to.Unix()}, withCalendarAuth(calendarListJXA, true))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("calendar list failed: %v: %s", err, out), http.StatusInternalServerError)
 		return
@@ -205,6 +301,11 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if payload.Error != "" {
+		if msg, ok := mapCalendarAccessError(payload.Error); ok {
+			noteCalendarDenied(strings.TrimPrefix(payload.Error, calendarAccessSentinel))
+			http.Error(w, "calendar list failed: "+msg, http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, "calendar list failed: "+payload.Error, http.StatusInternalServerError)
 		return
 	}
@@ -222,6 +323,7 @@ func handleCalendarList(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"events": events})
+	clearSettingsPaneMarker(stateDirForMarkers(), settingsPaneCalendar)
 }
 
 func handleCalendarCreate(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +349,7 @@ func handleCalendarCreate(w http.ResponseWriter, r *http.Request) {
 		"end":      end.Unix(),
 		"location": e.Location,
 		"notes":    e.Notes,
-	}, calendarCreateJXA)
+	}, withCalendarAuth(calendarCreateJXA, false))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("calendar create failed: %v: %s", err, out), http.StatusInternalServerError)
 		return
@@ -261,12 +363,18 @@ func handleCalendarCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if payload.Error != "" {
+		if msg, ok := mapCalendarAccessError(payload.Error); ok {
+			noteCalendarDenied(strings.TrimPrefix(payload.Error, calendarAccessSentinel))
+			http.Error(w, "calendar create failed: "+msg, http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, "calendar create failed: "+payload.Error, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"id": payload.ID})
+	clearSettingsPaneMarker(stateDirForMarkers(), settingsPaneCalendar)
 }
 
 func handleCalendarDelete(w http.ResponseWriter, r *http.Request) {
@@ -282,7 +390,7 @@ func handleCalendarDelete(w http.ResponseWriter, r *http.Request) {
 		"title": id,
 		"from":  now.Add(-90 * 24 * time.Hour).Unix(),
 		"to":    now.Add(270 * 24 * time.Hour).Unix(),
-	}, calendarDeleteJXA)
+	}, withCalendarAuth(calendarDeleteJXA, false))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("calendar delete failed: %v: %s", err, out), http.StatusInternalServerError)
 		return
@@ -295,9 +403,15 @@ func handleCalendarDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("calendar delete: cannot parse output: %v: %q", err, out), http.StatusInternalServerError)
 		return
 	}
+	if msg, ok := mapCalendarAccessError(payload.Error); ok {
+		noteCalendarDenied(strings.TrimPrefix(payload.Error, calendarAccessSentinel))
+		http.Error(w, "calendar delete failed: "+msg, http.StatusServiceUnavailable)
+		return
+	}
 	if payload.Error != "" || payload.Deleted == 0 {
 		http.Error(w, "calendar delete failed: "+payload.Error, http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+	clearSettingsPaneMarker(stateDirForMarkers(), settingsPaneCalendar)
 }

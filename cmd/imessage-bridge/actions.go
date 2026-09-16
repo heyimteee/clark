@@ -18,7 +18,17 @@ import (
 // triggers on the Mac. FaceTime has no scriptable "call" verb, so we open the
 // facetime:// URL scheme; the banner uses osascript's display notification.
 type ActionServer struct {
-	token string
+	token    string
+	statusFn func() StatusReport
+}
+
+// StatusReport is the bridge self-health snapshot served at GET /status so
+// clark can tell permission loss apart from the Mac merely being asleep.
+type StatusReport struct {
+	ChatDB   string `json:"chat_db"`         // ok | denied
+	Calendar string `json:"calendar"`        // authorized | write_only | not_determined | restricted | denied | unknown
+	Watcher  string `json:"watcher"`         // running | disabled
+	Error    string `json:"error,omitempty"` // chat.db probe detail when ChatDB != ok
 }
 
 // NewActionServer wires the action HTTP handler. token is the shared bridge
@@ -27,14 +37,32 @@ func NewActionServer(token string) *ActionServer {
 	return &ActionServer{token: token}
 }
 
+// SetStatusFunc wires the health provider; without one /status reports
+// unknown for everything.
+func (s *ActionServer) SetStatusFunc(fn func() StatusReport) {
+	s.statusFn = fn
+}
+
 // Routes returns the action endpoints with auth enforced.
 func (s *ActionServer) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /action", s.handleAction)
+	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("GET /calendars/events", handleCalendarList)
 	mux.HandleFunc("POST /calendars/events", handleCalendarCreate)
 	mux.HandleFunc("DELETE /calendars/events/", handleCalendarDelete)
 	return s.requireToken(mux)
+}
+
+// handleStatus serves the self-health snapshot. It never fails: unknown
+// fields degrade to "unknown" so monitoring always gets a shape it can parse.
+func (s *ActionServer) handleStatus(w http.ResponseWriter, r *http.Request) {
+	rep := StatusReport{ChatDB: "unknown", Calendar: "unknown", Watcher: "unknown"}
+	if s.statusFn != nil {
+		rep = s.statusFn()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rep)
 }
 
 func (s *ActionServer) requireToken(next http.Handler) http.Handler {
@@ -133,9 +161,15 @@ end run`
 // Run serves the action API until ctx is done, mirroring the bridge's other
 // subsystems.
 func RunActionServer(ctx context.Context, addr, token string) error {
+	return runActionServerWith(ctx, addr, NewActionServer(token).Routes())
+}
+
+// runActionServerWith serves a preconfigured handler; main uses it to attach
+// the live status provider before listening.
+func runActionServerWith(ctx context.Context, addr string, handler http.Handler) error {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           NewActionServer(token).Routes(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errCh := make(chan error, 1)

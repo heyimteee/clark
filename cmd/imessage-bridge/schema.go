@@ -88,6 +88,17 @@ func openChatDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
+// probeChatDB reports whether chat.db is currently readable without keeping
+// it open. Used by /status and the FDA-denied path.
+func probeChatDB(path string) error {
+	db, err := openChatDB(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+}
+
+// so an existing chat history is never replayed.
 // maxRowID returns the highest message ROWID, used to bootstrap the watermark
 // so an existing chat history is never replayed.
 func maxRowID(db *sql.DB) (int64, error) {
