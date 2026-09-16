@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -115,16 +116,38 @@ func main() {
 	// runs independently of chat.db so it keeps working even if the bridge
 	// lacks Full Disk Access or chat.db is temporarily unavailable. This is the
 	// redundancy the Master relies on during meetings/class.
+	// watcherRunning flips once chat.db opens; /status reads it live so clark
+	// can tell FDA loss apart from the Mac merely being asleep.
+	var watcherRunning atomic.Bool
+	actionSrv := NewActionServer(cfg.token)
+	actionSrv.SetStatusFunc(func() StatusReport {
+		rep := StatusReport{Calendar: calendarAuthStatus()}
+		if watcherRunning.Load() {
+			rep.Watcher = "running"
+			rep.ChatDB = "ok"
+			return rep
+		}
+		rep.Watcher = "disabled"
+		if perr := probeChatDB(cfg.dbPath); perr != nil {
+			rep.ChatDB = "denied"
+			rep.Error = perr.Error()
+		} else {
+			rep.ChatDB = "ok"
+		}
+		return rep
+	})
 	errCh := make(chan error, 3)
 	go func() {
-		if err := RunActionServer(ctx, cfg.actionAddr, cfg.token); err != nil {
+		if err := runActionServerWith(ctx, cfg.actionAddr, actionSrv.Routes()); err != nil {
 			errCh <- err
 		}
 	}()
 
 	db, err := openChatDB(cfg.dbPath)
 	if err != nil {
-		logging.Log("BRIDGE", logging.SevErr, "DB", "Cannot open chat.db; watcher/poller disabled (action server still up)", "error", err)
+		logging.Log("BRIDGE", logging.SevErr, "DB", "Cannot open chat.db; watcher/poller disabled (action server still up)", "error", err,
+			"remediation", "grant Full Disk Access to the imessage-bridge binary in System Settings → Privacy & Security → Full Disk Access, then restart the bridge")
+		maybeOpenSettingsPane(stateDirForMarkers(), settingsPaneFDA)
 		select {
 		case <-ctx.Done():
 		case err := <-errCh:
@@ -137,6 +160,8 @@ func main() {
 		return
 	}
 	defer db.Close()
+	watcherRunning.Store(true)
+	clearSettingsPaneMarker(stateDirForMarkers(), settingsPaneFDA)
 
 	client, err := NewClient(cfg.baseURL, cfg.token, cfg.rootCA)
 	if err != nil {
