@@ -156,6 +156,7 @@ type Service struct {
 	}
 	relayFn     func(ctx context.Context, fromJID, text, via string) (string, error)
 	awaySender  func(ctx context.Context, text string) error
+	healthFn    func() string
 	model       string
 	visionModel string
 	name        string
@@ -406,6 +407,21 @@ func (s *Service) SetRelayFunc(fn func(ctx context.Context, fromJID, text, via s
 // SetAwaySender wires the dual-channel sender for away digests (system → Master).
 func (s *Service) SetAwaySender(fn func(ctx context.Context, text string) error) {
 	s.awaySender = fn
+}
+
+// SetHealthFunc wires the tool-health snapshot shown by get_state and the
+// tool_health tool. Unset means no monitor is running: both stay silent.
+func (s *Service) SetHealthFunc(fn func() string) {
+	s.healthFn = fn
+}
+
+// HealthSnapshot returns the current tool-health lines, or "" when no
+// monitor is wired.
+func (s *Service) HealthSnapshot() string {
+	if s.healthFn == nil {
+		return ""
+	}
+	return s.healthFn()
 }
 
 // RelayToMaster pushes a system-originated notice to the Master over every
@@ -1284,6 +1300,7 @@ type promptData struct {
 	MasterStatus      string
 	ButlerStatus      string
 	InnerCircle       string
+	ToolHealth        string
 	Visitor           string
 	Tools             string
 	Task              string
@@ -1321,6 +1338,7 @@ func (s *Service) renderPrompt(name, masterStatus, butlerStatus, visitor, toolsL
 		MasterStatus:      masterStatus,
 		ButlerStatus:      butlerStatus,
 		InnerCircle:       s.vip.list(),
+		ToolHealth:        strings.ReplaceAll(s.HealthSnapshot(), "\n", "; "),
 		Visitor:           visitor,
 		Tools:             toolsList,
 		Task:              task,

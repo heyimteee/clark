@@ -18,6 +18,7 @@ import (
 	"github.com/heyimteee/clark/internal/alert"
 	"github.com/heyimteee/clark/internal/assistant"
 	"github.com/heyimteee/clark/internal/calendar"
+	"github.com/heyimteee/clark/internal/health"
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/scheduler"
 	"github.com/heyimteee/clark/internal/store"
@@ -51,6 +52,9 @@ type Options struct {
 	Scheduler      *scheduler.Scheduler
 	Calendar       calendar.Client
 	Version        string
+	// Health reports structured tool-health conditions for the console tile;
+	// nil hides the tile.
+	Health func() []health.Result
 }
 
 // Server owns the HTTP handlers, sessions, and the voice engine.
@@ -69,6 +73,7 @@ type Server struct {
 	sched        *scheduler.Scheduler
 	cal          calendar.Client
 	version      string
+	health       func() []health.Result
 
 	sessions *sessionManager
 	logins   *loginThrottle
@@ -108,6 +113,7 @@ func New(opts Options) *Server {
 		sched:         opts.Scheduler,
 		cal:           opts.Calendar,
 		version:       opts.Version,
+		health:        opts.Health,
 		sessions:      newSessionManager(ttl, maxLife),
 		logins:        newLoginThrottle(),
 		hub:           newChatHub(),

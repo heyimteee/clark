@@ -30,10 +30,13 @@ func TestStateSnapshot(t *testing.T) {
 	if st == nil {
 		t.Fatalf("state missing from %v", out)
 	}
-	for _, k := range []string{"name", "model", "enabled", "thinking", "historyLimit", "context", "sttModel", "ttsEngine", "ttsVoice", "vips", "tools", "version"} {
+	for _, k := range []string{"name", "model", "enabled", "thinking", "historyLimit", "context", "sttModel", "ttsEngine", "ttsVoice", "vips", "tools", "version", "health"} {
 		if _, ok := st[k]; !ok {
 			t.Errorf("state missing key %q", k)
 		}
+	}
+	if _, ok := st["health"].([]any); !ok {
+		t.Errorf("health = %T, want array", st["health"])
 	}
 	if _, ok := st["tools"].([]any); !ok {
 		t.Errorf("tools = %T, want array", st["tools"])

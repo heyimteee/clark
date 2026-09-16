@@ -36,7 +36,25 @@ func (s *Server) state() map[string]any {
 		"vips":         s.vipEntries(),
 		"tools":        s.toolList(),
 		"version":      s.version,
+		"health":       s.healthEntries(),
 	}
+}
+
+// healthEntries renders tool-health conditions for the console tile as
+// [{name, state, hint}]; empty when no monitor is wired.
+func (s *Server) healthEntries() []map[string]any {
+	out := make([]map[string]any, 0)
+	if s.health == nil {
+		return out
+	}
+	for _, r := range s.health() {
+		out = append(out, map[string]any{
+			"name":  r.Name,
+			"state": string(r.State),
+			"hint":  r.Hint,
+		})
+	}
+	return out
 }
 
 func (s *Server) ttsVoice() string {

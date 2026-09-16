@@ -207,3 +207,16 @@ func TestToGateway(t *testing.T) {
 		t.Errorf("toGateway isSelf=%v isGroup=%v, want self, non-group", msg.IsSelf, msg.IsGroup)
 	}
 }
+
+func TestServerOutboundPollTracked(t *testing.T) {
+	ts, _ := newTestServer(t, "", &fakeOutbound{})
+	if !ts.LastPoll().IsZero() {
+		t.Fatal("LastPoll set before any poll")
+	}
+	if rec := doRequest(ts, "GET", "/outbound", "", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("outbound = %d, want 204", rec.Code)
+	}
+	if age := time.Since(ts.LastPoll()); age < 0 || age > time.Minute {
+		t.Fatalf("LastPoll = %v, want ~now", ts.LastPoll())
+	}
+}

@@ -106,8 +106,24 @@
     }
     captureState();
     renderVoiceMeta();
+    renderHealth();
     renderVips();
     renderAccess();
+  }
+
+  function renderHealth() {
+    const box = $("#health-list");
+    if (!box) return;
+    const items = (state && state.health) || [];
+    if (!items.length) {
+      box.innerHTML = '<div class="row"><span class="k">probes</span><span class="v">no monitor</span></div>';
+      return;
+    }
+    box.innerHTML = items.map(function (h) {
+      const dot = h.state === "healthy" ? "●" : (h.state === "unhealthy" ? "▲" : "○");
+      const v = dot + " " + h.name + (h.state === "unhealthy" && h.hint ? " — " + h.hint : "");
+      return '<div class="row"><span class="k">' + esc(h.state) + '</span><span class="v">' + esc(v) + "</span></div>";
+    }).join("");
   }
 
   /* ---------------- toast ---------------- */
@@ -225,6 +241,9 @@
                 '<textarea id="cfg-ctx" class="input" rows="3"></textarea></label>' +
                 '<div class="ctx-save-row"><button class="btn" type="submit">save context</button></div>' +
               "</form>" +
+            "</div>" +
+            '<div class="card tile-health"><h2>Health</h2><p class="sub">tool probes</p>' +
+              '<div class="voice-meta" id="health-list"></div>' +
             "</div>" +
             '<div class="card tile-voice"><h2>Voice</h2><p class="sub">speech seam</p>' +
               '<div class="voice-meta">' +
