@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/heyimteee/clark/internal/calendar"
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/gateway"
+	"github.com/heyimteee/clark/internal/health"
 	"github.com/heyimteee/clark/internal/imessage"
 	"github.com/heyimteee/clark/internal/llmcompat"
 	"github.com/heyimteee/clark/internal/logging"
@@ -42,6 +44,13 @@ type App struct {
 	ast     *assistant.Service
 	sched   *scheduler.Scheduler
 	version string
+	// healthMon probes externally-dependent tools; set in Run before the
+	// consoles start so the web tile can read it.
+	healthMon *health.Monitor
+	// waMsgr and imSrv are published by transport hooks after Run starts so
+	// the tool-health monitor can probe live connection state.
+	waMsgr atomic.Pointer[whatsapp.WAMessenger]
+	imSrv  atomic.Pointer[imessage.Server]
 }
 
 // New loads config, opens the store, and builds the assistant.
@@ -774,6 +783,15 @@ func (a *App) Run() error {
 		return nil
 	})
 
+	// Tool-health monitor: probes each externally-dependent tool family and
+	// pushes on actionable failures (permission loss at once, plain
+	// unreachability on grace). Transport hooks below publish live handles.
+	a.healthMon = health.New(a.buildHealthCheckers(), func(hctx context.Context, text string) {
+		alerts.Relay(hctx, text)
+	})
+	a.ast.SetHealthFunc(a.healthMon.Snapshot)
+	go a.healthMon.Run(ctx)
+
 	// Recurring-task scheduler: start after the relay is wired so fired
 	// schedules can reach the Master immediately.
 	if a.cfg.SchedulerEnabled {
@@ -824,6 +842,7 @@ func (a *App) Run() error {
 			BypassPhrase: a.cfg.BypassPhrase,
 			NameToJID:    a.ast.LookupJID,
 			MessengerHook: func(msgr *whatsapp.WAMessenger) {
+				a.waMsgr.Store(msgr)
 				alerts.SetWASender(func(ctx context.Context, text string) error {
 					return msgr.SendSelf(ctx, text)
 				})
@@ -878,6 +897,10 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *vo
 	}
 
 	if a.cfg.WebEnabled {
+		var healthFn func() []health.Result
+		if a.healthMon != nil {
+			healthFn = a.healthMon.Results
+		}
 		go func() {
 			errCh <- web.Run(ctx, web.Options{
 				ListenAddr:     a.cfg.WebListenAddr,
@@ -893,6 +916,7 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *vo
 				Scheduler:      a.sched,
 				Calendar:       calClient,
 				Version:        a.version,
+				Health:         healthFn,
 			})
 		}()
 	}
@@ -913,6 +937,7 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *vo
 				ListenAddr:   a.cfg.IMessageListenAddr,
 				Token:        a.cfg.IMessageBridgeToken,
 				NameToHandle: a.ast.LookupIMessage,
+				ServerHook:   a.imSrv.Store,
 			})
 		}()
 	}

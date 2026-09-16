@@ -2408,3 +2408,64 @@ func TestDisclosureBankFallbackShape(t *testing.T) {
 		t.Fatal("same sender+day must pick deterministically")
 	}
 }
+
+func TestToolHealthNoMonitor(t *testing.T) {
+	s, _, _ := newService(t)
+	out, err := s.Tools().Execute(tools.WithMaster(context.Background()), "tool_health", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out != "No tool-health monitor is running." {
+		t.Fatalf("out = %q", out)
+	}
+	if _, err := s.Tools().Execute(context.Background(), "tool_health", []byte(`{}`)); err == nil {
+		t.Fatal("tool_health allowed without master context, want error")
+	}
+}
+
+func TestToolHealthSnapshot(t *testing.T) {
+	s, _, _ := newService(t)
+	s.SetHealthFunc(func() string { return "mac_bridge: DOWN — grant FDA" })
+	out, err := s.Tools().Execute(tools.WithMaster(context.Background()), "tool_health", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out != "mac_bridge: DOWN — grant FDA" {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+func TestGetStateCarriesHealthBlock(t *testing.T) {
+	s, _, _ := newService(t)
+	s.SetHealthFunc(func() string { return "mac_bridge: healthy" })
+	out, err := s.Tools().Execute(tools.WithMaster(context.Background()), "get_state", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "Tool health:\nmac_bridge: healthy") {
+		t.Fatalf("get_state missing health block:\n%s", out)
+	}
+}
+
+func TestPromptToolHealthConditional(t *testing.T) {
+	if !strings.Contains(promptTemplate, "Tool Health") {
+		t.Fatal("prompt missing Tool Health line")
+	}
+	s, _, _ := newService(t)
+	s.SetHealthFunc(func() string { return "mac_bridge: healthy; llm_backend: healthy" })
+	p, err := s.renderPrompt("Clark", "ctx", "On", "", "", "task")
+	if err != nil {
+		t.Fatalf("renderPrompt: %v", err)
+	}
+	if !strings.Contains(p, "Tool Health") || !strings.Contains(p, "mac_bridge: healthy") {
+		t.Error("rendered prompt missing health line when wired")
+	}
+	s2, _, _ := newService(t)
+	p2, err := s2.renderPrompt("Clark", "ctx", "On", "", "", "task")
+	if err != nil {
+		t.Fatalf("renderPrompt: %v", err)
+	}
+	if strings.Contains(p2, "Tool Health") {
+		t.Error("rendered prompt carries health line without monitor")
+	}
+}

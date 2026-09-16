@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/heyimteee/clark/internal/gateway"
@@ -29,6 +30,9 @@ type Server struct {
 	selfHandle string
 	out        OutboundStore
 	gw         *gateway.Handler
+	// lastPollUnix records the last /outbound poll (Unix seconds) so the
+	// tool-health monitor can tell a wedged bridge poller from a quiet queue.
+	lastPollUnix atomic.Int64
 }
 
 // NewServer wires the API around its dependencies. token is the bridge's
@@ -127,9 +131,20 @@ func (s *Server) isSelf(in InboundMessage) bool {
 	return s.selfHandle != "" && canonicalSender(in.Handle) == canonicalSender(s.selfHandle)
 }
 
+// LastPoll returns when the macOS bridge last polled /outbound (zero when it
+// never has). The bridge polls every second, so anything older than a couple
+// of minutes means it stopped asking.
+func (s *Server) LastPoll() time.Time {
+	if unix := s.lastPollUnix.Load(); unix > 0 {
+		return time.Unix(unix, 0)
+	}
+	return time.Time{}
+}
+
 // handleOutbound claims the oldest pending outbound message for the bridge to
 // deliver. An empty queue returns 204 with no body.
 func (s *Server) handleOutbound(w http.ResponseWriter, r *http.Request) {
+	s.lastPollUnix.Store(time.Now().Unix())
 	msg, ok, err := s.out.NextIMessageOutbound()
 	if err != nil {
 		logging.Log("IMESSAGE", logging.SevErr, "OUTBOUND", "Failed to claim outbound message", "error", err)

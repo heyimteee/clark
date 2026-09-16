@@ -30,6 +30,9 @@ type Options struct {
 	// NameToHandle resolves a VIP name or number to a canonical identity for
 	// the send_imessage tool.
 	NameToHandle func(input string) (string, bool)
+	// ServerHook receives the bridge-facing server after construction so the
+	// tool-health monitor can read bridge poll freshness.
+	ServerHook func(*Server)
 }
 
 // Run starts the bridge-facing HTTP server and blocks until ctx is done.
@@ -44,9 +47,13 @@ func Run(ctx context.Context, opts Options) error {
 		RegisterSendMessageTool(opts.Tools, msgr, opts.NameToHandle)
 	}
 
+	bridgeServer := NewServer(opts.Token, opts.SelfHandle, opts.Out, handler)
+	if opts.ServerHook != nil {
+		opts.ServerHook(bridgeServer)
+	}
 	httpServer := &http.Server{
 		Addr:              opts.ListenAddr,
-		Handler:           NewServer(opts.Token, opts.SelfHandle, opts.Out, handler).Routes(),
+		Handler:           bridgeServer.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

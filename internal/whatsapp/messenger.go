@@ -30,6 +30,13 @@ func (m *WAMessenger) Self() string {
 	return m.SelfJID().String()
 }
 
+// Connected reports whether the underlying client is currently attached to
+// WhatsApp. Used by the tool-health monitor; send paths keep their own
+// guards so behavior there is unchanged.
+func (m *WAMessenger) Connected() bool {
+	return m.client != nil && m.client.Store != nil && m.client.IsConnected()
+}
+
 // Send delivers a message to a chat and tracks its ID as an echo.
 func (m *WAMessenger) Send(ctx context.Context, chat, text string) error {
 	if m.client == nil || m.client.Store == nil {

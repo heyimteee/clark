@@ -191,7 +191,25 @@ func (s *Service) registerManagementTools() {
 			}
 
 			out += "\nAvailable tools:\n" + describeTools(s.tools.List())
+			if h := s.HealthSnapshot(); h != "" {
+				out += "\nTool health:\n" + h
+			}
 			return out, nil
+		},
+	)
+
+	s.tools.RegisterFunc(
+		"tool_health",
+		"Report the live health of externally-dependent tools (Mac bridge, LLM backend, WhatsApp, iMessage bridge, web search) from active probes — never guess. Triggered by 'are my tools healthy', 'is the calendar working', 'check tool status'. Only the Master may use this.",
+		toolParams(nil),
+		func(ctx context.Context, args map[string]any) (string, error) {
+			if err := masterOnly(ctx); err != nil {
+				return "", err
+			}
+			if h := s.HealthSnapshot(); h != "" {
+				return h, nil
+			}
+			return "No tool-health monitor is running.", nil
 		},
 	)
 
