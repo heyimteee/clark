@@ -50,6 +50,8 @@ func TestToHandle(t *testing.T) {
 type fakeOutbound struct {
 	enqueued []store.OutboundMessage
 	err      error
+	// dead backs the delivery-status tool's failure branch.
+	dead []store.DeadOutbound
 }
 
 func (f *fakeOutbound) EnqueueIMessage(recipient, text string) (int64, error) {
@@ -71,7 +73,7 @@ func (f *fakeOutbound) AckIMessage(int64) error { return nil }
 func (f *fakeOutbound) FailIMessage(int64, string, string, time.Time, bool) error {
 	return nil
 }
-func (f *fakeOutbound) DeadIMessages(int) ([]store.DeadOutbound, error) { return nil, nil }
+func (f *fakeOutbound) DeadIMessages(int) ([]store.DeadOutbound, error) { return f.dead, nil }
 func (f *fakeOutbound) OutboundQueueCounts() (store.OutboundCounts, error) {
 	return store.OutboundCounts{}, nil
 }

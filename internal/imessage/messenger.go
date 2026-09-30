@@ -2,6 +2,7 @@ package imessage
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -31,18 +32,55 @@ func (m *Messenger) Self() string {
 
 // Send queues a delivery to chat.
 func (m *Messenger) Send(_ context.Context, chat, text string) error {
+	_, err := m.SendQueued(context.Background(), chat, text)
+	return err
+}
+
+// SendQueued queues a delivery and returns its queue id, so a caller can later
+// ask whether it actually went out. Send stays for callers that do not need to
+// report on the outcome.
+func (m *Messenger) SendQueued(_ context.Context, chat, text string) (int64, error) {
 	handle := toHandle(chat)
 	if handle == "" {
-		return errEmptyRecipient
+		return 0, errEmptyRecipient
 	}
 	text = gateway.PrefixIMessage(text)
 	text = stripMarkdown(text)
-	if _, err := m.out.EnqueueIMessage(handle, text); err != nil {
+	id, err := m.out.EnqueueIMessage(handle, text)
+	if err != nil {
 		logging.Log("IMESSAGE", logging.SevErr, "SEND", "Failed to queue iMessage", "to", handle, "error", err)
-		return err
+		return 0, err
 	}
-	logging.Log("IMESSAGE", logging.SevInfo, "SEND", "iMessage queued", "to", handle)
-	return nil
+	logging.Log("IMESSAGE", logging.SevInfo, "SEND", "iMessage queued", "to", handle, "id", id)
+	return id, nil
+}
+
+// DeliveryStatus reports what actually happened to a queued message. The bridge
+// deletes a row only after the outgoing row is verified in chat.db, so a
+// missing id means delivered; a `dead` row is a real failure, and a `picked` or
+// `pending` row means the bridge has not finished with it yet.
+//
+// This is the honest answer to "did that get through", which the send tool
+// structurally cannot give (#215).
+func (m *Messenger) DeliveryStatus(_ context.Context, id int64) (string, error) {
+	counts, err := m.out.OutboundQueueCounts()
+	if err != nil {
+		return "", err
+	}
+	dead, err := m.out.DeadIMessages(50)
+	if err != nil {
+		return "", err
+	}
+	for _, d := range dead {
+		if d.ID == id {
+			return fmt.Sprintf("Message %d to %s could NOT be delivered after %d attempts: %s. "+
+				"Tell the Master it failed and why — do not claim it was sent.", id, d.Recipient, d.Attempts, d.LastError), nil
+		}
+	}
+	// Still in the queue, or already gone because it was delivered.
+	return fmt.Sprintf("Message %d is not in the failed list, so the bridge either delivered it or still has it in flight "+
+		"(queue: %d waiting, %d in flight, %d failed). Delivery is confirmed only once the bridge has finished with it.", id,
+		counts.Pending, counts.Picked, counts.Dead), nil
 }
 
 // SendSelf delivers a message to the Master's own iMessage handle. Used by
