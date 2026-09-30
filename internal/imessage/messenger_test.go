@@ -68,8 +68,12 @@ func (f *fakeOutbound) NextIMessageOutbound() (store.OutboundMessage, bool, erro
 	return msg, true, nil
 }
 func (f *fakeOutbound) AckIMessage(int64) error { return nil }
-func (f *fakeOutbound) StaleIMessageOutboundIDs(_ time.Duration) ([]int64, error) {
-	return nil, nil
+func (f *fakeOutbound) FailIMessage(int64, string, string, time.Time, bool) error {
+	return nil
+}
+func (f *fakeOutbound) DeadIMessages(int) ([]store.DeadOutbound, error) { return nil, nil }
+func (f *fakeOutbound) OutboundQueueCounts() (store.OutboundCounts, error) {
+	return store.OutboundCounts{}, nil
 }
 
 func TestMessengerSendPrefixesAndConverts(t *testing.T) {

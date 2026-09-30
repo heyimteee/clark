@@ -54,7 +54,17 @@ Optional bridge env: `IMESSAGE_OWN_HANDLE`, `IMESSAGE_TLS_ROOTCA` (self-signed r
 * Inbound: watches `chat.db` with macOS `kqueue` events (via `fsnotify`) on the database, its `-wal`/`-shm` sidecars, and the parent directory, with a 250 ms debounce and a 5 s poll as a backstop for dropped or coalesced events. It filters self-sent/system/reaction/group messages and tracks a ROWID watermark in `~/Library/Application Support/clark-bridge/state.json`. A message is marked delivered only after the host accepts it. Watches are re-armed when a SQLite checkpoint rotates the sidecars; if the event watcher cannot start, the bridge falls back to polling alone.
 * Backlog is kept, never dropped. A message the bridge could not see arrive — the Mac was asleep, the bridge was down — is delivered with a `replay` flag and is stored as history **without** being answered, so it can inform the next live reply instead of being deleted. The same applies to any message sent before clark's status was last switched ON. A stale `get him to me` in the backlog does **not** trigger the alert cascade.
 * If `chat.db` is unreadable (Full Disk Access revoked) the bridge keeps retrying with backoff and starts the watcher the moment access is restored — no manual restart. Outbound delivery is independent of this, since sending is gated on Automation permission rather than Full Disk Access.
-* Outbound: polls the host queue, sends via AppleScript `send` on the iMessage service, then acks. Failed deliveries are not re-served.
+* Outbound: polls the host queue, sends via AppleScript `send` on the iMessage service, then **verifies the outgoing row actually appeared in `chat.db`** before acking. AppleScript exiting 0 does not mean delivery — on macOS 26 Messages can report success while writing an empty unjoined row instead of sending.
+* Delivery outcomes are classified, because only some are safe to retry:
+
+| Outcome | Cause | Action |
+|---|---|---|
+| `delivered` | outgoing row observed | ack |
+| `not_started` | the send script refused | retry with backoff |
+| `ghost` | empty unjoined row (macOS 26) | retry with backoff |
+| `unknown` | script succeeded, no row appeared | **never retried** — the message may already be on the device, so a retry could duplicate it |
+
+* Failures back off exponentially (30s → 30m) up to 5 attempts, then land in a `dead` state with the reason recorded. `GET /outbound/dead` lists them, so an undeliverable message is visible rather than silently lost. A row stranded in `picked` by a crashed bridge becomes claimable again once its 2-minute lease expires.
 
 ## Voice
 

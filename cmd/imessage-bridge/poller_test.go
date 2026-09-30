@@ -11,6 +11,7 @@ import (
 type fakeOutboundClient struct {
 	queue    []store.OutboundMessage
 	acked    []int64
+	failed   []failedDelivery
 	failPick bool
 	sendErr  error
 }
@@ -30,6 +31,20 @@ func (f *fakeOutboundClient) NextOutbound(_ context.Context) (store.OutboundMess
 func (f *fakeOutboundClient) Ack(_ context.Context, id int64) error {
 	f.acked = append(f.acked, id)
 	return nil
+}
+
+func (f *fakeOutboundClient) Fail(_ context.Context, id int64, reason, classification string, attempts int) error {
+	f.failed = append(f.failed, failedDelivery{id: id, reason: reason, classification: classification, attempts: attempts})
+	return nil
+}
+
+// failedDelivery records one reported failure so tests can assert the
+// classification the server would act on.
+type failedDelivery struct {
+	id             int64
+	reason         string
+	classification string
+	attempts       int
 }
 
 type fakeSender struct {

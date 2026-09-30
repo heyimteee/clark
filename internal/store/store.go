@@ -61,12 +61,8 @@ type AccessStore interface {
 	DeleteAccess(jid string) error
 }
 
-// OutboundMessage is one iMessage awaiting bridge delivery.
-type OutboundMessage struct {
-	ID        int64  `json:"id"`
-	Recipient string `json:"recipient"`
-	Text      string `json:"text"`
-}
+// OutboundMessage is one iMessage awaiting bridge delivery. Defined in
+// imessage.go alongside the queue logic.
 
 // HistoryStore persists per-contact chat history.
 type HistoryStore interface {
@@ -197,6 +193,14 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			picked_at DATETIME
 		);`},
+		// Retry bookkeeping (#210): attempts and last_error make a failure
+		// diagnosable, next_attempt_at carries the backoff, and a terminal
+		// 'dead' status keeps an undeliverable message visible instead of
+		// silently dropping it.
+		{"imessage_outbound_attempts", `ALTER TABLE imessage_outbound ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`},
+		{"imessage_outbound_last_error", `ALTER TABLE imessage_outbound ADD COLUMN last_error TEXT`},
+		{"imessage_outbound_next_attempt", `ALTER TABLE imessage_outbound ADD COLUMN next_attempt_at DATETIME`},
+		{"imessage_outbound_status_idx", `CREATE INDEX IF NOT EXISTS idx_imessage_outbound_status ON imessage_outbound(status, next_attempt_at)`},
 		{"todos", `CREATE TABLE IF NOT EXISTS todos (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			jid TEXT NOT NULL,

@@ -42,6 +42,10 @@ type Watcher struct {
 	fs *fsnotify.Watcher
 	// wake carries debounced scan triggers from watchLoop to the scan loop.
 	wake chan struct{}
+	// vWindow and vInterval override the send-confirmation window, so tests
+	// need not wait the real eight seconds.
+	vWindow   time.Duration
+	vInterval time.Duration
 }
 
 // clock returns the watcher's time source, tolerating a nil injection point.
