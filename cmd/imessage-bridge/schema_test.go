@@ -77,6 +77,8 @@ func openSynthDB(t *testing.T) *sql.DB {
 
 // addMessage inserts a message with its handle and a private chat, returning
 // its ROWID. isGroup routes the join through a group-style chat identifier.
+// Pass extra["chat_identifier"] as a string to pin an exact identifier shape
+// (see TestQueryNewMessagesChatIdentifierFormats for the formats that matter).
 func addMessage(t *testing.T, db *sql.DB, remoteID, text string, isFromMe bool, isGroup bool, extra map[string]any) int64 {
 	t.Helper()
 	var handleID int64
@@ -123,6 +125,9 @@ func addMessage(t *testing.T, db *sql.DB, remoteID, text string, isFromMe bool, 
 	if isGroup {
 		chatIdent = "chat123456789;iMessage"
 	}
+	if v, ok := extra["chat_identifier"].(string); ok {
+		chatIdent = v
+	}
 	var chatID int64
 	if err := db.QueryRow(`SELECT ROWID FROM chat WHERE chat_identifier = ?`, chatIdent).Scan(&chatID); err != nil {
 		res, err := db.Exec(`INSERT INTO chat (chat_identifier, service_name) VALUES (?, 'iMessage')`, chatIdent)
@@ -159,6 +164,45 @@ func TestQueryNewMessagesFilters(t *testing.T) {
 	}
 	if got[0].IsFromMe {
 		t.Error("IsFromMe = true, want false")
+	}
+}
+
+// TestQueryNewMessagesChatIdentifierFormats pins the group-exclusion predicate
+// to the one part of chat_identifier that has been stable across iOS releases.
+// Regression guard for #202: a 1:1 iMessage chat is `iMessage;-;<handle>` on
+// current macOS, and the previous `NOT LIKE '%;%'` filter discarded all of them
+// while the fixture in the other tests only ever used the bare-handle form.
+func TestQueryNewMessagesChatIdentifierFormats(t *testing.T) {
+	cases := []struct {
+		name    string
+		chatID  string
+		wantOut bool
+	}{
+		{"modern 1:1 iMessage", "iMessage;-;+6281267858909", true},
+		{"legacy 1:1 handle", "+6289998887776", true},
+		{"modern group", "chat3210fedcba;+6281;+6282;+6283", false},
+		{"legacy group", "chat123456789;iMessage", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openSynthDB(t)
+			want := addMessage(t, db, "+6281267858909", "ping", false, false,
+				map[string]any{"chat_identifier": tc.chatID})
+
+			got, err := queryNewMessages(db, 0)
+			if err != nil {
+				t.Fatalf("queryNewMessages: %v", err)
+			}
+			if tc.wantOut {
+				if len(got) != 1 || got[0].RowID != want {
+					t.Fatalf("chat_identifier %q: got %+v, want the message selected", tc.chatID, got)
+				}
+				return
+			}
+			if len(got) != 0 {
+				t.Fatalf("chat_identifier %q: got %+v, want excluded as a group", tc.chatID, got)
+			}
+		})
 	}
 }
 

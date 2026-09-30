@@ -14,6 +14,13 @@ import (
 // Reactions and group chatter are excluded. Media-only messages (empty text
 // but with an attachment) are now included so images/gif/video can be
 // processed like WhatsApp.
+//
+// Group chats are excluded by the `chat_identifier` `chat%` prefix, which is the
+// one part of the identifier format that has been stable across iOS releases: a
+// group is `chat<guid>;<participants…>`. A 1:1 chat is either the bare handle
+// (older iOS) or `iMessage;-;<handle>` (current iOS), and BOTH forms contain
+// semicolons in the modern case — so an earlier `NOT LIKE '%;%'` predicate
+// silently discarded every inbound iMessage DM while still admitting SMS (#202).
 const newMessagesQuery = `
 SELECT message.ROWID, message.guid, COALESCE(message.text,''), message.is_from_me,
        handle.id, message.date, message.service,
@@ -30,7 +37,7 @@ WHERE message.ROWID > ?
       SELECT 1 FROM chat_message_join j
       JOIN chat c ON c.ROWID = j.chat_id
       WHERE j.message_id = message.ROWID
-        AND c.chat_identifier NOT LIKE '%;%'
+        AND c.chat_identifier NOT LIKE 'chat%'
   )
 ORDER BY message.ROWID ASC`
 
