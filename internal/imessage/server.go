@@ -14,10 +14,6 @@ import (
 	clarkmedia "github.com/heyimteee/clark/internal/media"
 )
 
-// maxMessageAge is the staleness threshold — messages older than this are
-// silently dropped to prevent spam after bridge restarts or reconnections.
-const maxMessageAge = 5 * time.Minute
-
 // maxBodyBytes caps request bodies for acks; inbound messages with media
 // may be larger (base64 images).
 const maxBodyBytes = 256 << 10
@@ -98,15 +94,10 @@ func (s *Server) handleInbound(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	// Staleness guard: reject messages older than maxMessageAge. This prevents
-	// spam when the bridge restarts and re-delivers messages that arrived while
-	// Clark was off. WhatsApp has this via connectedAt; iMessage needs it here.
-	if !in.Timestamp.IsZero() && time.Since(in.Timestamp) > maxMessageAge {
-		logging.Log("IMESSAGE", logging.SevInfo, "INBOUND", "Dropped stale message",
-			"handle", in.Handle, "age", time.Since(in.Timestamp).Round(time.Second))
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+	// No staleness drop. A message that arrives hours late is still kept as
+	// history so it can inform a later live reply; whether it is *answered* is
+	// the gateway's call, using the bridge's Replay flag and the status
+	// watermark (#206). Dropping it here destroyed the backlog outright.
 	// Normalize media for local vision (video/gif -> frames, etc.) so the
 	// gateway can treat iMessage exactly like WhatsApp.
 	if len(in.Media) > 0 {
@@ -245,6 +236,7 @@ func toGateway(in InboundMessage) gateway.Message {
 		Timestamp: in.Timestamp,
 		IsSelf:    in.IsSelf,
 		IsGroup:   false,
+		Replay:    in.Replay,
 		MediaType: in.MediaType,
 	}
 	for _, m := range in.Media {

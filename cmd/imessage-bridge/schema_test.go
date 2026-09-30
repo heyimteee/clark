@@ -109,10 +109,16 @@ func addMessage(t *testing.T, db *sql.DB, remoteID, text string, isFromMe bool, 
 	if isFromMe {
 		isFromMeInt = 1
 	}
+	// extra["sent_at"] overrides the message date so tests can place a row
+	// before or after the watcher's last-scan marker.
+	sentAt := epoch
+	if v, ok := extra["sent_at"].(time.Time); ok {
+		sentAt = v
+	}
 
 	res, err := db.Exec(`INSERT INTO message (guid, text, handle_id, date, is_from_me, is_system_message, associated_message_type, error, service)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'iMessage')`,
-		fmt.Sprintf("guid-%d", time.Now().UnixNano()), text, handleNull, epoch.UnixNano(),
+		fmt.Sprintf("guid-%d", time.Now().UnixNano()), text, handleNull, sentAt.Sub(epoch).Nanoseconds(),
 		isFromMeInt, isSystem, assocType)
 	if err != nil {
 		t.Fatalf("insert message: %v", err)

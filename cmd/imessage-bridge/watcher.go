@@ -25,6 +25,23 @@ type Watcher struct {
 	client    inboundClient
 	interval  time.Duration
 	lastRowID int64
+	// lastScanAt is when the previous scan cycle completed. A row that surfaces
+	// now but predates it is by definition one this watcher was blind to, so it
+	// is flagged as a replay (#206). Initialised at Run entry, which makes every
+	// message delivered on the first scan after a restart a replay — correct,
+	// since the bridge was not watching while the Mac was down.
+	lastScanAt time.Time
+	// now is injectable for tests; clock() falls back to time.Now so a
+	// directly-constructed Watcher cannot nil-panic on the time source.
+	now func() time.Time
+}
+
+// clock returns the watcher's time source, tolerating a nil injection point.
+func (w *Watcher) clock() time.Time {
+	if w.now != nil {
+		return w.now()
+	}
+	return time.Now()
 }
 
 // NewWatcher wires the poller around a read-only chat.db handle.
@@ -35,6 +52,7 @@ func NewWatcher(db *sql.DB, statePath string, ownHandle string, client inboundCl
 		ownHandle: ownHandle,
 		client:    client,
 		interval:  interval,
+		now:       time.Now,
 	}
 }
 
@@ -44,6 +62,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	if err := w.bootstrap(ctx); err != nil {
 		return err
 	}
+	w.lastScanAt = w.clock()
 
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -105,8 +124,12 @@ func (w *Watcher) scanOnce(ctx context.Context) {
 		if err := w.persist(ctx); err != nil {
 			logging.Log("BRIDGE", logging.SevErr, "SCAN", "Failed to persist watermark", "error", err)
 		}
-		logging.Log("BRIDGE", logging.SevInfo, "SCAN", "Forwarded inbound message", "row", m.RowID, "from", m.Handle)
+		logging.Log("BRIDGE", logging.SevInfo, "SCAN", "Forwarded inbound message", "row", m.RowID, "from", m.Handle, "replay", inbound.Replay)
 	}
+	// Advance the blind-spot marker only after a clean pass. A cycle that bailed
+	// out early has not proven it saw everything, so the earlier timestamp is the
+	// conservative thing to compare against next time.
+	w.lastScanAt = w.clock()
 }
 
 func (w *Watcher) persist(ctx context.Context) error {
@@ -130,7 +153,23 @@ func (w *Watcher) toInbound(m newMessage, media []imessage.InboundMedia) imessag
 		Text:      m.Text,
 		IsSelf:    m.Handle != "" && m.Handle == w.ownHandle,
 		Timestamp: messageTime(m.Date),
+		Replay:    w.isReplay(m),
 		MediaType: mediaType,
 		Media:     media,
 	}
+}
+
+// isReplay reports whether this row is backlog the watcher was blind to. A row
+// surfacing now whose send time predates the last completed scan could not have
+// been seen live — the Mac was asleep, the bridge was down, or the scan failed
+// and the row was picked up later (#206).
+//
+// lastScanAt is set at Run entry, so everything delivered on the first scan
+// after a start is a replay. A message that arrives *after* that scan is live
+// and is answered normally, which is what keeps ordinary conversation unaffected.
+func (w *Watcher) isReplay(m newMessage) bool {
+	if w.lastScanAt.IsZero() {
+		return false
+	}
+	return messageTime(m.Date).Before(w.lastScanAt)
 }

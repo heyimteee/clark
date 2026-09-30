@@ -38,17 +38,16 @@ func TestFilterMessageNil(t *testing.T) {
 	}
 }
 
-func TestFilterMessageOldTimestamp(t *testing.T) {
+// TestFilterMessageOldTimestampKeepsBacklog pins the #206 behaviour change: a
+// message older than the connection is a resync, not a discard. It must reach the
+// pipeline so the gateway can keep it as history without answering it.
+func TestFilterMessageOldTimestampKeepsBacklog(t *testing.T) {
 	now := time.Now()
 	connectedAt := now.Add(-time.Minute)
 	v := msgFixture(now.Add(-time.Hour), false)
 
-	skip, reason := filterMessage(v, connectedAt)
-	if !skip {
-		t.Fatal("old message not skipped")
-	}
-	if reason != "" {
-		t.Fatalf("old message skipped with reason %q, want silent", reason)
+	if skip, reason := filterMessage(v, connectedAt); skip {
+		t.Fatalf("old message skipped (reason %q); it must be kept as backlog", reason)
 	}
 }
 
@@ -62,11 +61,14 @@ func TestFilterMessageFresh(t *testing.T) {
 	}
 }
 
-func TestFilterMessageZeroTimestamp(t *testing.T) {
+// TestFilterMessageZeroTimestampKeepsBacklog mirrors the above: a message with no
+// usable timestamp cannot be placed relative to the connection, so the adapter
+// marks it Replay rather than dropping it.
+func TestFilterMessageZeroTimestampKeepsBacklog(t *testing.T) {
 	v := msgFixture(time.Time{}, false)
 
-	if skip, _ := filterMessage(v, time.Now()); !skip {
-		t.Fatal("zero-timestamp message not skipped")
+	if skip, _ := filterMessage(v, time.Now()); skip {
+		t.Fatal("zero-timestamp message skipped; it must be kept as backlog")
 	}
 }
 
@@ -81,6 +83,10 @@ func (b *fakeButler) Reply(_ context.Context, _, _ string, _ bool) (string, erro
 func (b *fakeButler) Relation(_ string) (string, bool) { return "Test (Friend)", true }
 func (b *fakeButler) Enabled() bool                    { return true }
 func (b *fakeButler) EnabledFor(_ string) bool         { return true }
+func (b *fakeButler) StatusSince() time.Time           { return time.Time{} }
+func (b *fakeButler) Record(context.Context, string, string) error {
+	return nil
+}
 
 // newTestAdapter builds a Handler whose WAMessenger is backed by an in-memory
 // device store, so toGateway can be exercised without a real connection.

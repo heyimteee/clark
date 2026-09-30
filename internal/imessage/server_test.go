@@ -42,6 +42,10 @@ func (b *recButler) Reply(_ context.Context, _, _ string, _ bool) (string, error
 func (b *recButler) Relation(_ string) (string, bool) { return "Test (Friend)", true }
 func (b *recButler) Enabled() bool                    { return true }
 func (b *recButler) EnabledFor(_ string) bool         { return true }
+func (b *recButler) StatusSince() time.Time           { return time.Time{} }
+func (b *recButler) Record(context.Context, string, string) error {
+	return nil
+}
 
 func waitHandled(t *testing.T, m *recMessenger) {
 	t.Helper()

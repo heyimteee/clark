@@ -9,11 +9,16 @@ import "time"
 // already filtered outbound self-messages and non-text rows, so this is the
 // raw handle as it appears in chat.db.
 type InboundMessage struct {
-	ID        string         `json:"id"`
-	Handle    string         `json:"handle"`
-	Text      string         `json:"text"`
-	IsSelf    bool           `json:"is_self"`
-	Timestamp time.Time      `json:"timestamp"`
+	ID        string    `json:"id"`
+	Handle    string    `json:"handle"`
+	Text      string    `json:"text"`
+	IsSelf    bool      `json:"is_self"`
+	Timestamp time.Time `json:"timestamp"`
+	// Replay reports the bridge was not watching when this was sent — the Mac
+	// was asleep, or the row surfaced in a catch-up flush. Such a message is
+	// kept as history and never answered (#206). The bridge owns this judgement
+	// because only it knows whether its watcher was live.
+	Replay    bool           `json:"replay,omitempty"`
 	MediaType string         `json:"media_type,omitempty"`
 	Media     []InboundMedia `json:"media,omitempty"`
 }
