@@ -22,8 +22,12 @@ func (stubOutboundStore) NextIMessageOutbound() (store.OutboundMessage, bool, er
 	return store.OutboundMessage{}, false, nil
 }
 func (stubOutboundStore) AckIMessage(_ int64) error { return nil }
-func (stubOutboundStore) StaleIMessageOutboundIDs(_ time.Duration) ([]int64, error) {
-	return nil, nil
+func (stubOutboundStore) FailIMessage(_ int64, _, _ string, _ time.Time, _ bool) error {
+	return nil
+}
+func (stubOutboundStore) DeadIMessages(int) ([]store.DeadOutbound, error) { return nil, nil }
+func (stubOutboundStore) OutboundQueueCounts() (store.OutboundCounts, error) {
+	return store.OutboundCounts{}, nil
 }
 
 func TestMacBridgeCheckerDenied(t *testing.T) {

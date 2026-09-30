@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/heyimteee/clark/internal/gateway"
 	"github.com/heyimteee/clark/internal/logging"
 	clarkmedia "github.com/heyimteee/clark/internal/media"
+	"github.com/heyimteee/clark/internal/store"
 )
 
 // maxBodyBytes caps request bodies for acks; inbound messages with media
@@ -46,8 +48,96 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /inbound", s.handleInbound)
 	mux.HandleFunc("GET /outbound", s.handleOutbound)
 	mux.HandleFunc("POST /ack", s.handleAck)
+	mux.HandleFunc("POST /fail", s.handleFail)
 	mux.HandleFunc("GET /identity", s.handleIdentity)
+	mux.HandleFunc("GET /outbound/dead", s.handleDeadOutbound)
 	return s.requireToken(mux)
+}
+
+// handleDeadOutbound lists iMessages that could not be delivered, so an
+// undeliverable message is visible rather than silently lost (#210).
+func (s *Server) handleDeadOutbound(w http.ResponseWriter, r *http.Request) {
+	dead, err := s.out.DeadIMessages(50)
+	if err != nil {
+		logging.Log("IMESSAGE", logging.SevErr, "OUTBOUND", "Failed to load dead-lettered messages", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if dead == nil {
+		dead = []store.DeadOutbound{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"dead": dead, "count": len(dead)})
+}
+
+// failRequest is the bridge's POST /fail body: one delivery attempt that did not
+// succeed, with the classification that decides whether another attempt is safe.
+type failRequest struct {
+	ID             int64  `json:"id"`
+	Reason         string `json:"reason"`
+	Classification string `json:"classification"`
+	Attempts       int    `json:"attempts"`
+	// RetryAfterSeconds is the bridge's suggested backoff; the server clamps it.
+	RetryAfterSeconds int `json:"retry_after_seconds"`
+}
+
+// maxRetryAfterSeconds caps a bridge-supplied backoff so a buggy or hostile
+// client cannot park a message for days.
+const maxRetryAfterSeconds = 3600
+
+// handleFail records a failed delivery attempt and decides retry vs dead-letter.
+// Retrying a send whose outcome is genuinely unknown risks a duplicate message on
+// the recipient's device, so that classification is never retried (#210).
+func (s *Server) handleFail(w http.ResponseWriter, r *http.Request) {
+	var req failRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	if req.ID < 1 {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+
+	classification := req.Classification
+	switch classification {
+	case store.FailureNotStarted, store.FailureUnknown, store.FailureGhost:
+	case "":
+		classification = store.FailureNotStarted
+	default:
+		http.Error(w, "unknown classification "+classification, http.StatusBadRequest)
+		return
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "delivery failed"
+	}
+
+	retryAfter := time.Duration(req.RetryAfterSeconds) * time.Second
+	if retryAfter <= 0 {
+		retryAfter = store.RetryDelay(req.Attempts)
+	}
+	if retryAfter > maxRetryAfterSeconds*time.Second {
+		retryAfter = maxRetryAfterSeconds * time.Second
+	}
+	exhausted := req.Attempts >= store.MaxOutboundAttempts
+
+	if err := s.out.FailIMessage(req.ID, reason, classification, time.Now().Add(retryAfter), exhausted); err != nil {
+		logging.Log("IMESSAGE", logging.SevErr, "FAIL", "Failed to record delivery failure", "id", req.ID, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	willRetry := !exhausted && classification != store.FailureUnknown
+	next := "dead-lettered; message will not be retried"
+	if willRetry {
+		next = "retry after backoff"
+	}
+	logging.Log("IMESSAGE", logging.SevWarn, "FAIL", "Outbound delivery failed",
+		"id", req.ID, "classification", classification, "attempts", req.Attempts,
+		"exhausted", exhausted, "retry_after", retryAfter, "reason", reason, "next", next)
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleIdentity returns the configured master self-handle so the bridge can

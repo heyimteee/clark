@@ -148,12 +148,14 @@ func main() {
 		logging.Fatalf("CLIENT", "Cannot build bridge client: %v", err)
 	}
 
-	// The outbound poller deliberately does not depend on chat.db. Sending goes
-	// through Messages.app's AppleScript surface, which macOS gates on
-	// Automation rather than Full Disk Access, so a revoked FDA grant must not
-	// take outbound delivery down with it (#204).
+	// The outbound poller deliberately does not depend on chat.db being readable:
+	// sending goes through Messages.app's AppleScript surface, which macOS gates
+	// on Automation rather than Full Disk Access. *Verification* does need the
+	// database, so the poller attaches a verifier once it opens; until then it
+	// reports deliveries as unknown rather than acking them blind (#204, #210).
+	poller := NewPoller(client, NewSender(), cfg.pollInterval)
 	go func() {
-		if err := NewPoller(client, NewSender(), cfg.pollInterval).Run(ctx); err != nil {
+		if err := poller.Run(ctx); err != nil {
 			errCh <- err
 		}
 	}()
@@ -162,7 +164,7 @@ func main() {
 	// the database becomes readable, so restoring Full Disk Access needs no
 	// manual restart (#204).
 	go func() {
-		if err := runInboundWatcher(ctx, cfg, client, &watcherRunning); err != nil {
+		if err := runInboundWatcher(ctx, cfg, client, poller, &watcherRunning); err != nil {
 			errCh <- err
 		}
 	}()
@@ -182,7 +184,7 @@ func main() {
 // runInboundWatcher waits for chat.db to become readable, then runs the inbound
 // watcher until ctx ends. It returns nil on cancellation, so a shutdown during a
 // Full Disk Access denial is a clean exit rather than an error.
-func runInboundWatcher(ctx context.Context, cfg bridgeConfig, client *Client, watcherRunning *atomic.Bool) error {
+func runInboundWatcher(ctx context.Context, cfg bridgeConfig, client *Client, poller *Poller, watcherRunning *atomic.Bool) error {
 	stateDir := stateDirForMarkers()
 
 	db, err := openChatDBWithRetry(ctx, cfg.dbPath, dbOpenInitialBackoff, dbOpenMaxBackoff,
@@ -210,6 +212,10 @@ func runInboundWatcher(ctx context.Context, cfg bridgeConfig, client *Client, wa
 	}
 
 	watcher := NewWatcher(db, cfg.statePath, ownHandle, client, cfg.pollInterval, cfg.dbPath)
-	logging.Log("BRIDGE", logging.SevNotice, "WATCHER", "chat.db readable; inbound watcher running", "row", watcher.lastRowID)
+	// With chat.db readable the poller can now confirm sends instead of trusting
+	// the AppleScript exit code, which is what makes an ack trustworthy (#210).
+	poller.WithVerifier(watcher)
+	logging.Log("BRIDGE", logging.SevNotice, "WATCHER", "chat.db readable; inbound watcher running and outbound verification enabled",
+		"row", watcher.lastRowID)
 	return watcher.Run(ctx)
 }

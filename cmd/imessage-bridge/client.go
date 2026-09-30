@@ -161,6 +161,48 @@ func (c *Client) Ack(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Fail reports a delivery attempt that did not succeed. classification decides
+// whether the server may retry: "not_started" and "ghost" are safe, "unknown" is
+// not, because the message may already be on the recipient's device (#210).
+func (c *Client) Fail(ctx context.Context, id int64, reason, classification string, attempts int) error {
+	body, err := json.Marshal(failPayload{
+		ID:               id,
+		Reason:           reason,
+		Classification:   classification,
+		Attempts:         attempts,
+		RetryAfterSecond: int(store.RetryDelay(attempts).Seconds()),
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/fail", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.authorize(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failure report rejected with status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// failPayload is the POST /fail body.
+type failPayload struct {
+	ID               int64  `json:"id"`
+	Reason           string `json:"reason"`
+	Classification   string `json:"classification"`
+	Attempts         int    `json:"attempts"`
+	RetryAfterSecond int    `json:"retry_after_seconds"`
+}
+
 func (c *Client) authorize(req *http.Request) {
 	if c.token != "" {
 		req.Header.Set(bridgeTokenHeader, c.token)
