@@ -608,6 +608,48 @@ func (s *Service) EnabledFor(jid string) bool {
 // statusSinceKey stores the moment the global status was last switched ON.
 const statusSinceKey = "status_since"
 
+// iMessageTransport is the transport whose history is namespaced.
+const iMessageTransport = "imessage"
+
+// historyKey is the storage key for one person's conversation on one transport.
+//
+// iMessage handles are canonicalised into WhatsApp-shaped JIDs so that a person
+// reachable on both apps is a single VIP with one on/off toggle and one grant set.
+// That deliberately shares *identity* — but it also merged their history, so a
+// remembered message carried no hint of which app it came from (#214).
+//
+// Prefixing the iMessage key separates the transcripts while leaving the shared
+// VIP entry untouched. WhatsApp and web keys are unchanged, so existing history
+// stays readable exactly where it is.
+func historyKey(ctx context.Context, jid string) string {
+	if tools.Transport(ctx) == iMessageTransport {
+		return iMessageTransport + ":" + jid
+	}
+	return jid
+}
+
+// historyTransportPrefix maps a requested transport to the key prefix its history
+// is stored under, or "" for the unprefixed default.
+func historyTransportPrefix(transport string) string {
+	switch strings.ToLower(strings.TrimSpace(transport)) {
+	case iMessageTransport:
+		return iMessageTransport + ":"
+	case "", "all":
+		return ""
+	default:
+		return ""
+	}
+}
+
+// historyKeyFor is historyKey for a caller that already holds a transport name
+// rather than a context.
+func historyKeyFor(transport, jid string) string {
+	if historyTransportPrefix(transport) != "" {
+		return iMessageTransport + ":" + jid
+	}
+	return jid
+}
+
 // StatusSince reports when the global status was last switched ON. Messages
 // timestamped before it are kept as history but not answered, because clark was
 // not yet watching when they were sent (#206). A zero time means no transition
@@ -627,9 +669,10 @@ func (s *Service) StatusSince() time.Time {
 
 // Record stores one inbound turn in history without answering it, so backlog can
 // still inform a later live reply (#206). Only the user's side is written: there
-// is no assistant turn because nothing was answered.
-func (s *Service) Record(_ context.Context, sender, text string) error {
-	return s.history.SaveMessage(sender, "user", text)
+// is no assistant turn because nothing was answered. The transport is read from
+// the context so the turn lands in the right per-channel transcript (#214).
+func (s *Service) Record(ctx context.Context, sender, text string) error {
+	return s.history.SaveMessage(historyKey(ctx, sender), "user", text)
 }
 
 // Tools returns the shared tool registry so transports can register capabilities.
@@ -984,12 +1027,15 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 
 	// Let tools know which conversation triggered them.
 	ctx = tools.WithSender(ctx, senderJID)
+	// History is per channel, so a person on both apps keeps two transcripts
+	// under one shared VIP identity (#214).
+	key := historyKey(ctx, senderJID)
 
-	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
+	if err := s.history.SaveMessage(key, "user", userMsg); err != nil {
 		return "", "", fmt.Errorf("save inbound message from %s: %w", senderJID, err)
 	}
 
-	history, err := s.history.RecentMessages(senderJID, s.historyLimit)
+	history, err := s.history.RecentMessages(key, s.historyLimit)
 	if err != nil {
 		return "", "", fmt.Errorf("load recent history for %s (limit %d): %w", senderJID, s.historyLimit, err)
 	}
@@ -1011,7 +1057,7 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 				s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: it.isSelf, messages: pending})
 				reply = iterationLimitMessage
 			}
-			saved, err := s.saveReply(senderJID, reply)
+			saved, err := s.saveReply(ctx, senderJID, reply)
 			return saved, thinking, err
 		}
 		s.clearPending(senderJID)
@@ -1025,7 +1071,7 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 		if reply, handled, err := s.fastPath(senderJID, userMsg, isSelf); err != nil {
 			return "", "", err
 		} else if handled {
-			saved, err := s.saveReply(senderJID, reply)
+			saved, err := s.saveReply(ctx, senderJID, reply)
 			return saved, "", err
 		}
 	}
@@ -1110,7 +1156,7 @@ func (s *Service) reply(ctx context.Context, senderJID, userMsg string, isSelf, 
 		reply = iterationLimitMessage
 	}
 
-	saved, err := s.saveReply(senderJID, reply)
+	saved, err := s.saveReply(ctx, senderJID, reply)
 	return saved, thinking, err
 }
 
@@ -1128,10 +1174,11 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 		return "", "", fmt.Errorf("empty message content")
 	}
 	ctx = tools.WithSender(ctx, senderJID)
-	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
+	key := historyKey(ctx, senderJID)
+	if err := s.history.SaveMessage(key, "user", userMsg); err != nil {
 		return "", "", fmt.Errorf("save inbound message from %s: %w", senderJID, err)
 	}
-	history, err := s.history.RecentMessages(senderJID, s.historyLimit)
+	history, err := s.history.RecentMessages(key, s.historyLimit)
 	if err != nil {
 		return "", "", fmt.Errorf("load recent history for %s (limit %d): %w", senderJID, s.historyLimit, err)
 	}
@@ -1151,7 +1198,7 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 				s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: it.isSelf, messages: pending})
 				reply = iterationLimitMessage
 			}
-			saved, err := s.saveReply(senderJID, reply)
+			saved, err := s.saveReply(ctx, senderJID, reply)
 			return saved, thinking, err
 		}
 		s.clearPending(senderJID)
@@ -1222,7 +1269,7 @@ func (s *Service) replyStream(ctx context.Context, senderJID, userMsg string, is
 		s.setPending(senderJID, &pendingIter{senderJID: senderJID, isSelf: isSelf, messages: pending})
 		reply = iterationLimitMessage
 	}
-	saved, err := s.saveReply(senderJID, reply)
+	saved, err := s.saveReply(ctx, senderJID, reply)
 	return saved, thinking, err
 }
 
@@ -1316,8 +1363,8 @@ func (s *Service) runToolLoopStream(ctx context.Context, messages []ollama.Messa
 // saveReply persists an assistant reply and returns it. A persist failure is
 // wrapped with the sender so the gateway log names whose reply was lost
 // instead of surfacing a bare store error.
-func (s *Service) saveReply(senderJID, reply string) (string, error) {
-	if err := s.history.SaveMessage(senderJID, "assistant", reply); err != nil {
+func (s *Service) saveReply(ctx context.Context, senderJID, reply string) (string, error) {
+	if err := s.history.SaveMessage(historyKey(ctx, senderJID), "assistant", reply); err != nil {
 		return "", fmt.Errorf("save assistant reply for %s: %w", senderJID, err)
 	}
 	return reply, nil

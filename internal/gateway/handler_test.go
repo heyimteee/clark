@@ -56,7 +56,7 @@ type fakeButler struct {
 	recordErr   error
 }
 
-func (b *fakeButler) Prehandle(_, text string, _ bool) (string, bool, error) {
+func (b *fakeButler) Prehandle(_ context.Context, _, text string, _ bool) (string, bool, error) {
 	if b.prehandled != "" {
 		return b.prehandled, true, nil
 	}

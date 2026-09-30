@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -59,15 +60,16 @@ func (s *Service) fastPath(senderJID, userMsg string, isSelf bool) (string, bool
 
 // Prehandle implements whatsapp.Butler: it consumes fast deterministic
 // commands and persists them to history like a normal Reply would.
-func (s *Service) Prehandle(senderJID, userMsg string, isSelf bool) (string, bool, error) {
+func (s *Service) Prehandle(ctx context.Context, senderJID, userMsg string, isSelf bool) (string, bool, error) {
 	reply, ok, err := s.fastPath(senderJID, userMsg, isSelf)
 	if err != nil || !ok {
 		return reply, ok, err
 	}
-	if err := s.history.SaveMessage(senderJID, "user", userMsg); err != nil {
+	key := historyKey(ctx, senderJID)
+	if err := s.history.SaveMessage(key, "user", userMsg); err != nil {
 		return "", false, fmt.Errorf("save inbound message from %s: %w", senderJID, err)
 	}
-	if _, err := s.saveReply(senderJID, reply); err != nil {
+	if _, err := s.saveReply(ctx, senderJID, reply); err != nil {
 		return "", false, err
 	}
 	return reply, true, nil

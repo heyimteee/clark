@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -128,6 +129,7 @@ type ctxKey int
 const (
 	masterKey ctxKey = iota
 	senderKey
+	transportKey
 )
 
 // WithMaster marks a context as belonging to the Master (full privileges).
@@ -150,5 +152,24 @@ func WithSender(ctx context.Context, jid string) context.Context {
 // Sender returns the current conversation's JID, or "" when unset.
 func Sender(ctx context.Context) string {
 	v, _ := ctx.Value(senderKey).(string)
+	return v
+}
+
+// WithTransport tags a context with the transport a message arrived on
+// ("whatsapp", "imessage", "web").
+//
+// iMessage handles are canonicalised into WhatsApp-shaped JIDs so one person
+// reachable on both apps is a single VIP. That also merges their history, which
+// makes it impossible for Clark to tell which app a remembered message came
+// from. The transport lets history be namespaced per channel while the VIP
+// identity stays shared (#214).
+func WithTransport(ctx context.Context, transport string) context.Context {
+	return context.WithValue(ctx, transportKey, strings.ToLower(strings.TrimSpace(transport)))
+}
+
+// Transport returns the transport the current message arrived on, or "" when
+// unset.
+func Transport(ctx context.Context) string {
+	v, _ := ctx.Value(transportKey).(string)
 	return v
 }

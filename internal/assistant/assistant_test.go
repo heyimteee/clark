@@ -1622,7 +1622,7 @@ func TestServicePrehandleMutationPersists(t *testing.T) {
 	s, _, fake := newService(t)
 	jid := "628111@s.whatsapp.net"
 
-	got, handled, err := s.Prehandle(jid, "set status to off", true)
+	got, handled, err := s.Prehandle(context.Background(), jid, "set status to off", true)
 	if err != nil {
 		t.Fatalf("Prehandle: %v", err)
 	}
