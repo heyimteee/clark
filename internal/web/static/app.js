@@ -337,6 +337,7 @@
                 '<input id="calendar-title" class="input" placeholder="Event title" aria-label="Event title">' +
                 '<input id="calendar-start" class="input" type="datetime-local" aria-label="Start">' +
                 '<input id="calendar-end" class="input" type="datetime-local" aria-label="End">' +
+                '<select id="calendar-target" class="input hidden" aria-label="Calendar"></select>' +
                 '<button class="btn primary" type="submit">add</button>' +
               "</form>" +
               '<div class="calendar-list" id="calendar-list"><div class="todo-empty">No upcoming events</div></div>' +
@@ -1792,6 +1793,25 @@
 
   /* ---------------- calendar tile (direct REST) ---------------- */
 
+  // loadCalendarTargets populates the picker when the account has more than one
+  // collection. A single calendar needs no choice, so the control stays hidden.
+  async function loadCalendarTargets() {
+    const sel = $("#calendar-target");
+    if (!sel) return;
+    let d;
+    try { d = await api("/web/api/calendars"); } catch (e) { return; }
+    const cals = (d && d.calendars) || [];
+    if (!d || !d.selectable || cals.length < 2) { sel.classList.add("hidden"); return; }
+    sel.innerHTML = "";
+    for (const c of cals) {
+      const opt = document.createElement("option");
+      opt.value = c.href;
+      opt.textContent = c.name || c.href;
+      sel.appendChild(opt);
+    }
+    sel.classList.remove("hidden");
+  }
+
   async function refreshCalendar() {
     const list = $("#calendar-list");
     try {
@@ -1912,15 +1932,18 @@
     const start = new Date(startV);
     const end = new Date(endV);
     if (!(end > start)) { toastErr("end must be after start"); return; }
+    const target = $("#calendar-target");
+    const body = { title: title, start: start.toISOString(), end: end.toISOString() };
+    if (target && !target.classList.contains("hidden") && target.value) {
+      body.calendar = target.value;
+    }
     try {
-      await api("/web/api/calendar/events", {
-        method: "POST",
-        body: JSON.stringify({ title: title, start: start.toISOString(), end: end.toISOString() }),
-      });
+      await api("/web/api/calendar/events", { method: "POST", body: JSON.stringify(body) });
       $("#calendar-title").value = "";
       $("#calendar-start").value = "";
       $("#calendar-end").value = "";
       toastOk("event added");
+      loadCalendarTargets();
       refreshCalendar();
     } catch (err) {
       toastErr(err.message);

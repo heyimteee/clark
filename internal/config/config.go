@@ -69,8 +69,18 @@ type Config struct {
 	AffirmationDir    string // AFFIRMATIONS_DIR pre-rendered wake-word clips (default /opt/affirmations)
 	MacActionURL      string // MAC_ACTION_URL  macOS bridge action endpoint (e.g. http://100.94.240.11:8791)
 	MacActionToken    string // MAC_ACTION_TOKEN shared secret for the macOS bridge action endpoint
-	StartStatus       bool   // CLARK_START_STATUS force status on startup (default false = OFF)
-	SchedulerEnabled  bool   // SCHEDULER_ENABLED run the recurring-task scheduler (default on; "0"/"false"/"off" disables)
+	// Calendar, over CalDAV, from the server. No Mac required (#212).
+	CalDAVURL        string // CALDAV_URL  server root (default https://caldav.icloud.com)
+	CalDAVUser       string // CALDAV_USER Apple ID
+	CalDAVPassword   string // CALDAV_APP_PASSWORD app-specific password
+	CalDAVCalendar   string // CALDAV_CALENDAR_HREF pins the write target; blank = first discovered
+	StartStatus      bool   // CLARK_START_STATUS force status on startup (default false = OFF)
+	SchedulerEnabled bool   // SCHEDULER_ENABLED run the recurring-task scheduler (default on; "0"/"false"/"off" disables)
+}
+
+// CalendarEnabled reports whether CalDAV is configured.
+func (c *Config) CalendarEnabled() bool {
+	return strings.TrimSpace(c.CalDAVURL) != "" && strings.TrimSpace(c.CalDAVUser) != ""
 }
 
 // Person is a named person with an optional relation to the Master.
@@ -269,6 +279,10 @@ func Load() (*Config, error) {
 		AffirmationDir:    affirmationDir,
 		MacActionURL:      os.Getenv("MAC_ACTION_URL"),
 		MacActionToken:    os.Getenv("MAC_ACTION_TOKEN"),
+		CalDAVURL:         envDefault(os.Getenv("CALDAV_URL"), "https://caldav.icloud.com"),
+		CalDAVUser:        os.Getenv("CALDAV_USER"),
+		CalDAVPassword:    os.Getenv("CALDAV_APP_PASSWORD"),
+		CalDAVCalendar:    os.Getenv("CALDAV_CALENDAR_HREF"),
 		StartStatus:       envOn(os.Getenv("CLARK_START_STATUS")),
 	}
 	cfg.SchedulerEnabled = !envOff(os.Getenv("SCHEDULER_ENABLED"))
@@ -276,6 +290,14 @@ func Load() (*Config, error) {
 } // envOn interprets a boolean-style environment variable ("1", "true", "on").
 func envOn(v string) bool {
 	return v == "1" || v == "true" || v == "on"
+}
+
+// envDefault returns fallback when the environment value is blank.
+func envDefault(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
 }
 
 // envOff interprets a boolean-style environment variable as an explicit

@@ -121,7 +121,9 @@ func main() {
 	var watcherRunning atomic.Bool
 	actionSrv := NewActionServer(cfg.token)
 	actionSrv.SetStatusFunc(func() StatusReport {
-		rep := StatusReport{Calendar: calendarAuthStatus()}
+		// Calendar is a fixed "server": the calendar runs on the host over CalDAV,
+		// so the Mac holds no calendar permission to report on (#212).
+		rep := StatusReport{Calendar: "server"}
 		if watcherRunning.Load() {
 			rep.Watcher = "running"
 			rep.ChatDB = "ok"

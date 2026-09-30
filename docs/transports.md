@@ -66,6 +66,39 @@ Optional bridge env: `IMESSAGE_OWN_HANDLE`, `IMESSAGE_TLS_ROOTCA` (self-signed r
 
 * Failures back off exponentially (30s → 30m) up to 5 attempts, then land in a `dead` state with the reason recorded. `GET /outbound/dead` lists them, so an undeliverable message is visible rather than silently lost. A row stranded in `picked` by a crashed bridge becomes claimable again once its 2-minute lease expires.
 
+## Calendar
+
+Clark talks to the calendar **directly over CalDAV from the server**, so it keeps
+working when the Mac is asleep, the bridge is down, or the laptop is on battery.
+
+Free: an Apple ID plus an app-specific password. No Apple developer account, no
+per-request cost.
+
+```sh
+CALDAV_URL=https://caldav.icloud.com
+CALDAV_USER=you@icloud.com
+CALDAV_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx   # appleid.apple.com → App-specific passwords
+CALDAV_CALENDAR_HREF=                     # optional; blank = first discovered
+```
+
+The Mac holds **no** calendar permission and proxies nothing.
+
+Notes:
+
+- Calendars are discovered with `PROPFIND` and cached; iCloud has no primary-calendar
+  alias, and the collection URL is region-redirected.
+- Recurring events are expanded into individual occurrences with exact times, so
+  a weekly standup still answers "what's tomorrow?". `EXDATE` and `RDATE` are honoured.
+- Each expanded occurrence carries an `occurrenceId` of `<uid>:<timestamp>`.
+  Deleting that id cancels **one** date via `EXDATE`; deleting the bare uid removes
+  the whole series.
+- Reads are chunked under iCloud's one-year-per-request cap.
+- `GET /web/api/calendars` lists the collections so the console can offer a picker
+  when an account has more than one. A supplied href is validated against the
+  discovered set before it is used as a write target.
+- A rejected password is reported as an **urgent** tool-health failure, since it is
+  rare and actionable.
+
 ## Voice
 
 The console supports hands-free talk. STT and TTS are swappable interfaces; missing engines degrade to “unavailable” rather than crashing.

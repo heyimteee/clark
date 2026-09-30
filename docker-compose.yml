@@ -52,6 +52,12 @@ services:
       - ALERT_MODE=${ALERT_MODE:-voice}
       - MAC_ACTION_URL=${MAC_ACTION_URL:-}
       - MAC_ACTION_TOKEN=${MAC_ACTION_TOKEN:-}
+      # Calendar, server-side over CalDAV. No Mac required; the app-specific
+      # password is revocable at appleid.apple.com without touching the Apple ID.
+      - CALDAV_URL=${CALDAV_URL:-https://caldav.icloud.com}
+      - CALDAV_USER=${CALDAV_USER:-}
+      - CALDAV_APP_PASSWORD=${CALDAV_APP_PASSWORD:-}
+      - CALDAV_CALENDAR_HREF=${CALDAV_CALENDAR_HREF:-}
       # Speech seam. STT runs faster-whisper (baked into the image); STT_ENGINE=ollama
       # uses the Ollama whisper model instead. TTS runs Kokoro on the Master's
       # Mac (TTS_REMOTE_URL, near-instant on Apple Silicon) with the server-side

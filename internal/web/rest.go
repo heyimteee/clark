@@ -937,11 +937,49 @@ func (s *Server) handleScheduleAction(w http.ResponseWriter, r *http.Request) {
 
 /* ---------------- calendar tile ---------------- */
 
-// handleCalendarEvents feeds the dashboard tile directly from the Mac
-// bridge — no chat round-trip. Window: local midnight through +7 days.
+// handleCalendarList exposes the selectable CalDAV collections so the console can
+// offer a calendar picker for new events.
+func (s *Server) handleCalendarList(w http.ResponseWriter, r *http.Request) {
+	if s.calendars == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"calendars": []any{}, "selectable": false})
+		return
+	}
+	cals, err := s.calendars(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "calendars unavailable: " + err.Error()})
+		return
+	}
+	out := make([]map[string]string, 0, len(cals))
+	for _, c := range cals {
+		out = append(out, map[string]string{"href": c.Href, "name": c.Name, "color": c.Color})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"calendars": out, "selectable": true})
+}
+
+// knownCalendar reports whether href is one of the account's discovered
+// collections. The picker is the only source of a caller-supplied href, so this
+// keeps an unvalidated value from being used as a write target.
+func (s *Server) knownCalendar(ctx context.Context, href string) bool {
+	if s.calendars == nil {
+		return false
+	}
+	cals, err := s.calendars(ctx)
+	if err != nil {
+		return false
+	}
+	for _, c := range cals {
+		if c.Href == href {
+			return true
+		}
+	}
+	return false
+}
+
+// handleCalendarEvents feeds the dashboard tile straight from the calendar
+// client. Window: local midnight through +7 days.
 func (s *Server) handleCalendarEvents(w http.ResponseWriter, r *http.Request) {
 	if s.cal == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "calendar not configured (no Mac bridge)"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "calendar not configured (CALDAV_URL and CALDAV_USER are unset)"})
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -965,7 +1003,7 @@ func (s *Server) handleCalendarEvents(w http.ResponseWriter, r *http.Request) {
 // handleCalendarAdd creates an event straight from the tile form.
 func (s *Server) handleCalendarAdd(w http.ResponseWriter, r *http.Request) {
 	if s.cal == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "calendar not configured (no Mac bridge)"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "calendar not configured (CALDAV_URL and CALDAV_USER are unset)"})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -977,9 +1015,16 @@ func (s *Server) handleCalendarAdd(w http.ResponseWriter, r *http.Request) {
 		Start    string `json:"start"`
 		End      string `json:"end"`
 		Location string `json:"location"`
+		Calendar string `json:"calendar"`
 	}
 	if err := decodeBody(w, r, &body); err != nil || body.Title == "" || body.Start == "" || body.End == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title, start, and end are required"})
+		return
+	}
+	// The picker may name any collection, so an href outside the discovered set
+	// is rejected rather than written blindly.
+	if body.Calendar != "" && !s.knownCalendar(r.Context(), body.Calendar) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown calendar"})
 		return
 	}
 	start, err := time.Parse(time.RFC3339, body.Start)
@@ -996,7 +1041,13 @@ func (s *Server) handleCalendarAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "end must be after start"})
 		return
 	}
-	id, err := s.cal.Create(r.Context(), calendar.Event{Title: body.Title, Start: start, End: end, Location: body.Location})
+	id, err := s.cal.Create(r.Context(), calendar.Event{
+		Title:        body.Title,
+		Start:        start,
+		End:          end,
+		Location:     body.Location,
+		CalendarHref: body.Calendar,
+	})
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "calendar unavailable: " + err.Error()})
 		return
