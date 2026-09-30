@@ -734,3 +734,34 @@ func TestCalendarTileUnavailable(t *testing.T) {
 		t.Fatalf("list error = %d (%v), want 502", code, out)
 	}
 }
+
+// TestCalendarPickerRejectsUnknownTarget proves a caller cannot steer a write to
+// an arbitrary URL. The picker is the only source of a caller-supplied href, so
+// anything outside the discovered set must be refused.
+func TestCalendarPickerRejectsUnknownTarget(t *testing.T) {
+	ts := newCalendarTestServer(t, &fakeCalendar{})
+	tok := login(t, ts)
+
+	code, _ := postJSON(t, ts, "/web/api/calendar/events", tok, map[string]any{
+		"title": "x", "start": "2026-01-05T10:00:00Z", "end": "2026-01-05T11:00:00Z",
+		"calendar": "https://evil.example.com/steal/",
+	})
+	if code != http.StatusBadRequest {
+		t.Errorf("create with an unknown calendar = %d, want 400", code)
+	}
+}
+
+// TestCalendarListDegradesWithoutLister proves the picker reports itself
+// unavailable rather than failing when no lister is wired.
+func TestCalendarListDegradesWithoutLister(t *testing.T) {
+	ts := newCalendarTestServer(t, &fakeCalendar{})
+	tok := login(t, ts)
+
+	code, out := getJSON(t, ts, "/web/api/calendars", tok)
+	if code != http.StatusOK {
+		t.Fatalf("calendars = %d (%v), want 200", code, out)
+	}
+	if out["selectable"] != false {
+		t.Errorf("selectable = %v, want false when no lister is wired", out["selectable"])
+	}
+}

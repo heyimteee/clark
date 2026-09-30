@@ -26,7 +26,7 @@ type ActionServer struct {
 // clark can tell permission loss apart from the Mac merely being asleep.
 type StatusReport struct {
 	ChatDB   string `json:"chat_db"`         // ok | denied
-	Calendar string `json:"calendar"`        // authorized | write_only | not_determined | restricted | denied | unknown
+	Calendar string `json:"calendar"`        // always "server": the calendar is CalDAV-side (#212)
 	Watcher  string `json:"watcher"`         // running | disabled
 	Error    string `json:"error,omitempty"` // chat.db probe detail when ChatDB != ok
 }
@@ -44,13 +44,13 @@ func (s *ActionServer) SetStatusFunc(fn func() StatusReport) {
 }
 
 // Routes returns the action endpoints with auth enforced.
+//
+// There are no calendar routes: the calendar moved to the server over CalDAV, so
+// the Mac holds no calendar permission and no longer proxies EventKit (#212).
 func (s *ActionServer) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /action", s.handleAction)
 	mux.HandleFunc("GET /status", s.handleStatus)
-	mux.HandleFunc("GET /calendars/events", handleCalendarList)
-	mux.HandleFunc("POST /calendars/events", handleCalendarCreate)
-	mux.HandleFunc("DELETE /calendars/events/", handleCalendarDelete)
 	return s.requireToken(mux)
 }
 

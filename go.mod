@@ -17,6 +17,7 @@ require (
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
+	github.com/arran4/golang-ical v0.3.7 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/beeper/argo-go v1.1.2 // indirect
@@ -54,6 +55,7 @@ require (
 	github.com/sergeymakinen/go-bmp v1.0.0 // indirect
 	github.com/sergeymakinen/go-ico v1.0.0-beta.0 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
+	github.com/teambition/rrule-go v1.8.2 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect

@@ -59,7 +59,10 @@ type Options struct {
 	Alerts           *alert.Service
 	Scheduler        *scheduler.Scheduler
 	Calendar         calendar.Client
-	Version          string
+	// Calendars lists the selectable CalDAV collections for the console picker.
+	// nil disables the picker and new events go to the configured default.
+	Calendars func(context.Context) ([]calendar.CalDAVCalendar, error)
+	Version   string
 	// Health reports structured tool-health conditions for the console tile;
 	// nil hides the tile.
 	Health func() []health.Result
@@ -80,6 +83,7 @@ type Server struct {
 	alerts       *alert.Service
 	sched        *scheduler.Scheduler
 	cal          calendar.Client
+	calendars    func(context.Context) ([]calendar.CalDAVCalendar, error)
 	version      string
 	health       func() []health.Result
 
@@ -127,6 +131,7 @@ func New(opts Options) *Server {
 		alerts:         opts.Alerts,
 		sched:          opts.Scheduler,
 		cal:            opts.Calendar,
+		calendars:      opts.Calendars,
 		version:        opts.Version,
 		health:         opts.Health,
 		sessions:       newSessionManager(ttl, maxLife),
@@ -178,6 +183,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("POST /web/api/schedules", s.requireAuth(s.handleSchedules))
 	s.mux.HandleFunc("/web/api/schedules/", s.requireAuth(s.handleScheduleAction))
 	s.mux.HandleFunc("GET /web/api/calendar", s.requireAuth(s.handleCalendarEvents))
+	s.mux.HandleFunc("GET /web/api/calendars", s.requireAuth(s.handleCalendarList))
 	s.mux.HandleFunc("POST /web/api/calendar/events", s.requireAuth(s.handleCalendarAdd))
 	s.mux.HandleFunc("GET /web/api/chat/sessions", s.requireAuth(s.handleChatSessions))
 	s.mux.HandleFunc("POST /web/api/chat/sessions", s.requireAuth(s.handleChatSessions))

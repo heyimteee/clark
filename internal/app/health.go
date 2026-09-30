@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/heyimteee/clark/internal/calendar"
 	"github.com/heyimteee/clark/internal/config"
 	"github.com/heyimteee/clark/internal/health"
 	"github.com/heyimteee/clark/internal/llmcompat"
@@ -26,12 +27,15 @@ type bridgeStatus struct {
 }
 
 // macBridgeChecker probes the macOS action server: reachability plus the
-// self-reported FDA and Calendar consent state. Only registered when a Mac
-// action URL is configured.
+// self-reported Full Disk Access state for the iMessage bridge.
+//
+// Calendar consent branches are gone: the calendar now runs server-side over
+// CalDAV and has its own checker, so a CalDAV outage is no longer misreported as
+// a Mac problem (#212).
 func macBridgeChecker(cfg *config.Config) health.Checker {
 	return health.Checker{
 		Name:  "mac_bridge",
-		Tools: []string{"list_calendar_events", "add_calendar_event", "delete_calendar_event", "send_imessage", "relay_to_master"},
+		Tools: []string{"send_imessage", "relay_to_master"},
 		Check: func(ctx context.Context) error {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 				strings.TrimRight(cfg.MacActionURL, "/")+"/status", nil)
@@ -47,7 +51,7 @@ func macBridgeChecker(cfg *config.Config) health.Checker {
 			}
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusUnauthorized {
-				return health.UrgentFailure("Mac bridge token rejected — Mac .env and server .env out of sync", "401 from bridge /status")
+				return health.TransientFailure("Mac bridge token rejected — Mac .env and server .env out of sync", "401 from bridge /status")
 			}
 			if resp.StatusCode != http.StatusOK {
 				return health.TransientFailure("Mac bridge answered "+resp.Status, "GET /status: "+resp.Status)
@@ -57,18 +61,42 @@ func macBridgeChecker(cfg *config.Config) health.Checker {
 				return health.TransientFailure("Mac bridge status unreadable", err.Error())
 			}
 			if st.ChatDB == "denied" {
-				return health.UrgentFailure("iMessage bridge lost Full Disk Access — re-add imessage-bridge in System Settings → Privacy & Security → Full Disk Access, then restart the bridge", st.Error)
-			}
-			switch st.Calendar {
-			case "denied", "restricted":
-				return health.UrgentFailure("Calendar consent missing — choose Allow for imessage-bridge in System Settings → Privacy & Security → Calendars", "calendar: "+st.Calendar)
-			case "write_only":
-				return health.UrgentFailure("Calendar access is Write-Only — listing needs Full Access in System Settings → Privacy & Security → Calendars", "calendar: write_only")
-			case "unknown":
-				return health.TransientFailure("Calendar probe failed on the Mac", "calendar: unknown")
+				return health.UrgentFailure("iMessage bridge lost Full Disk Access — re-add imessage-bridge in System Settings → Privacy & Security → Full Disk Access", st.Error)
 			}
 			if st.Watcher == "disabled" && st.ChatDB == "ok" {
 				return health.TransientFailure("Bridge watcher disabled though chat.db reads fine — restart the bridge", "watcher: disabled")
+			}
+			return nil
+		},
+	}
+}
+
+// calendarChecker probes the CalDAV server directly, from the server. A bad
+// app-specific password is actionable and rare, so it is an urgent failure that
+// names the fix; ordinary unreachability stays on the grace path.
+func calendarChecker(cfg *config.Config) health.Checker {
+	return health.Checker{
+		Name:  "calendar",
+		Tools: []string{"list_calendar_events", "add_calendar_event", "delete_calendar_event"},
+		Check: func(ctx context.Context) error {
+			c := calendar.NewCalDAVClient(calendar.CalDAVOptions{
+				BaseURL:             cfg.CalDAVURL,
+				User:                cfg.CalDAVUser,
+				Password:            cfg.CalDAVPassword,
+				DefaultCalendarHref: cfg.CalDAVCalendar,
+				Timeout:             10 * time.Second,
+			})
+			cals, err := c.Calendars(ctx)
+			if err != nil {
+				if strings.Contains(err.Error(), "401") {
+					return health.UrgentFailure(
+						"CalDAV rejected the app-specific password — regenerate it at appleid.apple.com and update CALDAV_APP_PASSWORD",
+						err.Error())
+				}
+				return health.TransientFailure("CalDAV unreachable — check network and CALDAV_URL", err.Error())
+			}
+			if len(cals) == 0 {
+				return health.TransientFailure("CalDAV returned no calendars for this Apple ID", "CALDAV_USER: "+cfg.CalDAVUser)
 			}
 			return nil
 		},
@@ -207,6 +235,9 @@ func (a *App) buildHealthCheckers() []health.Checker {
 	checkers := []health.Checker{llmBackendChecker(cfg), a.whatsappChecker()}
 	if cfg.MacActionURL != "" {
 		checkers = append(checkers, macBridgeChecker(cfg))
+	}
+	if cfg.CalendarEnabled() {
+		checkers = append(checkers, calendarChecker(cfg))
 	}
 	if cfg.IMessageEnabled {
 		checkers = append(checkers, a.imessageChecker())

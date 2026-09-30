@@ -8,13 +8,13 @@ import (
 	"github.com/heyimteee/clark/internal/logging"
 )
 
-// System Settings deep-link anchors for the two TCC panes the bridge depends
-// on. Apple offers no API to request Full Disk Access, so opening the exact
-// pane is the closest the bridge can get to self-service.
-const (
-	settingsPaneFDA      = "Privacy_AllFiles"
-	settingsPaneCalendar = "Privacy_Calendars"
-)
+// System Settings deep-link anchor for the TCC pane the bridge depends on.
+// Apple offers no API to request Full Disk Access, so opening the exact pane is
+// the closest the bridge can get to self-service.
+//
+// The Calendars pane is no longer needed: the calendar runs server-side over
+// CalDAV, so the Mac no longer holds any calendar permission (#212).
+const settingsPaneFDA = "Privacy_AllFiles"
 
 // openSettingsURL opens a System Settings pane. It is a variable so tests can
 // stub the GUI side effect.

@@ -51,6 +51,9 @@ type App struct {
 	// the tool-health monitor can probe live connection state.
 	waMsgr atomic.Pointer[whatsapp.WAMessenger]
 	imSrv  atomic.Pointer[imessage.Server]
+	// cal is the shared CalDAV client, built once in New. Safe for concurrent
+	// use: discovery is cached and each request is independent (#212).
+	cal calendar.Client
 }
 
 // New loads config, opens the store, and builds the assistant.
@@ -109,12 +112,31 @@ func New(version string) (*App, error) {
 		logging.Log("CLARK", logging.SevWarn, "TOOLS", "Web search disabled", "reason", "no TAVILY_API_KEY in .env")
 	}
 
-	if cfg.MacActionURL != "" {
-		registerCalendarTools(ast, cfg.MacActionURL, cfg.MacActionToken)
-		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Calendar enabled", "provider", "mac-bridge")
+	// The calendar now lives on the server over CalDAV, so it keeps working when
+	// the Mac is asleep or the bridge is down (#212).
+	cal := buildCalendarClient(cfg)
+	if cal != nil {
+		registerCalendarTools(ast, cal)
+		logging.Log("CLARK", logging.SevInfo, "TOOLS", "Calendar enabled", "provider", "caldav", "url", cfg.CalDAVURL)
+	} else {
+		logging.Log("CLARK", logging.SevWarn, "TOOLS", "Calendar disabled", "reason", "CALDAV_URL or CALDAV_USER not set in .env")
 	}
 
-	return &App{cfg: cfg, st: st, ast: ast, sched: sched, version: version}, nil
+	return &App{cfg: cfg, st: st, ast: ast, sched: sched, cal: cal, version: version}, nil
+}
+
+// buildCalendarClient returns the CalDAV-backed calendar, or nil when CalDAV is
+// not configured.
+func buildCalendarClient(cfg *config.Config) calendar.Client {
+	if !cfg.CalendarEnabled() {
+		return nil
+	}
+	return calendar.NewCalDAVClient(calendar.CalDAVOptions{
+		BaseURL:             cfg.CalDAVURL,
+		User:                cfg.CalDAVUser,
+		Password:            cfg.CalDAVPassword,
+		DefaultCalendarHref: cfg.CalDAVCalendar,
+	})
 }
 
 // registerCurrentTimeTool gives the model a clock: without it, "now" is a
@@ -254,8 +276,12 @@ func citationAge(t time.Time) string {
 		return fmt.Sprintf("%dd ago", int(d/(24*time.Hour)))
 	}
 }
-func registerCalendarTools(ast *assistant.Service, baseURL, token string) {
-	client := calendar.NewMacosClient(baseURL, token)
+
+// registerCalendarTools wires the Master's calendar capabilities against CalDAV.
+func registerCalendarTools(ast *assistant.Service, client calendar.Client) {
+	if client == nil {
+		return
+	}
 	ast.Tools().RegisterFunc(
 		"add_calendar_event",
 		"Add an event to the Master's calendar. Triggered by 'add to calendar ...', 'schedule ...', 'create event ...'. Call current_time first and emit start/end RFC3339 with the offset it reports (e.g. 2026-09-03T12:00:00+07:00); never use 'Z' unless the Master means UTC. Only the Master may use this.",
@@ -805,31 +831,13 @@ func (a *App) Run() error {
 	}
 
 	// Calendar proactive ticker: if there are events in the next 24h, ask
-	// whether to enter Protocol Away via the LLM tool path.
-	if a.cfg.MacActionURL != "" {
-		go func() {
-			ticker := time.NewTicker(15 * time.Minute)
-			defer ticker.Stop()
-			lastAsk := time.Time{}
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					if time.Since(lastAsk) < 24*time.Hour {
-						continue
-					}
-					// Use the LLM to check calendar via tool: send a synthetic
-					// message that will trigger list_calendar_events
-					_, err := a.ast.Reply(ctx, "master@master", "Check my calendar for the next 24 hours and if there are events, ask me whether to enter Protocol Away.", true)
-					if err != nil {
-						logging.Log("CALENDAR", logging.SevWarn, "TICKER", "Failed to check calendar", "error", err)
-						continue
-					}
-					lastAsk = time.Now()
-				}
-			}
-		}()
+	// whether to enter Protocol Away.
+	//
+	// This reads the calendar directly rather than asking the model to. The old
+	// path synthesised a chat message purely to make the model call a tool, so a
+	// plain schedule lookup cost a full model turn.
+	if a.cal != nil {
+		go a.runCalendarTicker(ctx, alerts)
 	}
 
 	errCh := make(chan error, 3)
@@ -882,6 +890,65 @@ func (a *App) Run() error {
 	return err
 }
 
+// runCalendarTicker asks once a day whether the Master wants to enter Protocol
+// Away when something is on the calendar in the next 24 hours.
+func (a *App) runCalendarTicker(ctx context.Context, alerts *alert.Service) {
+	ticker := time.NewTicker(15 * time.Minute)
+	defer ticker.Stop()
+
+	lastAsk := time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if time.Since(lastAsk) < 24*time.Hour {
+				continue
+			}
+			// A plain schedule lookup — no model turn required.
+			now := time.Now()
+			events, err := a.cal.List(ctx, now, now.Add(24*time.Hour))
+			if err != nil {
+				logging.Log("CALENDAR", logging.SevWarn, "TICKER", "Failed to check calendar", "error", err)
+				continue
+			}
+			lastAsk = now
+			if len(events) == 0 {
+				continue
+			}
+			alerts.Deliver(ctx, "calendar", "Protocol Away?",
+				fmt.Sprintf("Sir, you have %d event(s) in the next 24 hours: %s. Shall I enter Protocol Away?",
+					len(events), summariseCalendar(events)))
+		}
+	}
+}
+
+// summariseCalendar renders upcoming events for an alert body, capped so a busy
+// day does not produce an unreadable alert.
+func summariseCalendar(events []calendar.Event) string {
+	const show = 4
+	parts := make([]string, 0, show+1)
+	for i, e := range events {
+		if i == show {
+			parts = append(parts, "…")
+			break
+		}
+		parts = append(parts, e.Start.Format("15:04")+" "+e.Title)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// calendarLister adapts a CalDAV client to the console's calendar-picker hook.
+// Returns nil for a non-CalDAV client, which makes the picker report itself as
+// unavailable rather than erroring.
+func calendarLister(c calendar.Client) func(context.Context) ([]calendar.CalDAVCalendar, error) {
+	cc, ok := c.(*calendar.CalDAVClient)
+	if !ok {
+		return nil
+	}
+	return cc.Calendars
+}
+
 // runConsoles serves the web console and the iMessage bridge API in parallel,
 // each on its own listener, and returns when the first one stops. Regression
 // guard for #57: web.Run is blocking, so it must run in its own goroutine or
@@ -889,12 +956,9 @@ func (a *App) Run() error {
 func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *voice.Engine) error {
 	errCh := make(chan error, 2)
 
-	// The dashboard calendar tile reads the Mac bridge directly (same client
-	// the LLM tools use) instead of round-tripping through chat.
-	var calClient calendar.Client
-	if a.cfg.MacActionURL != "" {
-		calClient = calendar.NewMacosClient(a.cfg.MacActionURL, a.cfg.MacActionToken)
-	}
+	// The dashboard calendar tile reads the same CalDAV client the LLM tools
+	// use, instead of round-tripping through chat.
+	calClient := a.cal
 
 	if a.cfg.WebEnabled {
 		var healthFn func() []health.Result
@@ -918,6 +982,7 @@ func (a *App) runConsoles(ctx context.Context, alerts *alert.Service, engine *vo
 				Alerts:           alerts,
 				Scheduler:        a.sched,
 				Calendar:         calClient,
+				Calendars:        calendarLister(calClient),
 				Version:          a.version,
 				Health:           healthFn,
 			})

@@ -49,19 +49,6 @@ func TestMacBridgeCheckerDenied(t *testing.T) {
 	}
 }
 
-func TestMacBridgeCheckerCalendarDenied(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"chat_db":"ok","calendar":"denied","watcher":"running"}`))
-	}))
-	defer ts.Close()
-	a := &App{cfg: &config.Config{MacActionURL: ts.URL}}
-	err := macBridgeChecker(a.cfg).Check(context.Background())
-	var f *health.Failure
-	if !errors.As(err, &f) || !f.Urgent || !strings.Contains(f.Hint, "Calendars") {
-		t.Fatalf("err = %v, want urgent calendar failure", err)
-	}
-}
-
 func TestMacBridgeCheckerHealthy(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"chat_db":"ok","calendar":"authorized","watcher":"running"}`))

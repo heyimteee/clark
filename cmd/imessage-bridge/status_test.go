@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -70,46 +69,6 @@ func TestStatusEndpointDefaultUnknown(t *testing.T) {
 	}
 	if rep.ChatDB != "unknown" || rep.Calendar != "unknown" || rep.Watcher != "unknown" {
 		t.Fatalf("default report = %+v, want unknowns", rep)
-	}
-}
-
-func TestMapCalendarAccessError(t *testing.T) {
-	for _, tc := range []struct {
-		in      string
-		wantOK  bool
-		wantSub string
-	}{
-		{"CALENDAR_ACCESS_denied", true, "System Settings"},
-		{"CALENDAR_ACCESS_write-only", true, "Write-Only"},
-		{"CALENDAR_ACCESS_timeout", true, "timed out"},
-		{"event not found", false, ""},
-		{"", false, ""},
-	} {
-		msg, ok := mapCalendarAccessError(tc.in)
-		if ok != tc.wantOK {
-			t.Errorf("mapCalendarAccessError(%q) ok = %v, want %v", tc.in, ok, tc.wantOK)
-		}
-		if tc.wantOK && !strings.Contains(msg, tc.wantSub) {
-			t.Errorf("mapCalendarAccessError(%q) = %q, want substring %q", tc.in, msg, tc.wantSub)
-		}
-	}
-}
-
-func TestWithCalendarAuth(t *testing.T) {
-	base := "const store = $.EKEventStore.alloc.init\nstore.doThing()"
-	withRead := withCalendarAuth(base, true)
-	if !strings.Contains(withRead, "authorizationStatusForEntityType") {
-		t.Fatal("auth snippet not inserted")
-	}
-	if !strings.Contains(withRead, "true ? 'write-only' : 'ok'") {
-		t.Fatal("needRead=true must gate write-only")
-	}
-	withWrite := withCalendarAuth(base, false)
-	if !strings.Contains(withWrite, "false ? 'write-only' : 'ok'") {
-		t.Fatal("needRead=false must accept write-only")
-	}
-	if strings.Contains(withWrite, "__NEED_READ__") || strings.Contains(withRead, "__NEED_READ__") {
-		t.Fatal("placeholder left unreplaced")
 	}
 }
 
