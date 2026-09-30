@@ -34,6 +34,8 @@ git pull && docker compose up -d --build
 
 Proxy `https://clark.<domain>` → `http://clark:8090` in Nginx Proxy Manager. Register VIPs with their iMessage handles (`vip -a "<handle>,<name>,<relation>"`); a single VIP entry covers both WhatsApp (`628...`) and iMessage (`+628...`) after canonicalization.
 
+That shared identity carries the on/off toggle and the tool grants, but **history is kept per channel**: WhatsApp is stored under `628…@s.whatsapp.net` and iMessage under `imessage:628…@s.whatsapp.net`. So when one person messages Clark on both apps, their two conversations stay separate and Clark can tell which app a remembered message came from. `view_history` defaults to the current channel and accepts a `transport` argument; `view_all_history` labels every line with its channel. WhatsApp keys are unchanged, so no migration was needed.
+
 ### Mac side (once)
 
 1. Grant Full Disk Access to the terminal used for install (System Settings → Privacy & Security → Full Disk Access) so the bridge can read `chat.db`.

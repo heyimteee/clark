@@ -13,7 +13,9 @@ import (
 type Butler interface {
 	// Prehandle consumes fast deterministic commands (views, mutations) with a
 	// hardcoded reply. It returns a message and true when it handled the input.
-	Prehandle(sender, text string, isSelf bool) (string, bool, error)
+	// The context carries the transport, so a fast-path turn is stored in the
+	// same per-channel history as a model reply (#214).
+	Prehandle(ctx context.Context, sender, text string, isSelf bool) (string, bool, error)
 	Reply(ctx context.Context, sender, text string, isSelf bool) (string, error)
 	Relation(sender string) (string, bool)
 	Enabled() bool

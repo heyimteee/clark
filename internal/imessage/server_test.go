@@ -35,7 +35,9 @@ func (m *recMessenger) SendSelf(context.Context, string) error { return nil }
 // recButler lets the gateway pipeline generate replies immediately.
 type recButler struct{}
 
-func (b *recButler) Prehandle(_, _ string, _ bool) (string, bool, error) { return "", false, nil }
+func (b *recButler) Prehandle(_ context.Context, _, _ string, _ bool) (string, bool, error) {
+	return "", false, nil
+}
 func (b *recButler) Reply(_ context.Context, _, _ string, _ bool) (string, error) {
 	return "Indubitably.", nil
 }

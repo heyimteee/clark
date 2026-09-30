@@ -215,10 +215,11 @@ func (s *Service) registerManagementTools() {
 
 	s.tools.RegisterFunc(
 		"view_history",
-		"Show the stored conversation history for a chat. Without a recipient, shows the current chat; a limit shows only the most recent messages. Triggered by 'what did we talk about', 'show me our past messages', 'what did <name> say'. Review the injected recent history first and call this only when you need more of the conversation.",
+		"Show the stored conversation history for a chat. Without a recipient, shows the current chat on the current channel; a limit shows only the most recent messages. A person reachable on both WhatsApp and iMessage is one VIP with a SEPARATE history per channel, so pass transport to pick one. Triggered by 'what did we talk about', 'show me our past messages', 'what did <name> say on whatsapp'. Review the injected recent history first and call this only when you need more of the conversation.",
 		toolParams(map[string]any{
 			"recipient": map[string]any{"type": "string", "description": "Optional: a VIP's name or phone number. Only the Master may view another chat."},
 			"limit":     map[string]any{"type": "integer", "description": "Optional: how many of the most recent messages to show. Omit for the full history."},
+			"transport": map[string]any{"type": "string", "enum": []string{"whatsapp", "imessage"}, "description": "Optional: which channel's history to read. Defaults to the channel the current message arrived on."},
 		}),
 		func(ctx context.Context, args map[string]any) (string, error) {
 			jid := tools.Sender(ctx)
@@ -232,15 +233,25 @@ func (s *Service) registerManagementTools() {
 				}
 				jid = rjid
 			}
-			return s.formatHistory(jid, tools.IntArg(args, "limit", 0))
+			// A named channel overrides the one the message arrived on, so the
+			// Master can ask about either side of a dual-channel person.
+			transport := tools.Transport(ctx)
+			if t := tools.StringArg(args, "transport"); t != "" {
+				if err := masterOnly(ctx); err != nil {
+					return "", err
+				}
+				transport = strings.ToLower(t)
+			}
+			return s.formatHistory(historyKeyFor(transport, jid), jid, tools.IntArg(args, "limit", 0))
 		},
 	)
 
 	s.tools.RegisterFunc(
 		"view_all_history",
-		"Show messages from every conversation, newest last. Optionally limit to the most recent N messages across all chats. Triggered by 'show me everything across all chats' or 'what has been said everywhere'. Only the Master may use this.",
+		"Show messages from every conversation, newest last. Optionally limit to the most recent N messages across all chats, or restrict to one channel. Triggered by 'show me everything across all chats' or 'what has been said on imessage'. Only the Master may use this.",
 		toolParams(map[string]any{
-			"limit": map[string]any{"type": "integer", "description": "Optional: show only the most recent N messages across all chats. Omit for everything stored."},
+			"limit":     map[string]any{"type": "integer", "description": "Optional: show only the most recent N messages across all chats. Omit for everything stored."},
+			"transport": map[string]any{"type": "string", "enum": []string{"whatsapp", "imessage"}, "description": "Optional: restrict to one channel's history."},
 		}),
 		func(ctx context.Context, args map[string]any) (string, error) {
 			if err := masterOnly(ctx); err != nil {
@@ -250,12 +261,23 @@ func (s *Service) registerManagementTools() {
 			if err != nil {
 				return "", err
 			}
-			if len(entries) == 0 {
-				return "No conversation history is stored anywhere.", nil
-			}
+			prefix := historyTransportPrefix(tools.StringArg(args, "transport"))
 			lines := make([]string, 0, len(entries))
 			for _, e := range entries {
-				lines = append(lines, s.historySpeaker(e.JID, e.Role)+": "+e.Content)
+				// A channel filter selects that channel's transcript; without one
+				// every row is shown and labelled with where it came from, so a
+				// merged thread is never ambiguous (#214).
+				channel := "whatsapp"
+				if strings.HasPrefix(e.JID, iMessageTransport+":") {
+					channel = iMessageTransport
+				}
+				if prefix != "" && !strings.HasPrefix(e.JID, prefix) {
+					continue
+				}
+				lines = append(lines, "["+channel+"] "+s.historySpeaker(e.JID, e.Role)+": "+e.Content)
+			}
+			if len(lines) == 0 {
+				return "No conversation history is stored anywhere.", nil
 			}
 			return joinLines(lines), nil
 		},
@@ -421,13 +443,17 @@ func (s *Service) registerManagementTools() {
 // formatHistory renders a chat's stored history as speaker-labelled lines.
 // A positive limit keeps only the most recent messages; otherwise the full
 // history is returned.
-func (s *Service) formatHistory(jid string, limit int) (string, error) {
+// formatHistory renders a chat's stored history as speaker-labelled lines. key
+// is the per-channel storage key; jid is the bare identity, used only to resolve
+// the display name (#214). A positive limit keeps only the most recent messages;
+// otherwise the full history is returned.
+func (s *Service) formatHistory(key, jid string, limit int) (string, error) {
 	var msgs []store.Message
 	var err error
 	if limit > 0 {
-		msgs, err = s.history.RecentMessages(jid, limit)
+		msgs, err = s.history.RecentMessages(key, limit)
 	} else {
-		msgs, err = s.history.Messages(jid)
+		msgs, err = s.history.Messages(key)
 	}
 	if err != nil {
 		return "", err

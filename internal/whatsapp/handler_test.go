@@ -76,7 +76,9 @@ func TestFilterMessageZeroTimestampKeepsBacklog(t *testing.T) {
 // never engages the model, so no real connection is required.
 type fakeButler struct{}
 
-func (b *fakeButler) Prehandle(_, _ string, _ bool) (string, bool, error) { return "", false, nil }
+func (b *fakeButler) Prehandle(_ context.Context, _, _ string, _ bool) (string, bool, error) {
+	return "", false, nil
+}
 func (b *fakeButler) Reply(_ context.Context, _, _ string, _ bool) (string, error) {
 	return "", nil
 }

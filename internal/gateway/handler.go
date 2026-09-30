@@ -10,6 +10,7 @@ import (
 
 	"github.com/heyimteee/clark/internal/logging"
 	"github.com/heyimteee/clark/internal/ollama"
+	"github.com/heyimteee/clark/internal/tools"
 )
 
 // Handler routes inbound messages from any transport through the shared
@@ -87,7 +88,7 @@ func (h *Handler) backlogOnly(msg Message) bool {
 // recordBacklog stores a history-only message. Failures are logged, never fatal:
 // losing the reference is worth a warning, but the pipeline must keep running.
 func (h *Handler) recordBacklog(msg Message) {
-	ctx := context.Background()
+	ctx := tools.WithTransport(context.Background(), h.component)
 	text := SanitizeInbound(msg.Text)
 	if strings.TrimSpace(text) == "" {
 		logging.Log(h.component, logging.SevInfo, "BACKLOG", "Backlog message has no text; nothing to keep as reference",
@@ -231,7 +232,7 @@ func (h *Handler) Handle(msg Message) {
 	}
 
 	// Fast path: deterministic commands answered with hardcoded messages.
-	if reply, handled, err := h.butler.Prehandle(msg.Sender, msg.Text, msg.IsSelf); err != nil {
+	if reply, handled, err := h.butler.Prehandle(tools.WithTransport(ctx, h.component), msg.Sender, msg.Text, msg.IsSelf); err != nil {
 		logging.Log("MODEL", logging.SevErr, "RESPONSE", "Prehandle failed while reading the command; sending apology",
 			"chat", msg.Chat, "from", msg.Sender, "preview", logging.Brief(msg.Text, 80), "error", err,
 			"next", "sender should repeat the command; check assistant store health")
@@ -253,7 +254,9 @@ func (h *Handler) Handle(msg Message) {
 	// transport event loop is never blocked on a model generation. Only the
 	// Master gets the "one moment" ack; VIPs get nothing until the reply.
 	if msg.IsSelf {
-		if err := h.msgr.Send(ctx, msg.Chat, ackMaster); err != nil {
+		// The transport is tagged here so history can be kept per channel while
+		// the VIP identity stays shared (#214).
+		if err := h.msgr.Send(tools.WithTransport(ctx, h.component), msg.Chat, ackMaster); err != nil {
 			logging.Log(h.component, logging.SevWarn, "SEND", "Failed to send master ack; reply still queued in background",
 				"to", msg.Chat, "error", err, "next", "check transport connection")
 		}
@@ -265,6 +268,7 @@ func (h *Handler) Handle(msg Message) {
 		userMsg:   msg.Text,
 		isSelf:    msg.IsSelf,
 		media:     msg.Media,
+		transport: h.component,
 	})
 }
 
@@ -318,6 +322,8 @@ type inbound struct {
 	userMsg   string
 	isSelf    bool
 	media     []MediaAttachment
+	// transport is the channel this arrived on, used to namespace history (#214).
+	transport string
 }
 
 // dispatcher runs one serial worker goroutine per sender so replies arrive in
@@ -540,7 +546,7 @@ func (d *dispatcher) process(in inbound) {
 			"next", "sender must resend with a text caption")
 		return
 	}
-	reply, err := d.butler.Reply(d.ctx, in.senderJID, userMsg, in.isSelf)
+	reply, err := d.butler.Reply(tools.WithTransport(d.ctx, in.transport), in.senderJID, userMsg, in.isSelf)
 	if err != nil {
 		if errors.Is(err, ollama.ErrRateLimited) {
 			logging.Log("MODEL", logging.SevErr, "RATELIMIT", "Model rate limited; master alerted and clark switched off",
