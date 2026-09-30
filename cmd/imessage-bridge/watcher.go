@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	"github.com/heyimteee/clark/internal/imessage"
 	"github.com/heyimteee/clark/internal/logging"
 )
@@ -16,10 +18,12 @@ type inboundClient interface {
 	PostInbound(ctx context.Context, msg imessage.InboundMessage) error
 }
 
-// Watcher polls chat.db for new inbound messages and forwards them to clark,
-// persisting a ROWID watermark so nothing is replayed after a restart.
+// Watcher scans chat.db for new inbound messages and forwards them to clark,
+// persisting a ROWID watermark so nothing is replayed after a restart. Scans are
+// driven by filesystem events, with a low-frequency poll as a backstop (#208).
 type Watcher struct {
 	db        *sql.DB
+	dbPath    string
 	statePath string
 	ownHandle string
 	client    inboundClient
@@ -34,6 +38,10 @@ type Watcher struct {
 	// now is injectable for tests; clock() falls back to time.Now so a
 	// directly-constructed Watcher cannot nil-panic on the time source.
 	now func() time.Time
+	// fs is the kqueue-backed filesystem watcher, nil when unavailable.
+	fs *fsnotify.Watcher
+	// wake carries debounced scan triggers from watchLoop to the scan loop.
+	wake chan struct{}
 }
 
 // clock returns the watcher's time source, tolerating a nil injection point.
@@ -44,15 +52,20 @@ func (w *Watcher) clock() time.Time {
 	return time.Now()
 }
 
-// NewWatcher wires the poller around a read-only chat.db handle.
-func NewWatcher(db *sql.DB, statePath string, ownHandle string, client inboundClient, interval time.Duration) *Watcher {
+// NewWatcher wires the scanner around a read-only chat.db handle. dbPath is that
+// database's filesystem location, used to arm the filesystem watch. interval is
+// kept for the caller's configured cadence; the event watcher is the primary
+// trigger and the internal fallback poll is the backstop (#208).
+func NewWatcher(db *sql.DB, statePath string, ownHandle string, client inboundClient, interval time.Duration, dbPath string) *Watcher {
 	return &Watcher{
 		db:        db,
+		dbPath:    dbPath,
 		statePath: statePath,
 		ownHandle: ownHandle,
 		client:    client,
 		interval:  interval,
 		now:       time.Now,
+		wake:      make(chan struct{}, 1),
 	}
 }
 
@@ -64,17 +77,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 	w.lastScanAt = w.clock()
 
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
+	w.startFileWatch(ctx)
+	defer w.stopFileWatch()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			w.scanOnce(ctx)
-		}
-	}
+	w.runScanLoop(ctx)
+	return nil
 }
 
 // bootstrap seeds the watermark from the state file, falling back to the

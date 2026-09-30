@@ -209,7 +209,7 @@ func runInboundWatcher(ctx context.Context, cfg bridgeConfig, client *Client, wa
 		logging.Log("BRIDGE", logging.SevInfo, "CONFIG", "Own handle resolved", "handle", ownHandle)
 	}
 
-	watcher := NewWatcher(db, cfg.statePath, ownHandle, client, cfg.pollInterval)
+	watcher := NewWatcher(db, cfg.statePath, ownHandle, client, cfg.pollInterval, cfg.dbPath)
 	logging.Log("BRIDGE", logging.SevNotice, "WATCHER", "chat.db readable; inbound watcher running", "row", watcher.lastRowID)
 	return watcher.Run(ctx)
 }
