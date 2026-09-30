@@ -605,6 +605,33 @@ func (s *Service) EnabledFor(jid string) bool {
 	return s.status
 }
 
+// statusSinceKey stores the moment the global status was last switched ON.
+const statusSinceKey = "status_since"
+
+// StatusSince reports when the global status was last switched ON. Messages
+// timestamped before it are kept as history but not answered, because clark was
+// not yet watching when they were sent (#206). A zero time means no transition
+// has been recorded, which answers everything — the safe default for installs
+// that predate the watermark.
+func (s *Service) StatusSince() time.Time {
+	raw, err := s.settings.Get(statusSinceKey)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return time.Time{}
+	}
+	ts, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return ts
+}
+
+// Record stores one inbound turn in history without answering it, so backlog can
+// still inform a later live reply (#206). Only the user's side is written: there
+// is no assistant turn because nothing was answered.
+func (s *Service) Record(_ context.Context, sender, text string) error {
+	return s.history.SaveMessage(sender, "user", text)
+}
+
 // Tools returns the shared tool registry so transports can register capabilities.
 func (s *Service) Tools() *tools.Registry { return s.tools }
 
@@ -783,7 +810,12 @@ func (s *Service) SetStatus(on bool) error {
 
 	// Away tracking: ON = away (tending to VIPs), OFF = available (wants summary).
 	if !wasOn && on {
-		_ = s.settings.Set("away_since", time.Now().Format(time.RFC3339))
+		now := time.Now().Format(time.RFC3339)
+		_ = s.settings.Set("away_since", now)
+		// Status watermark (#206). Written on the transition only — a redundant
+		// "wake up buddy" must not move the boundary, or it would silently
+		// swallow messages sent while clark was already awake.
+		_ = s.settings.Set(statusSinceKey, now)
 	} else if wasOn && !on {
 		if sinceStr, err := s.settings.Get("away_since"); err == nil && sinceStr != "" {
 			if since, err := time.Parse(time.RFC3339, sinceStr); err == nil {

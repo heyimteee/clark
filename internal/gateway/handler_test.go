@@ -44,13 +44,16 @@ func (m *fakeMessenger) SendSelf(_ context.Context, _ string) error {
 }
 
 type fakeButler struct {
-	mu         sync.Mutex
-	enabled    bool
-	overrides  map[string]bool
-	prehandled string
-	replied    []string
-	replyDelay time.Duration
-	replyErr   error
+	mu          sync.Mutex
+	enabled     bool
+	overrides   map[string]bool
+	statusSince time.Time
+	prehandled  string
+	replied     []string
+	recorded    []string
+	replyDelay  time.Duration
+	replyErr    error
+	recordErr   error
 }
 
 func (b *fakeButler) Prehandle(_, text string, _ bool) (string, bool, error) {
@@ -78,6 +81,16 @@ func (b *fakeButler) EnabledFor(jid string) bool {
 		return on
 	}
 	return b.enabled
+}
+func (b *fakeButler) StatusSince() time.Time { return b.statusSince }
+func (b *fakeButler) Record(_ context.Context, _, text string) error {
+	if b.recordErr != nil {
+		return b.recordErr
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.recorded = append(b.recorded, text)
+	return nil
 }
 
 // nonVIPButler mimics a fresh database where no one — not even the Master — is

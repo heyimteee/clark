@@ -52,6 +52,8 @@ Optional bridge env: `IMESSAGE_OWN_HANDLE`, `IMESSAGE_TLS_ROOTCA` (self-signed r
 ### How it works
 
 * Inbound: polls `chat.db` every second, filters self-sent/system/reaction/group messages, tracks a ROWID watermark in `~/Library/Application Support/clark-bridge/state.json`. A message is marked delivered only after the host accepts it.
+* Backlog is kept, never dropped. A message the bridge could not see arrive — the Mac was asleep, the bridge was down — is delivered with a `replay` flag and is stored as history **without** being answered, so it can inform the next live reply instead of being deleted. The same applies to any message sent before clark's status was last switched ON. A stale `get him to me` in the backlog does **not** trigger the alert cascade.
+* If `chat.db` is unreadable (Full Disk Access revoked) the bridge keeps retrying with backoff and starts the watcher the moment access is restored — no manual restart. Outbound delivery is independent of this, since sending is gated on Automation permission rather than Full Disk Access.
 * Outbound: polls the host queue, sends via AppleScript `send` on the iMessage service, then acks. Failed deliveries are not re-served.
 
 ## Voice

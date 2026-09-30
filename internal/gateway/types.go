@@ -20,6 +20,15 @@ type Butler interface {
 	// EnabledFor reports whether a specific sender may reach clark. A per-sender
 	// status override wins; otherwise the global status applies.
 	EnabledFor(sender string) bool
+	// StatusSince is when the global status was last switched ON. Messages
+	// timestamped before it are history-only: clark was not yet watching when
+	// they were sent, so answering them would answer something already stale
+	// (#206). A zero value means "no boundary recorded", which answers
+	// everything — the safe default for installs that predate the watermark.
+	StatusSince() time.Time
+	// Record stores one inbound turn in history without answering it. Used for
+	// backlog the Master wants kept as context but not acted on (#206).
+	Record(ctx context.Context, sender, text string) error
 }
 
 // Notifier raises attention for urgent commands.
@@ -56,8 +65,14 @@ type Message struct {
 	// Text is the message body.
 	Text string
 	// Timestamp is when the message was originally sent (from the transport).
-	// Used for staleness filtering — messages older than a threshold are dropped.
+	// Messages timestamped before the last status transition are kept as history
+	// but not answered (#206).
 	Timestamp time.Time
+	// Replay reports that the transport could not have seen this message live —
+	// the Mac was asleep, the bridge was down, or the connection resynced. Such a
+	// message is stored as history and never answered (#206). The transport owns
+	// this judgement because only it knows whether it was watching.
+	Replay bool
 	// IsSelf reports whether this is the Master's own chat.
 	IsSelf bool
 	// IsGroup reports whether this arrived in a group conversation.

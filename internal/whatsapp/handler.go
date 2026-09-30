@@ -62,6 +62,10 @@ func (h *Handler) OnEvent(evt any) {
 	if !ok {
 		return
 	}
+	// Replay covers both ways a message can fail to be live: a pre-connection
+	// timestamp means it was resynced, and a missing timestamp means liveness
+	// cannot be established at all (#206).
+	msg.Replay = v.Info.Timestamp.IsZero() || v.Info.Timestamp.Before(h.connectedAt)
 	h.gw.Handle(msg)
 }
 
@@ -321,13 +325,13 @@ func unwrapMessage(m *waE2E.Message) *waE2E.Message {
 	return m
 }
 
-// filterMessage reports whether a message must be dropped, and why.
-func filterMessage(v *events.Message, connectedAt time.Time) (skip bool, reason string) {
+// filterMessage reports whether a message is structurally unusable, and why.
+// Age is deliberately not checked here: a pre-connection timestamp now means
+// backlog, which is kept as history rather than discarded (#206). The caller
+// turns that into Message.Replay.
+func filterMessage(v *events.Message, _ time.Time) (skip bool, reason string) {
 	if v == nil || v.Info.Chat.IsEmpty() || v.Info.Sender.IsEmpty() || v.Message == nil {
 		return true, "nil message data"
-	}
-	if v.Info.Timestamp.IsZero() || v.Info.Timestamp.Before(connectedAt) {
-		return true, ""
 	}
 	return false, ""
 }

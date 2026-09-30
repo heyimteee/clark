@@ -63,6 +63,49 @@ const defaultBypassPhrase = "get him to me"
 // not machine-gun FaceTime calls and voice alerts at the Master (#60).
 const bypassCooldown = 90 * time.Second
 
+// backlogOnly reports whether a message is history-only: either the transport
+// could not see it arrive, or it predates the last status transition so clark was
+// not yet watching when it was sent (#206).
+//
+// Replay is the authoritative signal and the transport owns it: a transport that
+// cannot establish that a message arrived live sets it, including when the
+// timestamp is missing. A zero Timestamp alone is therefore NOT treated as
+// backlog here — that would make the field's zero value silently mean "discard",
+// so a caller who simply forgot to set it would lose every reply. Both live
+// transports always populate Timestamp, and both handle the missing-timestamp
+// case via Replay.
+func (h *Handler) backlogOnly(msg Message) bool {
+	if msg.Replay {
+		return true
+	}
+	if msg.Timestamp.IsZero() {
+		return false
+	}
+	return msg.Timestamp.Before(h.butler.StatusSince())
+}
+
+// recordBacklog stores a history-only message. Failures are logged, never fatal:
+// losing the reference is worth a warning, but the pipeline must keep running.
+func (h *Handler) recordBacklog(msg Message) {
+	ctx := context.Background()
+	text := SanitizeInbound(msg.Text)
+	if strings.TrimSpace(text) == "" {
+		logging.Log(h.component, logging.SevInfo, "BACKLOG", "Backlog message has no text; nothing to keep as reference",
+			"id", msg.ID, "chat", msg.Chat, "from", msg.Sender, "media", msg.MediaType)
+		return
+	}
+	if err := h.butler.Record(ctx, msg.Sender, text); err != nil {
+		logging.Log(h.component, logging.SevErr, "BACKLOG", "Failed to record backlog message as history",
+			"id", msg.ID, "chat", msg.Chat, "from", msg.Sender, "error", err,
+			"next", "check assistant store health; the message was not kept as context")
+		return
+	}
+	logging.Log(h.component, logging.SevInfo, "BACKLOG", "Backlog message kept as history; not answered",
+		"id", msg.ID, "chat", msg.Chat, "from", msg.Sender,
+		"replay", msg.Replay, "sent", msg.Timestamp.Format(time.RFC3339),
+		"next", "used as context for the next live reply; no response sent")
+}
+
 // compileBypass builds a case-insensitive, word-boundary matcher for the
 // phrase so punctuation-suffixed phrases trigger while embedded lookalikes
 // ("get him to meow") do not.
@@ -130,6 +173,15 @@ func (h *Handler) Handle(msg Message) {
 		"id", msg.ID, "chat", msg.Chat,
 		"from", msg.Sender, "self", msg.IsSelf, "group", msg.IsGroup,
 		"preview", logging.Brief(msg.Text, 80))
+
+	// Backlog: keep the message as history, do not answer it (#206). This sits
+	// AFTER the VIP/status gate so strangers are still discarded outright, and it
+	// returns before the bypass, fast-path, and media stages so a stale "get him
+	// to me" cannot wake the Master over something hours old.
+	if h.backlogOnly(msg) {
+		h.recordBacklog(msg)
+		return
+	}
 
 	if msg.Text == "" {
 		if len(msg.Media) > 0 {
