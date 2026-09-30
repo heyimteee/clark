@@ -143,48 +143,26 @@ func main() {
 		}
 	}()
 
-	db, err := openChatDB(cfg.dbPath)
-	if err != nil {
-		logging.Log("BRIDGE", logging.SevErr, "DB", "Cannot open chat.db; watcher/poller disabled (action server still up)", "error", err,
-			"remediation", "grant Full Disk Access to the imessage-bridge binary in System Settings → Privacy & Security → Full Disk Access, then restart the bridge")
-		maybeOpenSettingsPane(stateDirForMarkers(), settingsPaneFDA)
-		select {
-		case <-ctx.Done():
-		case err := <-errCh:
-			if err != nil {
-				stop()
-				logging.Fatalf("BRIDGE", "Bridge stopped: %v", err)
-			}
-		}
-		logging.Log("BRIDGE", logging.SevNotice, "STOP", "iMessage bridge stopped (action server only)")
-		return
-	}
-	defer db.Close()
-	watcherRunning.Store(true)
-	clearSettingsPaneMarker(stateDirForMarkers(), settingsPaneFDA)
-
 	client, err := NewClient(cfg.baseURL, cfg.token, cfg.rootCA)
 	if err != nil {
 		logging.Fatalf("CLIENT", "Cannot build bridge client: %v", err)
 	}
 
-	ownHandle := resolveOwnHandle(ctx, cfg, client, db)
-	if ownHandle == "" {
-		logging.Log("BRIDGE", logging.SevWarn, "CONFIG", "No own handle known; self-chat bootstrap disabled", "hint", "set IMESSAGE_SELF_HANDLE on server")
-	} else {
-		logging.Log("BRIDGE", logging.SevInfo, "CONFIG", "Own handle resolved", "handle", ownHandle)
-	}
-
-	watcher := NewWatcher(db, cfg.statePath, ownHandle, client, cfg.pollInterval)
-	poller := NewPoller(client, NewSender(), cfg.pollInterval)
-
+	// The outbound poller deliberately does not depend on chat.db. Sending goes
+	// through Messages.app's AppleScript surface, which macOS gates on
+	// Automation rather than Full Disk Access, so a revoked FDA grant must not
+	// take outbound delivery down with it (#204).
 	go func() {
-		if err := watcher.Run(ctx); err != nil {
+		if err := NewPoller(client, NewSender(), cfg.pollInterval).Run(ctx); err != nil {
 			errCh <- err
 		}
 	}()
+
+	// The inbound watcher supervises its own chat.db handle and starts the moment
+	// the database becomes readable, so restoring Full Disk Access needs no
+	// manual restart (#204).
 	go func() {
-		if err := poller.Run(ctx); err != nil {
+		if err := runInboundWatcher(ctx, cfg, client, &watcherRunning); err != nil {
 			errCh <- err
 		}
 	}()
@@ -199,4 +177,39 @@ func main() {
 	}
 
 	logging.Log("BRIDGE", logging.SevNotice, "STOP", "iMessage bridge stopped")
+}
+
+// runInboundWatcher waits for chat.db to become readable, then runs the inbound
+// watcher until ctx ends. It returns nil on cancellation, so a shutdown during a
+// Full Disk Access denial is a clean exit rather than an error.
+func runInboundWatcher(ctx context.Context, cfg bridgeConfig, client *Client, watcherRunning *atomic.Bool) error {
+	stateDir := stateDirForMarkers()
+
+	db, err := openChatDBWithRetry(ctx, cfg.dbPath, dbOpenInitialBackoff, dbOpenMaxBackoff,
+		func(err error) {
+			watcherRunning.Store(false)
+			logging.Log("BRIDGE", logging.SevErr, "DB", "Cannot open chat.db; retrying (outbound and the action server stay up)", "error", err,
+				"remediation", "grant Full Disk Access to the imessage-bridge binary in System Settings → Privacy & Security → Full Disk Access")
+			maybeOpenSettingsPane(stateDir, settingsPaneFDA)
+		},
+		func() {
+			clearSettingsPaneMarker(stateDir, settingsPaneFDA)
+			watcherRunning.Store(true)
+		},
+	)
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+
+	ownHandle := resolveOwnHandle(ctx, cfg, client, db)
+	if ownHandle == "" {
+		logging.Log("BRIDGE", logging.SevWarn, "CONFIG", "No own handle known; self-chat bootstrap disabled", "hint", "set IMESSAGE_SELF_HANDLE on server")
+	} else {
+		logging.Log("BRIDGE", logging.SevInfo, "CONFIG", "Own handle resolved", "handle", ownHandle)
+	}
+
+	watcher := NewWatcher(db, cfg.statePath, ownHandle, client, cfg.pollInterval)
+	logging.Log("BRIDGE", logging.SevNotice, "WATCHER", "chat.db readable; inbound watcher running", "row", watcher.lastRowID)
+	return watcher.Run(ctx)
 }
